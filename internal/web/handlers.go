@@ -708,7 +708,13 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		todoCount = count
 	}
 	if len(activeTags) > 0 {
-		filteredTags, err := s.idx.ListTagsFiltered(r.Context(), noteTags, 100)
+		var filteredTags []index.TagSummary
+		var err error
+		if activeTodo {
+			filteredTags, err = s.idx.ListTagsWithOpenTasks(r.Context(), noteTags, 100)
+		} else {
+			filteredTags, err = s.idx.ListTagsFiltered(r.Context(), noteTags, 100)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -828,7 +834,13 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		todoCount = count
 	}
 	if len(activeTags) > 0 {
-		filteredTags, err := s.idx.ListTagsFiltered(r.Context(), noteTags, 100)
+		var filteredTags []index.TagSummary
+		var err error
+		if activeTodo {
+			filteredTags, err = s.idx.ListTagsWithOpenTasks(r.Context(), noteTags, 100)
+		} else {
+			filteredTags, err = s.idx.ListTagsFiltered(r.Context(), noteTags, 100)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1032,7 +1044,13 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		todoCount = count
 	}
 	if len(activeTags) > 0 {
-		filteredTags, err := s.idx.ListTagsFiltered(r.Context(), noteTags, 100)
+		var filteredTags []index.TagSummary
+		var err error
+		if activeTodo {
+			filteredTags, err = s.idx.ListTagsWithOpenTasks(r.Context(), noteTags, 100)
+		} else {
+			filteredTags, err = s.idx.ListTagsFiltered(r.Context(), noteTags, 100)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

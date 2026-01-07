@@ -553,6 +553,75 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	return tags, rows.Err()
 }
 
+func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limit int) ([]TagSummary, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(active) == 0 {
+		query = `
+			WITH matching_files AS (
+				SELECT DISTINCT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				WHERE tasks.checked = 0
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = []interface{}{limit}
+	} else {
+		placeholders := strings.Repeat("?,", len(active))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			WITH matching_files AS (
+				SELECT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				JOIN file_tags ON files.id = file_tags.file_id
+				JOIN tags ON tags.id = file_tags.tag_id
+				WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+				GROUP BY files.id
+				HAVING COUNT(DISTINCT tags.name) = ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = make([]interface{}, 0, len(active)+2)
+		for _, tag := range active {
+			args = append(args, tag)
+		}
+		args = append(args, len(active), limit)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tags []TagSummary
+	for rows.Next() {
+		var t TagSummary
+		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
 func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySummary, error) {
 	if limit <= 0 {
 		limit = 30
