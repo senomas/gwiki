@@ -17,6 +17,7 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 			"id: " + id,
 			"created: " + nowStr,
 			"updated: " + nowStr,
+			"priority: 10",
 			"history:",
 			"  - user: " + dummyHistoryUser,
 			"    at: " + nowStr,
@@ -50,6 +51,10 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 	if createdVal == "" {
 		createdVal = nowStr
 	}
+	priorityVal := valueOrEmpty(fmLines, lineIdx, "priority")
+	if priorityVal == "" {
+		priorityVal = "10"
+	}
 	if maxUpdated <= 0 {
 		maxUpdated = 1
 	}
@@ -57,6 +62,7 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 	setFrontmatterLine(&fmLines, lineIdx, "id", idVal)
 	setFrontmatterLine(&fmLines, lineIdx, "created", createdVal)
 	setFrontmatterLine(&fmLines, lineIdx, "updated", nowStr)
+	setFrontmatterLine(&fmLines, lineIdx, "priority", priorityVal)
 
 	action := "edit"
 	if createdMissing {

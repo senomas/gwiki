@@ -2,6 +2,7 @@ package index
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -18,10 +19,11 @@ type Task struct {
 }
 
 type Metadata struct {
-	Title string
-	Tags  []string
-	Links []Link
-	Tasks []Task
+	Title    string
+	Tags     []string
+	Links    []Link
+	Tasks    []Task
+	Priority int
 }
 
 var (
@@ -35,7 +37,8 @@ var (
 func ParseContent(input string) Metadata {
 	body, fm := splitFrontmatter(input)
 	meta := Metadata{
-		Title: parseTitle(body, fm),
+		Title:    parseTitle(body, fm),
+		Priority: parsePriority(fm),
 	}
 
 	tags := map[string]struct{}{}
@@ -159,4 +162,19 @@ func parseTagsFromFrontmatter(fm map[string]string) []string {
 		}
 	}
 	return out
+}
+
+func parsePriority(fm map[string]string) int {
+	const defaultPriority = 10
+	if fm == nil {
+		return defaultPriority
+	}
+	raw := strings.TrimSpace(fm["priority"])
+	if raw == "" {
+		return defaultPriority
+	}
+	if val, err := strconv.Atoi(raw); err == nil && val > 0 {
+		return val
+	}
+	return defaultPriority
 }

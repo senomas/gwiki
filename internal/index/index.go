@@ -234,9 +234,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if errors.Is(err, sql.ErrNoRows) {
 		createdAt = time.Now().Unix()
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO files(path, title, hash, mtime_unix, size, created_at, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?)
-		`, notePath, meta.Title, checksum, mtime.Unix(), size, createdAt, time.Now().Unix())
+			INSERT INTO files(path, title, hash, mtime_unix, size, created_at, updated_at, priority)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+		`, notePath, meta.Title, checksum, mtime.Unix(), size, createdAt, time.Now().Unix(), meta.Priority)
 		if err != nil {
 			return err
 		}
@@ -245,8 +245,8 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 	} else if err == nil {
 		_, err = tx.ExecContext(ctx, `
-			UPDATE files SET title=?, hash=?, mtime_unix=?, size=?, updated_at=? WHERE id=?
-		`, meta.Title, checksum, mtime.Unix(), size, time.Now().Unix(), existingID)
+			UPDATE files SET title=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=? WHERE id=?
+		`, meta.Title, checksum, mtime.Unix(), size, time.Now().Unix(), meta.Priority, existingID)
 		if err != nil {
 			return err
 		}
@@ -348,7 +348,7 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 }
 
 func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, error) {
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY updated_at DESC LIMIT ?", limit)
+	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY priority ASC, updated_at DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +376,7 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY updated_at DESC LIMIT ? OFFSET ?", limit, offset)
+	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY priority ASC, updated_at DESC LIMIT ? OFFSET ?", limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +552,7 @@ func (i *Index) NotesByTags(ctx context.Context, tags []string, limit int, offse
 		WHERE tags.name IN (` + placeholders + `)
 		GROUP BY files.id
 		HAVING COUNT(DISTINCT tags.name) = ?
-		ORDER BY files.updated_at DESC
+		ORDER BY files.priority ASC, files.updated_at DESC
 		LIMIT ? OFFSET ?`
 
 	args := make([]interface{}, 0, len(tags)+3)
