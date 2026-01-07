@@ -82,13 +82,13 @@
       {{range .TagLinks}} {{if .Disabled}}
       <span
         class="rounded-full border border-slate-800/70 bg-[#15181c]/60 px-2.5 py-1 text-slate-600"
-        >{{if eq .Name "TODO"}}TODO{{else}}#{{.Name}}{{end}} ({{.Count}})</span
+        >{{if or (eq .Name "TODO") (eq .Name "DUE")}}{{.Name}}{{else}}#{{.Name}}{{end}} ({{.Count}})</span
       >
       {{else}}
       <a
         class="rounded-full border px-2.5 py-1 transition {{if .Active}}border-sky-500 bg-sky-500/20 text-sky-200{{else}}border-slate-700/70 bg-[#15181c] text-slate-300 hover:border-slate-500{{end}}"
         href="{{.URL}}"
-        >{{if eq .Name "TODO"}}TODO{{else}}#{{.Name}}{{end}} ({{.Count}})</a
+        >{{if or (eq .Name "TODO") (eq .Name "DUE")}}{{.Name}}{{else}}#{{.Name}}{{end}} ({{.Count}})</a
       >
       {{end}} {{else}}
       <span class="text-slate-500">No tags yet.</span>

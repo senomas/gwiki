@@ -395,7 +395,7 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 	return notes, rows.Err()
 }
 
-func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int) ([]TaskItem, error) {
+func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string) ([]TaskItem, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -403,31 +403,57 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int) ([]Task
 		rows *sql.Rows
 		err  error
 	)
+	if dueOnly && dueDate == "" {
+		return nil, fmt.Errorf("due date required for due-only tasks")
+	}
 	if len(tags) == 0 {
-		rows, err = i.db.QueryContext(ctx, `
-			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
-			FROM tasks
-			JOIN files ON files.id = tasks.file_id
-			WHERE tasks.checked = 0
-			ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
-			LIMIT ?`, limit)
+		if dueOnly {
+			rows, err = i.db.QueryContext(ctx, `
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				FROM tasks
+				JOIN files ON files.id = tasks.file_id
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+				ORDER BY tasks.due_date ASC, tasks.updated_at DESC
+				LIMIT ?`, dueDate, limit)
+		} else {
+			rows, err = i.db.QueryContext(ctx, `
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				FROM tasks
+				JOIN files ON files.id = tasks.file_id
+				WHERE tasks.checked = 0
+				ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
+				LIMIT ?`, limit)
+		}
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
-		query := `
+		base := `
 			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
 			FROM tasks
 			JOIN files ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+		`
+		if dueOnly {
+			base += ` AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?`
+		}
+		query := base + `
 			GROUP BY tasks.id
 			HAVING COUNT(DISTINCT tags.name) = ?
-			ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
+			ORDER BY ` + func() string {
+			if dueOnly {
+				return "tasks.due_date ASC, tasks.updated_at DESC"
+			}
+			return "(tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC"
+		}() + `
 			LIMIT ?`
-		args := make([]interface{}, 0, len(tags)+2)
+		args := make([]interface{}, 0, len(tags)+3)
 		for _, tag := range tags {
 			args = append(args, tag)
+		}
+		if dueOnly {
+			args = append(args, dueDate)
 		}
 		args = append(args, len(tags), limit)
 		rows, err = i.db.QueryContext(ctx, query, args...)
@@ -452,6 +478,134 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int) ([]Task
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int, offset int) ([]NoteSummary, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			WHERE tasks.checked = 0
+			GROUP BY files.id
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = []interface{}{limit, offset}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = make([]interface{}, 0, len(tags)+3)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags), limit, offset)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate string, limit int, offset int) ([]NoteSummary, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if dueDate == "" {
+		return nil, fmt.Errorf("due date required for due tasks")
+	}
+
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+			GROUP BY files.id
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = []interface{}{dueDate, limit, offset}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = make([]interface{}, 0, len(tags)+4)
+		args = append(args, dueDate)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags), limit, offset)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
 }
 
 func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
@@ -622,6 +776,79 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 	return tags, rows.Err()
 }
 
+func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDate string, limit int) ([]TagSummary, error) {
+	if dueDate == "" {
+		return nil, fmt.Errorf("due date required for due tasks")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(active) == 0 {
+		query = `
+			WITH matching_files AS (
+				SELECT DISTINCT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = []interface{}{dueDate, limit}
+	} else {
+		placeholders := strings.Repeat("?,", len(active))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			WITH matching_files AS (
+				SELECT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				JOIN file_tags ON files.id = file_tags.file_id
+				JOIN tags ON tags.id = file_tags.tag_id
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
+				GROUP BY files.id
+				HAVING COUNT(DISTINCT tags.name) = ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = make([]interface{}, 0, len(active)+3)
+		args = append(args, dueDate)
+		for _, tag := range active {
+			args = append(args, tag)
+		}
+		args = append(args, len(active), limit)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tags []TagSummary
+	for rows.Next() {
+		var t TagSummary
+		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
 func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySummary, error) {
 	if limit <= 0 {
 		limit = 30
@@ -699,68 +926,6 @@ func (i *Index) NotesByTags(ctx context.Context, tags []string, limit int, offse
 	return notes, rows.Err()
 }
 
-func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int, offset int) ([]NoteSummary, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	var (
-		query string
-		args  []interface{}
-	)
-	if len(tags) == 0 {
-		query = `
-			SELECT files.path, files.title, files.mtime_unix
-			FROM files
-			JOIN tasks ON files.id = tasks.file_id
-			WHERE tasks.checked = 0
-			GROUP BY files.id
-			ORDER BY files.priority ASC, files.updated_at DESC
-			LIMIT ? OFFSET ?`
-		args = []interface{}{limit, offset}
-	} else {
-		placeholders := strings.Repeat("?,", len(tags))
-		placeholders = strings.TrimRight(placeholders, ",")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix
-			FROM files
-			JOIN tasks ON files.id = tasks.file_id
-			JOIN file_tags ON files.id = file_tags.file_id
-			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
-			GROUP BY files.id
-			HAVING COUNT(DISTINCT tags.name) = ?
-			ORDER BY files.priority ASC, files.updated_at DESC
-			LIMIT ? OFFSET ?`
-		args = make([]interface{}, 0, len(tags)+3)
-		for _, tag := range tags {
-			args = append(args, tag)
-		}
-		args = append(args, len(tags), limit, offset)
-	}
-
-	rows, err := i.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var notes []NoteSummary
-	for rows.Next() {
-		var n NoteSummary
-		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
-			return nil, err
-		}
-		n.MTime = time.Unix(mtimeUnix, 0).UTC()
-		notes = append(notes, n)
-	}
-	return notes, rows.Err()
-}
-
 func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int, error) {
 	var (
 		query string
@@ -785,6 +950,49 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?`
 		args = make([]interface{}, 0, len(tags)+1)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags))
+		query = `SELECT COUNT(*) FROM (` + query + `)`
+	}
+
+	var count int
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDate string) (int, error) {
+	if dueDate == "" {
+		return 0, fmt.Errorf("due date required for due tasks")
+	}
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT COUNT(DISTINCT files.id)
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?`
+		args = []interface{}{dueDate}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT COUNT(DISTINCT files.id)
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?`
+		args = make([]interface{}, 0, len(tags)+2)
+		args = append(args, dueDate)
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
