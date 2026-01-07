@@ -28,7 +28,7 @@ func Load() Config {
 
 	cfg.GitDebounce = parseDurationOr("WIKI_GIT_DEBOUNCE", 3*time.Minute)
 	cfg.GitPushDebounce = parseDurationOr("WIKI_GIT_PUSH_DEBOUNCE", 10*time.Minute)
-	cfg.UpdatedHistoryMax = parseIntOr("WIKI_UPDATED_HISTORY_MAX", 10)
+	cfg.UpdatedHistoryMax = parseIntOr("WIKI_UPDATED_HISTORY_MAX", 100)
 	return cfg
 }
 

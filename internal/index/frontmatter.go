@@ -76,7 +76,7 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 	if createdMissing {
 		action = "create"
 	}
-	addHistoryEntry(&fmLines, lineIdx, nowStr, action)
+	upsertHistoryEntry(&fmLines, lineIdx, now, action)
 	trimHistoryEntries(&fmLines, lineIdx, maxUpdated)
 
 	fmBlock := "---\n" + strings.Join(fmLines, "\n") + "\n---"
@@ -190,6 +190,68 @@ func addHistoryEntry(lines *[]string, idx map[string]int, at, action string) {
 	*lines = append(*lines, "history:")
 	*lines = append(*lines, item...)
 	idx["history"] = historyPos
+}
+
+func upsertHistoryEntry(lines *[]string, idx map[string]int, now time.Time, action string) {
+	const mergeWindow = 15 * time.Minute
+	nowStr := now.Format(time.RFC3339)
+	pos, ok := idx["history"]
+	if !ok || pos < 0 || pos >= len(*lines) {
+		addHistoryEntry(lines, idx, nowStr, action)
+		return
+	}
+
+	start := pos + 1
+	end := start
+	for end < len(*lines) && isIndentedLine((*lines)[end]) {
+		end++
+	}
+	if end <= start {
+		addHistoryEntry(lines, idx, nowStr, action)
+		return
+	}
+
+	var lastStart int = -1
+	for i := start; i < end; i++ {
+		trimmed := strings.TrimLeft((*lines)[i], " \t")
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "-\t") || strings.HasPrefix(trimmed, "-") {
+			lastStart = i
+		}
+	}
+	if lastStart == -1 {
+		addHistoryEntry(lines, idx, nowStr, action)
+		return
+	}
+
+	lastAt := ""
+	lastAction := ""
+	for i := lastStart; i < end; i++ {
+		key, val := parseFrontmatterLine((*lines)[i])
+		switch strings.ToLower(key) {
+		case "at":
+			lastAt = strings.TrimSpace(strings.Trim(val, "\""))
+		case "action":
+			lastAction = strings.TrimSpace(strings.Trim(val, "\""))
+		}
+	}
+	if lastAt == "" || lastAction == "" {
+		addHistoryEntry(lines, idx, nowStr, action)
+		return
+	}
+	lastTime, err := time.Parse(time.RFC3339, lastAt)
+	if err != nil || action != lastAction || now.Sub(lastTime) > mergeWindow {
+		addHistoryEntry(lines, idx, nowStr, action)
+		return
+	}
+
+	for i := lastStart; i < end; i++ {
+		key, _ := parseFrontmatterLine((*lines)[i])
+		if strings.ToLower(key) == "at" {
+			(*lines)[i] = "    at: " + nowStr
+			return
+		}
+	}
+	addHistoryEntry(lines, idx, nowStr, action)
 }
 
 func trimHistoryEntries(lines *[]string, idx map[string]int, maxEntries int) {

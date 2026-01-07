@@ -114,6 +114,36 @@ func TestEnsureFrontmatterHistoryMax(t *testing.T) {
 	}
 }
 
+func TestEnsureFrontmatterHistoryMergeWindow(t *testing.T) {
+	now := time.Date(2024, 3, 4, 5, 20, 0, 0, time.UTC)
+	input := strings.Join([]string{
+		"---",
+		"updated: 2024-03-04T05:10:00Z",
+		"history:",
+		"  - user: dummy",
+		"    at: 2024-03-04T05:10:00Z",
+		"    action: edit",
+		"---",
+		"# Title",
+	}, "\n")
+
+	out, err := EnsureFrontmatter(input, now, 10)
+	if err != nil {
+		t.Fatalf("EnsureFrontmatter: %v", err)
+	}
+	fmLines, _, ok := splitFrontmatterLines(out)
+	if !ok {
+		t.Fatalf("expected frontmatter")
+	}
+	historyBlock := strings.Join(fmLines, "\n")
+	if strings.Count(historyBlock, "  - user: dummy") != 2 {
+		t.Fatalf("expected history to merge within window without duplicate header")
+	}
+	if !strings.Contains(historyBlock, "at: 2024-03-04T05:20:00Z") {
+		t.Fatalf("expected history timestamp to update")
+	}
+}
+
 func fmLineMap(lines []string) map[string]string {
 	out := make(map[string]string)
 	for _, line := range lines {

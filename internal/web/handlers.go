@@ -80,6 +80,11 @@ func shouldOpenNewTab(dest []byte) bool {
 		strings.HasPrefix(s, "//")
 }
 
+func normalizeLineEndings(input string) string {
+	normalized := strings.ReplaceAll(input, "\r\n", "\n")
+	return strings.ReplaceAll(normalized, "\r", "\n")
+}
+
 func parseTagsParam(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -1017,8 +1022,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}, http.StatusBadRequest)
 		return
 	}
-	content := r.Form.Get("content")
-	frontmatter := r.Form.Get("frontmatter")
+	content := normalizeLineEndings(r.Form.Get("content"))
+	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	if content == "" {
 		s.renderEditError(w, ViewData{
 			Title:            "New note",
@@ -1035,6 +1040,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if frontmatter != "" {
 		mergedContent = frontmatter + "\n" + content
 	}
+	mergedContent = normalizeLineEndings(mergedContent)
 	title := index.DeriveTitleFromBody(content)
 	if title == "" {
 		title = time.Now().Format("2006-01-02 15-04")
@@ -1328,8 +1334,8 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusBadRequest)
 		return
 	}
-	content := r.Form.Get("content")
-	frontmatter := r.Form.Get("frontmatter")
+	content := normalizeLineEndings(r.Form.Get("content"))
+	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	if content == "" {
 		s.renderEditError(w, ViewData{
 			Title:            "Edit note",
@@ -1352,6 +1358,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if frontmatter != "" {
 		mergedContent = frontmatter + "\n" + content
 	}
+	mergedContent = normalizeLineEndings(mergedContent)
 	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
 	if err != nil {
 		s.renderEditError(w, ViewData{
