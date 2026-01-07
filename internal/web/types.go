@@ -37,6 +37,7 @@ type ViewData struct {
 	ActiveDate       string
 	DateQuery        string
 	Backlinks        []BacklinkView
+	SearchQueryParam string
 }
 
 type BacklinkView struct {

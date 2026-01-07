@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ type CalendarDay struct {
 	Active      bool
 }
 
-func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePath string, tagQuery string, activeDate string) CalendarMonth {
+func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePath string, tagQuery string, activeDate string, activeSearch string) CalendarMonth {
 	now = now.UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthEnd := monthStart.AddDate(0, 1, -1)
@@ -50,7 +51,7 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 			if isActive {
 				nextDate = ""
 			}
-			url = buildCalendarURL(basePath, tagQuery, nextDate)
+			url = buildCalendarURL(basePath, tagQuery, nextDate, activeSearch)
 		}
 		days = append(days, CalendarDay{
 			Date:        dateKey,
@@ -77,7 +78,7 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 	}
 }
 
-func buildCalendarURL(basePath string, tagQuery string, date string) string {
+func buildCalendarURL(basePath string, tagQuery string, date string, activeSearch string) string {
 	if basePath == "" {
 		basePath = "/"
 	}
@@ -87,6 +88,9 @@ func buildCalendarURL(basePath string, tagQuery string, date string) string {
 	}
 	if date != "" {
 		params = append(params, "d="+date)
+	}
+	if activeSearch != "" {
+		params = append(params, "s="+url.QueryEscape(activeSearch))
 	}
 	if len(params) == 0 {
 		return basePath
