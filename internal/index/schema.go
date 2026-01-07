@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -50,8 +50,12 @@ CREATE TABLE IF NOT EXISTS tasks (
 	line_no INTEGER NOT NULL,
 	text TEXT NOT NULL,
 	checked INTEGER NOT NULL,
-	due_date TEXT
+	due_date TEXT,
+	updated_at INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS tasks_by_file_checked ON tasks(file_id, checked);
+CREATE INDEX IF NOT EXISTS tasks_by_file_due ON tasks(file_id, due_date);
 
 CREATE TABLE IF NOT EXISTS embed_cache (
 	url TEXT NOT NULL,

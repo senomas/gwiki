@@ -35,6 +35,51 @@
     .note-body ol {
       margin: 0.75rem 0 0.75rem 1.25rem;
     }
+    .note-body li {
+      margin: 0.35rem 0;
+    }
+    .note-body li:has(> input[type="checkbox"]) {
+      list-style: none;
+      padding-left: 1.25rem;
+    }
+    .note-body input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 1rem;
+      height: 1rem;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      border-radius: 0.25rem;
+      background: transparent;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      top: -1px;
+      place-content: center;
+      margin-right: 0.5rem;
+      vertical-align: -0.05rem;
+    }
+    .note-body input[type="checkbox"]::after {
+      content: "";
+      width: 0.45rem;
+      height: 0.25rem;
+      border-right: 2px solid rgba(15, 23, 42, 0.95);
+      border-bottom: 2px solid rgba(15, 23, 42, 0.95);
+      transform: rotate(45deg);
+      opacity: 0;
+      margin-top: -0.05rem;
+    }
+    .note-body input[type="checkbox"]:checked {
+      background: #60a5fa;
+      border-color: #60a5fa;
+      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35);
+    }
+    .note-body input[type="checkbox"]:checked::after {
+      opacity: 1;
+    }
+    .note-body input[type="checkbox"]:disabled {
+      cursor: default;
+    }
     .note-body ul {
       list-style: disc;
     }
@@ -75,8 +120,8 @@
     }
   </style>
 </head>
-<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home")}}
+<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
+{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks")}}
   {{.ContentHTML}}
 {{else}}
   <div class="mx-auto max-w-5xl px-6 py-8">

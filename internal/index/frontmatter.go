@@ -8,7 +8,7 @@ import (
 )
 
 func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, error) {
-	nowStr := now.UTC().Format(time.RFC3339)
+	nowStr := now.Format(time.RFC3339)
 	fmLines, body, ok := splitFrontmatterLines(content)
 	if !ok {
 		id := uuid.NewString()
@@ -17,6 +17,10 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 			"id: " + id,
 			"created: " + nowStr,
 			"updated: " + nowStr,
+			"history:",
+			"  - user: " + dummyHistoryUser,
+			"    at: " + nowStr,
+			"    action: create",
 			"---",
 		}
 		if body == "" {
@@ -42,22 +46,24 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 		idVal = uuid.NewString()
 	}
 	createdVal := valueOrEmpty(fmLines, lineIdx, "created")
+	createdMissing := createdVal == ""
 	if createdVal == "" {
 		createdVal = nowStr
 	}
-	updatedVal := valueOrEmpty(fmLines, lineIdx, "updated")
-	updatedList := updatedHistory(updatedVal)
-	updatedList = prependUnique(nowStr, updatedList)
 	if maxUpdated <= 0 {
 		maxUpdated = 1
-	}
-	if len(updatedList) > maxUpdated {
-		updatedList = updatedList[:maxUpdated]
 	}
 
 	setFrontmatterLine(&fmLines, lineIdx, "id", idVal)
 	setFrontmatterLine(&fmLines, lineIdx, "created", createdVal)
-	setFrontmatterLine(&fmLines, lineIdx, "updated", strings.Join(updatedList, ", "))
+	setFrontmatterLine(&fmLines, lineIdx, "updated", nowStr)
+
+	action := "edit"
+	if createdMissing {
+		action = "create"
+	}
+	addHistoryEntry(&fmLines, lineIdx, nowStr, action)
+	trimHistoryEntries(&fmLines, lineIdx, maxUpdated)
 
 	fmBlock := "---\n" + strings.Join(fmLines, "\n") + "\n---"
 	if body == "" {
@@ -116,31 +122,107 @@ func setFrontmatterLine(lines *[]string, idx map[string]int, key, val string) {
 	idx[key] = len(*lines) - 1
 }
 
-func updatedHistory(raw string) []string {
-	raw = strings.TrimSpace(strings.Trim(raw, "\""))
-	if raw == "" {
-		return nil
+const dummyHistoryUser = "dummy"
+
+func addHistoryEntry(lines *[]string, idx map[string]int, at, action string) {
+	item := []string{
+		"  - user: " + dummyHistoryUser,
+		"    at: " + at,
+		"    action: " + action,
 	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
+
+	if pos, ok := idx["history"]; ok && pos >= 0 && pos < len(*lines) {
+		insertLines(lines, idx, pos+1, item)
+		return
 	}
-	return out
+	historyPos := len(*lines)
+	*lines = append(*lines, "history:")
+	*lines = append(*lines, item...)
+	idx["history"] = historyPos
 }
 
-func prependUnique(value string, list []string) []string {
-	seen := map[string]struct{}{value: {}}
-	out := []string{value}
-	for _, item := range list {
-		if _, ok := seen[item]; ok {
-			continue
-		}
-		seen[item] = struct{}{}
-		out = append(out, item)
+func trimHistoryEntries(lines *[]string, idx map[string]int, maxEntries int) {
+	if maxEntries <= 0 {
+		return
 	}
-	return out
+	pos, ok := idx["history"]
+	if !ok || pos < 0 || pos >= len(*lines) {
+		return
+	}
+	start := pos + 1
+	end := start
+	for end < len(*lines) && isIndentedLine((*lines)[end]) {
+		end++
+	}
+	if end <= start {
+		return
+	}
+
+	itemStarts := make([]int, 0)
+	for i := start; i < end; i++ {
+		trimmed := strings.TrimLeft((*lines)[i], " \t")
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "-\t") || strings.HasPrefix(trimmed, "-") {
+			itemStarts = append(itemStarts, i)
+		}
+	}
+	if len(itemStarts) <= maxEntries {
+		return
+	}
+
+	for len(itemStarts) > maxEntries {
+		lastStart := itemStarts[len(itemStarts)-1]
+		lastEnd := end
+		if len(itemStarts) > 1 {
+			prevStart := itemStarts[len(itemStarts)-2]
+			if prevStart < lastStart {
+				lastEnd = end
+			}
+		}
+		removeRange(lines, idx, lastStart, lastEnd)
+		end = lastStart
+		itemStarts = itemStarts[:len(itemStarts)-1]
+	}
+}
+
+func isIndentedLine(line string) bool {
+	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
+}
+
+func insertLines(lines *[]string, idx map[string]int, pos int, add []string) {
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(*lines) {
+		pos = len(*lines)
+	}
+	*lines = append(*lines, add...)
+	copy((*lines)[pos+len(add):], (*lines)[pos:])
+	copy((*lines)[pos:], add)
+	for key, current := range idx {
+		if current >= pos {
+			idx[key] = current + len(add)
+		}
+	}
+}
+
+func removeRange(lines *[]string, idx map[string]int, start, end int) {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(*lines) {
+		end = len(*lines)
+	}
+	if start >= end {
+		return
+	}
+	*lines = append((*lines)[:start], (*lines)[end:]...)
+	shift := end - start
+	for key, current := range idx {
+		switch {
+		case current >= end:
+			idx[key] = current - shift
+		case current >= start:
+			delete(idx, key)
+		}
+	}
 }

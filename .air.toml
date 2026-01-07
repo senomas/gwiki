@@ -1,0 +1,12 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/main ./cmd/wiki"
+  bin = "tmp/main"
+  include_ext = ["go", "tpl", "tmpl", "html", "css", "js"]
+  include_dir = ["cmd", "internal", "templates", "notes"]
+  exclude_dir = ["tmp"]
+
+[run]
+  cmd = "./tmp/main"

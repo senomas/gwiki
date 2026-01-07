@@ -35,6 +35,7 @@ var mdRenderer = goldmark.New(
 	)),
 	goldmark.WithExtensions(&linkTargetBlank{}),
 	goldmark.WithExtensions(&mapsEmbedExtension{}),
+	goldmark.WithExtensions(extension.TaskList),
 )
 
 type linkTargetBlank struct{}
@@ -616,6 +617,38 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderTemplate(w, "home_notes", data)
 }
 
+func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tasks, err := s.idx.OpenTasks(r.Context(), 300)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	calendar := buildCalendarMonth(time.Now(), updateDays)
+	data := ViewData{
+		Title:           "Tasks",
+		ContentTemplate: "tasks",
+		OpenTasks:       tasks,
+		Tags:            tags,
+		UpdateDays:      updateDays,
+		CalendarMonth:   calendar,
+	}
+	s.views.RenderPage(w, data)
+}
+
 func (s *Server) loadHomeNotes(ctx context.Context, offset int) ([]NoteCard, int, bool, error) {
 	notes, err := s.idx.RecentNotesPage(ctx, homeNotesPageSize+1, offset)
 	if err != nil {
@@ -738,6 +771,12 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if info, err := os.Stat(fullPath); err == nil {
+		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	meta := index.ParseContent(string(content))
 	htmlStr, err := renderMarkdown(content)
@@ -745,6 +784,17 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	tags, err := s.idx.ListTags(r.Context(), 100)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	calendar := buildCalendarMonth(time.Now(), updateDays)
 
 	data := ViewData{
 		Title:           meta.Title,
@@ -752,6 +802,9 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		NotePath:        notePath,
 		NoteTitle:       meta.Title,
 		RenderedHTML:    template.HTML(htmlStr),
+		Tags:            tags,
+		UpdateDays:      updateDays,
+		CalendarMonth:   calendar,
 	}
 	s.views.RenderPage(w, data)
 }
@@ -774,6 +827,12 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if info, err := os.Stat(fullPath); err == nil {
+		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	meta := index.ParseContent(string(content))

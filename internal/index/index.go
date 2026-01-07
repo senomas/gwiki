@@ -42,6 +42,15 @@ type UpdateDaySummary struct {
 	Count int
 }
 
+type TaskItem struct {
+	Path      string
+	Title     string
+	LineNo    int
+	Text      string
+	DueDate   string
+	UpdatedAt time.Time
+}
+
 type fileRecord struct {
 	ID        int
 	Hash      string
@@ -291,7 +300,16 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if task.Done {
 			checked = 1
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO tasks(file_id, line_no, text, checked, due_date) VALUES(?, ?, ?, ?, ?)", existingID, task.LineNo, task.Text, checked, nullIfEmpty(task.Due)); err != nil {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO tasks(file_id, line_no, text, checked, due_date, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?)`,
+			existingID,
+			task.LineNo,
+			task.Text,
+			checked,
+			nullIfEmpty(task.Due),
+			time.Now().Unix(),
+		); err != nil {
 			return err
 		}
 	}
@@ -304,6 +322,29 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	}
 
 	return tx.Commit()
+}
+
+func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
+	var rec fileRecord
+	err := i.db.QueryRowContext(ctx, "SELECT id, hash, mtime_unix, size FROM files WHERE path=?", notePath).
+		Scan(&rec.ID, &rec.Hash, &rec.MTimeUnix, &rec.Size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return i.IndexNote(ctx, notePath, content, mtime, size)
+	}
+	if err != nil {
+		return err
+	}
+	if rec.MTimeUnix == mtime.Unix() && rec.Size == size {
+		return nil
+	}
+
+	hash := sha256.Sum256(content)
+	checksum := hex.EncodeToString(hash[:])
+	if checksum == rec.Hash {
+		_, err := i.db.ExecContext(ctx, "UPDATE files SET mtime_unix=?, size=? WHERE id=?", mtime.Unix(), size, rec.ID)
+		return err
+	}
+	return i.IndexNote(ctx, notePath, content, mtime, size)
 }
 
 func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, error) {
@@ -325,6 +366,8 @@ func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, erro
 	}
 	return notes, rows.Err()
 }
+
+// Intentionally no stable task IDs; tasks are fully rebuilt from markdown on change.
 
 func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]NoteSummary, error) {
 	if limit <= 0 {
@@ -350,6 +393,39 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 		notes = append(notes, n)
 	}
 	return notes, rows.Err()
+}
+
+func (i *Index) OpenTasks(ctx context.Context, limit int) ([]TaskItem, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := i.db.QueryContext(ctx, `
+		SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+		FROM tasks
+		JOIN files ON files.id = tasks.file_id
+		WHERE tasks.checked = 0
+		ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TaskItem
+	for rows.Next() {
+		var item TaskItem
+		var due sql.NullString
+		var updatedUnix int64
+		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &due, &updatedUnix); err != nil {
+			return nil, err
+		}
+		if due.Valid {
+			item.DueDate = due.String
+		}
+		item.UpdatedAt = time.Unix(updatedUnix, 0).Local()
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {

@@ -1,17 +1,21 @@
 {{define "view"}}
 <div class="app-shell relative min-h-screen overflow-hidden">
   <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
-  <div class="relative mx-auto min-h-screen max-w-3xl px-6 py-12">
-    <div class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
-      <a class="text-slate-400 transition hover:text-slate-200" href="/">Back</a>
-      <a class="text-slate-400 transition hover:text-slate-200" href="/notes/{{.NotePath}}/edit">Edit</a>
-    </div>
-    <article class="mt-6 rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
-      <h1 class="text-2xl font-semibold text-slate-100">{{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>
-      <div class="note-body mt-4 text-sm leading-relaxed text-slate-200">
-        {{template "note_content" .}}
+  <div class="relative mx-auto flex min-h-screen max-w-6xl gap-10 px-6 py-10">
+    {{template "sidebar" .}}
+
+    <section class="flex-1 space-y-6">
+      <div class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
+        <a class="text-slate-400 transition hover:text-slate-200" href="/">Back</a>
+        <a class="text-slate-400 transition hover:text-slate-200" href="/notes/{{.NotePath}}/edit">Edit</a>
       </div>
-    </article>
+      <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
+        <h1 class="text-2xl font-semibold text-slate-100">{{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>
+        <div class="note-body mt-4 text-sm leading-relaxed text-slate-200">
+          {{template "note_content" .}}
+        </div>
+      </article>
+    </section>
   </div>
 </div>
 {{end}}

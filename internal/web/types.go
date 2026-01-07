@@ -23,6 +23,7 @@ type ViewData struct {
 	Tags            []index.TagSummary
 	UpdateDays      []index.UpdateDaySummary
 	CalendarMonth   CalendarMonth
+	OpenTasks       []index.TaskItem
 }
 
 type NoteCard struct {
