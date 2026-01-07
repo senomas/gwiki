@@ -506,6 +506,54 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySumma
 	return days, rows.Err()
 }
 
+func (i *Index) NotesByTags(ctx context.Context, tags []string, limit int, offset int) ([]NoteSummary, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	placeholders := strings.Repeat("?,", len(tags))
+	placeholders = strings.TrimRight(placeholders, ",")
+	query := `
+		SELECT files.path, files.title, files.mtime_unix
+		FROM files
+		JOIN file_tags ON files.id = file_tags.file_id
+		JOIN tags ON tags.id = file_tags.tag_id
+		WHERE tags.name IN (` + placeholders + `)
+		GROUP BY files.id
+		HAVING COUNT(DISTINCT tags.name) = ?
+		ORDER BY files.updated_at DESC
+		LIMIT ? OFFSET ?`
+
+	args := make([]interface{}, 0, len(tags)+3)
+	for _, tag := range tags {
+		args = append(args, tag)
+	}
+	args = append(args, len(tags), limit, offset)
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
 func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, error) {
 	rows, err := i.db.QueryContext(ctx, "SELECT id, path, hash, mtime_unix, size FROM files")
 	if err != nil {

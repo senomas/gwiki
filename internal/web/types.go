@@ -24,6 +24,16 @@ type ViewData struct {
 	UpdateDays      []index.UpdateDaySummary
 	CalendarMonth   CalendarMonth
 	OpenTasks       []index.TaskItem
+	TagLinks        []TagLink
+	ActiveTags      []string
+	TagQuery        string
+}
+
+type TagLink struct {
+	Name   string
+	Count  int
+	URL    string
+	Active bool
 }
 
 type NoteCard struct {

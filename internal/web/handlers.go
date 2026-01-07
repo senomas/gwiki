@@ -80,6 +80,79 @@ func shouldOpenNewTab(dest []byte) bool {
 		strings.HasPrefix(s, "//")
 }
 
+func parseTagsParam(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		tag := strings.TrimSpace(part)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
+}
+
+func buildTagLinks(active []string, tags []index.TagSummary) []TagLink {
+	activeSet := map[string]struct{}{}
+	for _, tag := range active {
+		activeSet[tag] = struct{}{}
+	}
+	links := make([]TagLink, 0, len(tags))
+	for _, tag := range tags {
+		_, isActive := activeSet[tag.Name]
+		var next []string
+		if isActive {
+			next = make([]string, 0, len(active))
+			for _, item := range active {
+				if item != tag.Name {
+					next = append(next, item)
+				}
+			}
+		} else {
+			next = append(append([]string{}, active...), tag.Name)
+		}
+		links = append(links, TagLink{
+			Name:   tag.Name,
+			Count:  tag.Count,
+			URL:    buildTagsURL(next),
+			Active: isActive,
+		})
+	}
+	return links
+}
+
+func buildTagsURL(tags []string) string {
+	if len(tags) == 0 {
+		return "/"
+	}
+	escaped := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		escaped = append(escaped, url.QueryEscape(tag))
+	}
+	return "/?t=" + strings.Join(escaped, ",")
+}
+
+func buildTagsQuery(tags []string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	escaped := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		escaped = append(escaped, url.QueryEscape(tag))
+	}
+	return strings.Join(escaped, ",")
+}
+
 const mapsAppShortLinkPrefix = "https://maps.app.goo.gl/"
 const mapsAppShortLinkPrefixInsecure = "http://maps.app.goo.gl/"
 
@@ -547,18 +620,20 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	tagLinks := buildTagLinks(activeTags, tags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	calendar := buildCalendarMonth(time.Now(), updateDays)
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0)
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, activeTags)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -570,6 +645,9 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		HomeHasMore:     hasMore,
 		NextHomeOffset:  nextOffset,
 		Tags:            tags,
+		TagLinks:        tagLinks,
+		ActiveTags:      activeTags,
+		TagQuery:        buildTagsQuery(activeTags),
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
 	}
@@ -604,7 +682,8 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 			offset = parsed
 		}
 	}
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset)
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, activeTags)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -613,6 +692,8 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		HomeNotes:      homeNotes,
 		HomeHasMore:    hasMore,
 		NextHomeOffset: nextOffset,
+		ActiveTags:     activeTags,
+		TagQuery:       buildTagsQuery(activeTags),
 	}
 	s.views.RenderTemplate(w, "home_notes", data)
 }
@@ -627,11 +708,13 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	tagLinks := buildTagLinks(activeTags, tags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -643,14 +726,23 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		ContentTemplate: "tasks",
 		OpenTasks:       tasks,
 		Tags:            tags,
+		TagLinks:        tagLinks,
+		ActiveTags:      activeTags,
+		TagQuery:        buildTagsQuery(activeTags),
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
 	}
 	s.views.RenderPage(w, data)
 }
 
-func (s *Server) loadHomeNotes(ctx context.Context, offset int) ([]NoteCard, int, bool, error) {
-	notes, err := s.idx.RecentNotesPage(ctx, homeNotesPageSize+1, offset)
+func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string) ([]NoteCard, int, bool, error) {
+	var notes []index.NoteSummary
+	var err error
+	if len(tags) > 0 {
+		notes, err = s.idx.NotesByTags(ctx, tags, homeNotesPageSize+1, offset)
+	} else {
+		notes, err = s.idx.RecentNotesPage(ctx, homeNotesPageSize+1, offset)
+	}
 	if err != nil {
 		return nil, offset, false, err
 	}
@@ -784,11 +876,13 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	tagLinks := buildTagLinks(activeTags, tags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -803,6 +897,9 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		NoteTitle:       meta.Title,
 		RenderedHTML:    template.HTML(htmlStr),
 		Tags:            tags,
+		TagLinks:        tagLinks,
+		ActiveTags:      activeTags,
+		TagQuery:        buildTagsQuery(activeTags),
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
 	}
