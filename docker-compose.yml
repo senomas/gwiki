@@ -1,0 +1,7 @@
+services:
+  gwiki:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - "${WIKI_REPO_PATH_HOST:-.}:/data"

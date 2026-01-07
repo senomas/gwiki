@@ -1,0 +1,27 @@
+{{define "base"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Title}}{{.Title}} - {{end}}gwiki</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900">
+<div class="mx-auto max-w-5xl px-6 py-8">
+  <header class="flex flex-wrap items-end justify-between gap-4">
+    <div class="text-lg font-semibold">
+      <a class="text-emerald-600 hover:text-emerald-700" href="/">gwiki</a>
+    </div>
+    <form class="w-full max-w-xs" action="/search" method="get">
+      <input class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" type="search" name="q" placeholder="Search" value="{{.SearchQuery}}">
+    </form>
+  </header>
+  <hr class="my-6 border-slate-200">
+  <main class="max-w-4xl">
+    {{.ContentHTML}}
+  </main>
+</div>
+</body>
+</html>
+{{end}}

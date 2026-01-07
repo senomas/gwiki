@@ -1,0 +1,10 @@
+{{define "new"}}
+<h1 class="text-2xl font-semibold">New note</h1>
+<form class="mt-4 space-y-4" action="/notes/new" method="post">
+  <label class="block text-sm font-medium text-slate-700">Title</label>
+  <input class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" type="text" name="title" required>
+  <div>
+    <button class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700" type="submit">Create</button>
+  </div>
+</form>
+{{end}}

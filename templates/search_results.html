@@ -1,0 +1,14 @@
+{{define "search_results"}}
+<h1 class="text-2xl font-semibold">Search</h1>
+{{if .SearchQuery}}<p class="mt-2 text-sm text-slate-600">Results for <strong class="text-slate-900">{{.SearchQuery}}</strong></p>{{end}}
+<ul class="mt-4 space-y-4">
+  {{range .SearchResults}}
+    <li>
+      <a class="text-emerald-600 hover:text-emerald-700" href="/notes/{{.Path}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a>
+      <div class="mt-1 text-sm text-slate-700">{{.Snippet}}</div>
+    </li>
+  {{else}}
+    <li class="text-slate-500">No results.</li>
+  {{end}}
+</ul>
+{{end}}
