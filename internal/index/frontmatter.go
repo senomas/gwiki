@@ -91,6 +91,14 @@ func HasFrontmatter(content string) bool {
 	return ok
 }
 
+func FrontmatterBlock(content string) string {
+	lines, _, ok := splitFrontmatterLines(content)
+	if !ok {
+		return ""
+	}
+	return "---\n" + strings.Join(lines, "\n") + "\n---"
+}
+
 func splitFrontmatterLines(input string) ([]string, string, bool) {
 	lines := strings.Split(input, "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {

@@ -991,11 +991,12 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		data := ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			NoteTitle:       "",
-			RawContent:      "",
-			SaveAction:      "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			NoteTitle:        "",
+			RawContent:       "",
+			FrontmatterBlock: "",
+			SaveAction:       "/notes/new",
 		}
 		s.views.RenderPage(w, data)
 		return
@@ -1006,41 +1007,49 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseForm(); err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      r.Form.Get("content"),
-			SaveAction:      "/notes/new",
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       r.Form.Get("content"),
+			FrontmatterBlock: r.Form.Get("frontmatter"),
+			SaveAction:       "/notes/new",
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
 		return
 	}
 	content := r.Form.Get("content")
+	frontmatter := r.Form.Get("frontmatter")
 	if content == "" {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      "",
-			SaveAction:      "/notes/new",
-			ErrorMessage:    "content required",
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       "",
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			ErrorMessage:     "content required",
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
 		return
+	}
+	mergedContent := content
+	if frontmatter != "" {
+		mergedContent = frontmatter + "\n" + content
 	}
 	title := index.DeriveTitleFromBody(content)
 	if title == "" {
 		title = time.Now().Format("2006-01-02 15-04")
 	}
 
-	content, err := index.EnsureFrontmatterWithTitle(content, time.Now(), s.cfg.UpdatedHistoryMax, title)
+	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, title)
 	if err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      content,
-			SaveAction:      "/notes/new",
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -1050,63 +1059,68 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      content,
-			SaveAction:      "/notes/new",
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
 		return
 	}
 	if _, err := os.Stat(fullPath); err == nil {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      content,
-			SaveAction:      "/notes/new",
-			ErrorMessage:    "note already exists",
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			ErrorMessage:     "note already exists",
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusConflict)
 		return
 	}
 	if err != nil && !os.IsNotExist(err) {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      content,
-			SaveAction:      "/notes/new",
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
 		return
 	}
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      content,
-			SaveAction:      "/notes/new",
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
 		return
 	}
-	if err := fs.WriteFileAtomic(fullPath, []byte(content), 0o644); err != nil {
+	if err := fs.WriteFileAtomic(fullPath, []byte(mergedContent), 0o644); err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "New note",
-			ContentTemplate: "edit",
-			RawContent:      content,
-			SaveAction:      "/notes/new",
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/new",
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
 		return
 	}
 	info, err := os.Stat(fullPath)
 	if err == nil {
-		_ = s.idx.IndexNote(r.Context(), notePath, []byte(content), info.ModTime(), info.Size())
+		_ = s.idx.IndexNote(r.Context(), notePath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
 
 	http.Redirect(w, r, "/notes/"+notePath, http.StatusSeeOther)
@@ -1288,11 +1302,12 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 
 	meta := index.ParseContent(string(content))
 	data := ViewData{
-		Title:           "Edit: " + meta.Title,
-		ContentTemplate: "edit",
-		NotePath:        notePath,
-		NoteTitle:       meta.Title,
-		RawContent:      string(content),
+		Title:            "Edit: " + meta.Title,
+		ContentTemplate:  "edit",
+		NotePath:         notePath,
+		NoteTitle:        meta.Title,
+		RawContent:       index.StripFrontmatter(string(content)),
+		FrontmatterBlock: index.FrontmatterBlock(string(content)),
 	}
 	s.views.RenderPage(w, data)
 }
@@ -1314,14 +1329,16 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 	content := r.Form.Get("content")
+	frontmatter := r.Form.Get("frontmatter")
 	if content == "" {
 		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        notePath,
-			RawContent:      "",
-			ErrorMessage:    "content required",
-			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			RawContent:       "",
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     "content required",
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
 		}, http.StatusBadRequest)
 		return
 	}
@@ -1331,16 +1348,21 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if derivedTitle == "" {
 		derivedTitle = time.Now().Format("2006-01-02 15-04")
 	}
-	content, err := index.EnsureFrontmatterWithTitle(content, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+	mergedContent := content
+	if frontmatter != "" {
+		mergedContent = frontmatter + "\n" + content
+	}
+	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
 	if err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        notePath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -1361,13 +1383,14 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	existingContent, err := os.ReadFile(fullPath)
 	if err != nil && !os.IsNotExist(err) {
 		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        notePath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -1379,14 +1402,15 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if titleChanged && decision == "" {
 		newPath := fs.EnsureMDExt(slugify(derivedTitle))
 		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        notePath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			RenamePrompt:    true,
-			RenameFromPath:  notePath,
-			RenameToPath:    newPath,
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: index.FrontmatterBlock(mergedContent),
+			RenamePrompt:     true,
+			RenameFromPath:   notePath,
+			RenameToPath:     newPath,
 		}, http.StatusOK)
 		return
 	}
@@ -1401,38 +1425,41 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
 		if err != nil {
 			s.renderEditError(w, ViewData{
-				Title:           "Edit note",
-				ContentTemplate: "edit",
-				NotePath:        notePath,
-				NoteTitle:       derivedTitle,
-				RawContent:      content,
-				ErrorMessage:    err.Error(),
-				ErrorReturnURL:  "/notes/" + notePath + "/edit",
+				Title:            "Edit note",
+				ContentTemplate:  "edit",
+				NotePath:         notePath,
+				NoteTitle:        derivedTitle,
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				ErrorMessage:     err.Error(),
+				ErrorReturnURL:   "/notes/" + notePath + "/edit",
 			}, http.StatusBadRequest)
 			return
 		}
 		if targetPath != notePath {
 			if _, err := os.Stat(targetFullPath); err == nil {
 				s.renderEditError(w, ViewData{
-					Title:           "Edit note",
-					ContentTemplate: "edit",
-					NotePath:        notePath,
-					NoteTitle:       derivedTitle,
-					RawContent:      content,
-					ErrorMessage:    "note already exists",
-					ErrorReturnURL:  "/notes/" + notePath + "/edit",
+					Title:            "Edit note",
+					ContentTemplate:  "edit",
+					NotePath:         notePath,
+					NoteTitle:        derivedTitle,
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					ErrorMessage:     "note already exists",
+					ErrorReturnURL:   "/notes/" + notePath + "/edit",
 				}, http.StatusConflict)
 				return
 			}
 			if err != nil && !os.IsNotExist(err) {
 				s.renderEditError(w, ViewData{
-					Title:           "Edit note",
-					ContentTemplate: "edit",
-					NotePath:        notePath,
-					NoteTitle:       derivedTitle,
-					RawContent:      content,
-					ErrorMessage:    err.Error(),
-					ErrorReturnURL:  "/notes/" + notePath + "/edit",
+					Title:            "Edit note",
+					ContentTemplate:  "edit",
+					NotePath:         notePath,
+					NoteTitle:        derivedTitle,
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/" + notePath + "/edit",
 				}, http.StatusInternalServerError)
 				return
 			}
@@ -1441,38 +1468,41 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 
 	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        targetPath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + targetPath + "/edit",
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         targetPath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
 		}, http.StatusInternalServerError)
 		return
 	}
-	if err := fs.WriteFileAtomic(targetFullPath, []byte(content), 0o644); err != nil {
+	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
 		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        targetPath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + targetPath + "/edit",
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         targetPath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
 		}, http.StatusInternalServerError)
 		return
 	}
 	if targetPath != notePath {
 		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
 			s.renderEditError(w, ViewData{
-				Title:           "Edit note",
-				ContentTemplate: "edit",
-				NotePath:        targetPath,
-				NoteTitle:       derivedTitle,
-				RawContent:      content,
-				ErrorMessage:    err.Error(),
-				ErrorReturnURL:  "/notes/" + targetPath + "/edit",
+				Title:            "Edit note",
+				ContentTemplate:  "edit",
+				NotePath:         targetPath,
+				NoteTitle:        derivedTitle,
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				ErrorMessage:     err.Error(),
+				ErrorReturnURL:   "/notes/" + targetPath + "/edit",
 			}, http.StatusInternalServerError)
 			return
 		}
@@ -1480,7 +1510,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	info, err := os.Stat(targetFullPath)
 	if err == nil {
-		_ = s.idx.IndexNote(context.Background(), targetPath, []byte(content), info.ModTime(), info.Size())
+		_ = s.idx.IndexNote(context.Background(), targetPath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
 
 	http.Redirect(w, r, "/notes/"+targetPath, http.StatusSeeOther)
