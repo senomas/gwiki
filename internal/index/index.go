@@ -1135,6 +1135,22 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	return true, nil
 }
 
+func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) {
+	var id int
+	if err := i.db.QueryRowContext(ctx, "SELECT id FROM files WHERE path=?", notePath).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (i *Index) PathByFileID(ctx context.Context, id int) (string, error) {
+	var path string
+	if err := i.db.QueryRowContext(ctx, "SELECT path FROM files WHERE id=?", id).Scan(&path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
 	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY path")
 	if err != nil {

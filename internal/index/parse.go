@@ -1,6 +1,8 @@
 package index
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +18,7 @@ type Task struct {
 	Text   string
 	Done   bool
 	Due    string
+	Hash   string
 }
 
 type Metadata struct {
@@ -78,10 +81,16 @@ func ParseContent(input string) Metadata {
 			Text:   strings.TrimSpace(match[2]),
 			Done:   strings.TrimSpace(match[1]) != "",
 			Due:    due,
+			Hash:   TaskLineHash(line),
 		})
 	}
 
 	return meta
+}
+
+func TaskLineHash(line string) string {
+	sum := sha256.Sum256([]byte(line))
+	return hex.EncodeToString(sum[:])
 }
 
 func StripFrontmatter(input string) string {

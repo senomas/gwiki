@@ -3,6 +3,10 @@ package web
 import (
 	"container/list"
 	"context"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"html"
 	"html/template"
 	"net/http"
@@ -28,6 +32,8 @@ import (
 )
 
 var linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
+var taskCheckboxRe = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
+var taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
 
 var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(extension.NewLinkify(
@@ -127,6 +133,69 @@ func splitSpecialTags(tags []string) (bool, bool, []string) {
 		}
 	}
 	return hasTodo, hasDue, out
+}
+
+const taskIDPrefix = "task-"
+
+func taskCheckboxID(fileID, lineNo int, hash string) string {
+	return fmt.Sprintf("%s%d-%d-%s", taskIDPrefix, fileID, lineNo, hash)
+}
+
+func taskCheckboxHTML(fileID, lineNo int, hash string, checked bool) string {
+	id := html.EscapeString(taskCheckboxID(fileID, lineNo, hash))
+	checkedAttr := ""
+	if checked {
+		checkedAttr = " checked"
+	}
+	return fmt.Sprintf(
+		`<input type="checkbox"%s data-task-id="%s" id="%s" hx-post="/tasks/toggle" hx-trigger="change" hx-swap="outerHTML" hx-vals='{"task_id":"%s"}'>`,
+		checkedAttr,
+		id,
+		id,
+		id,
+	)
+}
+
+func parseTaskID(raw string) (int, int, string, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, taskIDPrefix) {
+		return 0, 0, "", fmt.Errorf("invalid task id")
+	}
+	parts := strings.Split(strings.TrimPrefix(raw, taskIDPrefix), "-")
+	if len(parts) < 3 {
+		return 0, 0, "", fmt.Errorf("invalid task id")
+	}
+	fileID, err := strconv.Atoi(parts[0])
+	if err != nil || fileID <= 0 {
+		return 0, 0, "", fmt.Errorf("invalid task id")
+	}
+	lineNo, err := strconv.Atoi(parts[1])
+	if err != nil || lineNo <= 0 {
+		return 0, 0, "", fmt.Errorf("invalid task id")
+	}
+	hash := strings.Join(parts[2:], "-")
+	if len(hash) != 64 {
+		return 0, 0, "", fmt.Errorf("invalid task id")
+	}
+	if _, err := hex.DecodeString(hash); err != nil {
+		return 0, 0, "", fmt.Errorf("invalid task id")
+	}
+	return fileID, lineNo, hash, nil
+}
+
+func decorateTaskCheckboxes(htmlStr string, fileID int, tasks []index.Task) string {
+	if fileID <= 0 || len(tasks) == 0 {
+		return htmlStr
+	}
+	idx := 0
+	return taskCheckboxRe.ReplaceAllStringFunc(htmlStr, func(tag string) string {
+		if idx >= len(tasks) {
+			return tag
+		}
+		task := tasks[idx]
+		idx++
+		return taskCheckboxHTML(fileID, task.LineNo, task.Hash, task.Done)
+	})
 }
 
 func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]struct{}, basePath string, todoCount int, dueCount int) []TagLink {
@@ -944,6 +1013,89 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderPage(w, data)
 }
 
+func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	taskID := r.Form.Get("task_id")
+	fileID, lineNo, hash, err := parseTaskID(taskID)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	notePath, err := s.idx.PathByFileID(r.Context(), fileID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	contentBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	content := normalizeLineEndings(string(contentBytes))
+	body := index.StripFrontmatter(content)
+	lines := strings.Split(body, "\n")
+	if lineNo < 1 || lineNo > len(lines) {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	line := lines[lineNo-1]
+	if index.TaskLineHash(line) != hash {
+		http.Error(w, "task changed, refresh the page", http.StatusConflict)
+		return
+	}
+	match := taskToggleLineRe.FindStringSubmatch(line)
+	if len(match) == 0 {
+		http.Error(w, "invalid task line", http.StatusBadRequest)
+		return
+	}
+	newMark := "x"
+	if strings.ToLower(match[2]) == "x" {
+		newMark = " "
+	}
+	newLine := match[1] + newMark + match[3]
+	lines[lineNo-1] = newLine
+	updatedBody := strings.Join(lines, "\n")
+	updatedContent := updatedBody
+	if fm := index.FrontmatterBlock(content); fm != "" {
+		updatedContent = fm + "\n" + updatedBody
+	}
+	updatedContent = normalizeLineEndings(updatedContent)
+	updatedContent, err = index.EnsureFrontmatterWithTitle(updatedContent, time.Now(), s.cfg.UpdatedHistoryMax, "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	unlock := s.locker.Lock(notePath)
+	if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
+		unlock()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	unlock()
+	if info, err := os.Stat(fullPath); err == nil {
+		_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
+	}
+	newHash := index.TaskLineHash(newLine)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(taskCheckboxHTML(fileID, lineNo, newHash, strings.TrimSpace(newMark) != "")))
+}
+
 func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, onlyTodo bool, onlyDue bool) ([]NoteCard, int, bool, error) {
 	var notes []index.NoteSummary
 	var err error
@@ -981,6 +1133,14 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		htmlStr, err := renderMarkdown(content)
 		if err != nil {
 			return nil, offset, false, err
+		}
+		meta := index.ParseContent(normalizeLineEndings(string(content)))
+		fileID, err := s.idx.FileIDByPath(ctx, note.Path)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, offset, false, err
+		}
+		if err == nil {
+			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
 		}
 		label := note.MTime.Local().Format("Mon, Jan 2, 2006")
 		cards = append(cards, NoteCard{
@@ -1199,11 +1359,20 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 	}
 
-	meta := index.ParseContent(string(content))
-	htmlStr, err := renderMarkdown(content)
+	normalizedContent := []byte(normalizeLineEndings(string(content)))
+	meta := index.ParseContent(string(normalizedContent))
+	htmlStr, err := renderMarkdown(normalizedContent)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err == nil {
+		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)

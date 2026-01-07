@@ -50,4 +50,5 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/notes/page", s.handleHomeNotesPage)
 	s.mux.HandleFunc("/notes/", s.handleNotes)
 	s.mux.HandleFunc("/tasks", s.handleTasks)
+	s.mux.HandleFunc("/tasks/toggle", s.handleToggleTask)
 }
