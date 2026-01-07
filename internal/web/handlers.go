@@ -990,7 +990,13 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		data := ViewData{Title: "New note", ContentTemplate: "new"}
+		data := ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			NoteTitle:       "",
+			RawContent:      "",
+			SaveAction:      "/notes/new",
+		}
 		s.views.RenderPage(w, data)
 		return
 	}
@@ -1002,22 +1008,35 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	title := strings.TrimSpace(r.Form.Get("title"))
-	if title == "" {
-		http.Error(w, "title required", http.StatusBadRequest)
+	content := r.Form.Get("content")
+	if content == "" {
+		http.Error(w, "content required", http.StatusBadRequest)
 		return
 	}
+	title := index.DeriveTitleFromBody(content)
+	if title == "" {
+		title = time.Now().Format("2006-01-02 15-04")
+	}
 
-	slug := slugify(title)
-	notePath, err := s.uniqueNotePath(slug)
+	content, err := index.EnsureFrontmatterWithTitle(content, time.Now(), s.cfg.UpdatedHistoryMax, title)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	slug := slugify(title)
+	notePath := fs.EnsureMDExt(slug)
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := os.Stat(fullPath); err == nil {
+		http.Error(w, "note already exists", http.StatusConflict)
+		return
+	}
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -1025,7 +1044,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	content := "# " + title + "\n\n"
 	if err := fs.WriteFileAtomic(fullPath, []byte(content), 0o644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1035,7 +1053,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		_ = s.idx.IndexNote(r.Context(), notePath, []byte(content), info.ModTime(), info.Size())
 	}
 
-	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, "/notes/"+notePath, http.StatusSeeOther)
 }
 
 func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
@@ -1075,6 +1093,28 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if !index.HasFrontmatter(string(content)) {
+		derivedTitle := index.DeriveTitleFromBody(string(content))
+		if derivedTitle == "" {
+			derivedTitle = time.Now().Format("2006-01-02 15-04")
+		}
+		updated, err := index.EnsureFrontmatterWithTitle(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		unlock := s.locker.Lock(notePath)
+		if err := fs.WriteFileAtomic(fullPath, []byte(updated), 0o644); err != nil {
+			unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		unlock()
+		content = []byte(updated)
+		if info, err := os.Stat(fullPath); err == nil {
+			_ = s.idx.IndexNote(r.Context(), notePath, content, info.ModTime(), info.Size())
+		}
 	}
 	if info, err := os.Stat(fullPath); err == nil {
 		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
@@ -1161,6 +1201,28 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if !index.HasFrontmatter(string(content)) {
+		derivedTitle := index.DeriveTitleFromBody(string(content))
+		if derivedTitle == "" {
+			derivedTitle = time.Now().Format("2006-01-02 15-04")
+		}
+		updated, err := index.EnsureFrontmatterWithTitle(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		unlock := s.locker.Lock(notePath)
+		if err := fs.WriteFileAtomic(fullPath, []byte(updated), 0o644); err != nil {
+			unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		unlock()
+		content = []byte(updated)
+		if info, err := os.Stat(fullPath); err == nil {
+			_ = s.idx.IndexNote(r.Context(), notePath, content, info.ModTime(), info.Size())
+		}
+	}
 	if info, err := os.Stat(fullPath); err == nil {
 		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1194,7 +1256,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 
-	content, err := index.EnsureFrontmatter(content, time.Now(), s.cfg.UpdatedHistoryMax)
+	derivedTitle := index.DeriveTitleFromBody(content)
+	if derivedTitle == "" {
+		derivedTitle = time.Now().Format("2006-01-02 15-04")
+	}
+	content, err := index.EnsureFrontmatterWithTitle(content, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

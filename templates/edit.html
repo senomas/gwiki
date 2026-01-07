@@ -1,6 +1,6 @@
 {{define "edit"}}
 <h1 class="text-2xl font-semibold">Edit {{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>
-<form class="mt-4 space-y-4" action="/notes/{{.NotePath}}/save" method="post">
+<form class="mt-4 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post">
   <textarea class="min-h-[60vh] w-full rounded-md border border-slate-300 bg-white p-3 font-mono text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" name="content">{{.RawContent}}</textarea>
   <div>
     <button class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700" type="submit">Save</button>

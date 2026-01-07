@@ -13,6 +13,7 @@ type ViewData struct {
 	NotePath        string
 	NoteTitle       string
 	RawContent      string
+	SaveAction      string
 	RenderedHTML    template.HTML
 	SearchQuery     string
 	SearchResults   []index.SearchResult

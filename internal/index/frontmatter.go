@@ -8,15 +8,23 @@ import (
 )
 
 func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, error) {
+	return EnsureFrontmatterWithTitle(content, now, maxUpdated, "")
+}
+
+func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, title string) (string, error) {
 	nowStr := now.Format(time.RFC3339)
 	fmLines, body, ok := splitFrontmatterLines(content)
 	if !ok {
 		id := uuid.NewString()
+		if title == "" {
+			title = DeriveTitleFromBody(body)
+		}
 		fm := []string{
 			"---",
 			"id: " + id,
 			"created: " + nowStr,
 			"updated: " + nowStr,
+			"title: " + title,
 			"priority: 10",
 			"history:",
 			"  - user: " + dummyHistoryUser,
@@ -46,6 +54,12 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 	if idVal == "" {
 		idVal = uuid.NewString()
 	}
+	if title == "" {
+		title = valueOrEmpty(fmLines, lineIdx, "title")
+		if title == "" {
+			title = DeriveTitleFromBody(body)
+		}
+	}
 	createdVal := valueOrEmpty(fmLines, lineIdx, "created")
 	createdMissing := createdVal == ""
 	if createdVal == "" {
@@ -62,6 +76,7 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 	setFrontmatterLine(&fmLines, lineIdx, "id", idVal)
 	setFrontmatterLine(&fmLines, lineIdx, "created", createdVal)
 	setFrontmatterLine(&fmLines, lineIdx, "updated", nowStr)
+	setFrontmatterLine(&fmLines, lineIdx, "title", title)
 	setFrontmatterLine(&fmLines, lineIdx, "priority", priorityVal)
 
 	action := "edit"
@@ -76,6 +91,11 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 		return fmBlock + "\n", nil
 	}
 	return fmBlock + "\n" + body, nil
+}
+
+func HasFrontmatter(content string) bool {
+	_, _, ok := splitFrontmatterLines(content)
+	return ok
 }
 
 func splitFrontmatterLines(input string) ([]string, string, bool) {
@@ -129,6 +149,16 @@ func setFrontmatterLine(lines *[]string, idx map[string]int, key, val string) {
 }
 
 const dummyHistoryUser = "dummy"
+
+func DeriveTitleFromBody(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		}
+	}
+	return ""
+}
 
 func addHistoryEntry(lines *[]string, idx map[string]int, at, action string) {
 	item := []string{
