@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS tasks (
 	text TEXT NOT NULL,
 	checked INTEGER NOT NULL,
 	due_date TEXT
+);
+
+CREATE TABLE IF NOT EXISTS embed_cache (
+	url TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	embed_url TEXT,
+	status TEXT NOT NULL,
+	error_msg TEXT,
+	updated_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	PRIMARY KEY(url, kind)
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(

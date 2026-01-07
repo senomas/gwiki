@@ -2,21 +2,484 @@ package web
 
 import (
 	"context"
+	"html"
 	"html/template"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 
 	"gwiki/internal/index"
 	"gwiki/internal/storage/fs"
 )
 
-var mdRenderer = goldmark.New()
+var linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
+
+var mdRenderer = goldmark.New(
+	goldmark.WithExtensions(extension.NewLinkify(
+		extension.WithLinkifyURLRegexp(linkifyURLRegexp),
+	)),
+	goldmark.WithExtensions(&linkTargetBlank{}),
+	goldmark.WithExtensions(&mapsEmbedExtension{}),
+)
+
+type linkTargetBlank struct{}
+
+func (e *linkTargetBlank) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&linkTargetBlankTransformer{}, 100),
+	))
+}
+
+type linkTargetBlankTransformer struct{}
+
+func (t *linkTargetBlankTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch link := n.(type) {
+		case *ast.Link:
+			if shouldOpenNewTab(link.Destination) {
+				link.SetAttributeString("target", []byte("_blank"))
+				link.SetAttributeString("rel", []byte("noopener noreferrer"))
+			}
+		case *ast.AutoLink:
+			if link.AutoLinkType == ast.AutoLinkURL && shouldOpenNewTab(link.URL(reader.Source())) {
+				link.SetAttributeString("target", []byte("_blank"))
+				link.SetAttributeString("rel", []byte("noopener noreferrer"))
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
+func shouldOpenNewTab(dest []byte) bool {
+	s := strings.ToLower(strings.TrimSpace(string(dest)))
+	if s == "" {
+		return false
+	}
+	return strings.HasPrefix(s, "http://") ||
+		strings.HasPrefix(s, "https://") ||
+		strings.HasPrefix(s, "ftp://") ||
+		strings.HasPrefix(s, "//")
+}
+
+const mapsAppShortLinkPrefix = "https://maps.app.goo.gl/"
+const mapsAppShortLinkPrefixInsecure = "http://maps.app.goo.gl/"
+
+var (
+	mapsEmbedKind         = ast.NewNodeKind("MapsEmbed")
+	mapsEmbedCoordsRegexp = regexp.MustCompile(`@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)`)
+	mapsEmbedHTTPClient   = &http.Client{Timeout: 3 * time.Second}
+	mapsEmbedCacheKind    = "maps"
+)
+
+const (
+	mapsEmbedSuccessTTL  = 90 * 24 * time.Hour
+	mapsEmbedFailureTTL  = 10 * time.Minute
+	mapsEmbedPendingTTL  = 15 * time.Second
+	mapsEmbedSyncTimeout = 1200 * time.Millisecond
+)
+
+var embedCacheStore *index.Index
+
+var mapsEmbedInFlight = struct {
+	mu   sync.Mutex
+	data map[string]time.Time
+}{
+	data: map[string]time.Time{},
+}
+
+type mapsEmbedStatus int
+
+const (
+	mapsEmbedStatusPending mapsEmbedStatus = iota
+	mapsEmbedStatusFound
+	mapsEmbedStatusFailed
+)
+
+type mapsEmbed struct {
+	ast.BaseBlock
+	URL             string
+	OriginalURL     string
+	FallbackMessage string
+}
+
+func (n *mapsEmbed) Kind() ast.NodeKind {
+	return mapsEmbedKind
+}
+
+func (n *mapsEmbed) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"URL":      n.URL,
+		"Original": n.OriginalURL,
+		"Fallback": n.FallbackMessage,
+	}, nil)
+}
+
+type mapsEmbedExtension struct{}
+
+func (e *mapsEmbedExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&mapsEmbedTransformer{}, 110),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newMapsEmbedHTMLRenderer(), 500),
+	))
+}
+
+type mapsEmbedTransformer struct{}
+
+func (t *mapsEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	source := reader.Source()
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var url string
+		switch link := n.(type) {
+		case *ast.Link:
+			url = string(link.Destination)
+		case *ast.AutoLink:
+			if link.AutoLinkType != ast.AutoLinkURL {
+				return ast.WalkContinue, nil
+			}
+			url = string(link.URL(source))
+		default:
+			return ast.WalkContinue, nil
+		}
+		url = strings.TrimSpace(url)
+		if !isMapsAppShortLink(url) {
+			return ast.WalkContinue, nil
+		}
+
+		status, embedURL, errMsg := lookupMapsEmbed(url)
+		switch status {
+		case mapsEmbedStatusFound:
+			embed := &mapsEmbed{URL: embedURL, OriginalURL: url}
+			parent := n.Parent()
+			if parent == nil {
+				return ast.WalkContinue, nil
+			}
+			if para, ok := parent.(*ast.Paragraph); ok {
+				grand := para.Parent()
+				if grand == nil {
+					return ast.WalkContinue, nil
+				}
+				if para.FirstChild() == n && para.LastChild() == n {
+					grand.ReplaceChild(grand, para, embed)
+					return ast.WalkContinue, nil
+				}
+				grand.InsertAfter(grand, para, embed)
+				return ast.WalkContinue, nil
+			}
+
+			grand := parent.Parent()
+			if grand != nil {
+				grand.InsertAfter(grand, parent, embed)
+			}
+			return ast.WalkContinue, nil
+		case mapsEmbedStatusFailed:
+			embed := &mapsEmbed{
+				OriginalURL:     url,
+				FallbackMessage: errMsg,
+			}
+			parent := n.Parent()
+			if parent == nil {
+				return ast.WalkContinue, nil
+			}
+			if para, ok := parent.(*ast.Paragraph); ok {
+				grand := para.Parent()
+				if grand == nil {
+					return ast.WalkContinue, nil
+				}
+				grand.InsertAfter(grand, para, embed)
+				return ast.WalkContinue, nil
+			}
+
+			grand := parent.Parent()
+			if grand != nil {
+				grand.InsertAfter(grand, parent, embed)
+			}
+			return ast.WalkContinue, nil
+		default:
+			embed := &mapsEmbed{
+				OriginalURL:     url,
+				FallbackMessage: "Map preview loading. Reload to display the embed.",
+			}
+			parent := n.Parent()
+			if parent == nil {
+				return ast.WalkContinue, nil
+			}
+			if para, ok := parent.(*ast.Paragraph); ok {
+				grand := para.Parent()
+				if grand == nil {
+					return ast.WalkContinue, nil
+				}
+				grand.InsertAfter(grand, para, embed)
+				return ast.WalkContinue, nil
+			}
+
+			grand := parent.Parent()
+			if grand != nil {
+				grand.InsertAfter(grand, parent, embed)
+			}
+			return ast.WalkContinue, nil
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
+type mapsEmbedHTMLRenderer struct{}
+
+func newMapsEmbedHTMLRenderer() renderer.NodeRenderer {
+	return &mapsEmbedHTMLRenderer{}
+}
+
+func (r *mapsEmbedHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(mapsEmbedKind, r.renderMapsEmbed)
+}
+
+func (r *mapsEmbedHTMLRenderer) renderMapsEmbed(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*mapsEmbed)
+	if n.URL != "" {
+		escapedURL := html.EscapeString(n.URL)
+		_, _ = w.WriteString(`<div class="map-embed">`)
+		_, _ = w.WriteString(`<iframe src="`)
+		_, _ = w.WriteString(escapedURL)
+		_, _ = w.WriteString(`" loading="lazy" referrerpolicy="no-referrer-when-downgrade"`)
+		_, _ = w.WriteString(` style="border:0;" width="100%" height="360" allowfullscreen></iframe>`)
+		_, _ = w.WriteString(`</div>`)
+		return ast.WalkContinue, nil
+	}
+	if n.FallbackMessage != "" && n.OriginalURL != "" {
+		escapedURL := html.EscapeString(n.OriginalURL)
+		escapedMsg := html.EscapeString(n.FallbackMessage)
+		_, _ = w.WriteString(`<div class="map-embed map-embed-fallback">`)
+		_, _ = w.WriteString(`<span>`)
+		_, _ = w.WriteString(escapedMsg)
+		_, _ = w.WriteString(`</span> `)
+		_, _ = w.WriteString(`<a href="`)
+		_, _ = w.WriteString(escapedURL)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>`)
+		_, _ = w.WriteString(`</div>`)
+	}
+	return ast.WalkContinue, nil
+}
+
+func isMapsAppShortLink(url string) bool {
+	lower := strings.ToLower(strings.TrimSpace(url))
+	return strings.HasPrefix(lower, mapsAppShortLinkPrefix) ||
+		strings.HasPrefix(lower, mapsAppShortLinkPrefixInsecure)
+}
+
+func lookupMapsEmbed(shortURL string) (mapsEmbedStatus, string, string) {
+	if embedCacheStore != nil {
+		entry, ok, err := embedCacheStore.GetEmbedCache(context.Background(), shortURL, mapsEmbedCacheKind)
+		if err == nil && ok {
+			if entry.Status == index.EmbedCacheStatusFound {
+				return mapsEmbedStatusFound, entry.EmbedURL, ""
+			}
+			if entry.Status == index.EmbedCacheStatusFailed {
+				message := entry.ErrorMsg
+				if message == "" {
+					message = "Map preview unavailable."
+				}
+				return mapsEmbedStatusFailed, "", message
+			}
+		}
+	}
+
+	if mapsEmbedIsInFlight(shortURL) {
+		return mapsEmbedStatusPending, "", ""
+	}
+	mapsEmbedMarkInFlight(shortURL)
+
+	if embedURL, ok := resolveMapsEmbedNow(shortURL, mapsEmbedSyncTimeout); ok {
+		mapsEmbedStoreFound(shortURL, embedURL)
+		mapsEmbedClearInFlight(shortURL)
+		return mapsEmbedStatusFound, embedURL, ""
+	}
+
+	go resolveMapsEmbedAsync(shortURL)
+	return mapsEmbedStatusPending, "", ""
+}
+
+func resolveMapsEmbedNow(shortURL string, timeout time.Duration) (string, bool) {
+	client := &http.Client{Timeout: timeout}
+	return resolveMapsEmbedWithClient(shortURL, client)
+}
+
+func resolveMapsEmbedAsync(shortURL string) {
+	embedURL, ok := resolveMapsEmbedWithClient(shortURL, mapsEmbedHTTPClient)
+	if !ok {
+		mapsEmbedStoreFailure(shortURL, "Map preview unavailable.")
+		mapsEmbedClearInFlight(shortURL)
+		return
+	}
+
+	mapsEmbedStoreFound(shortURL, embedURL)
+	mapsEmbedClearInFlight(shortURL)
+}
+
+func resolveMapsEmbedWithClient(shortURL string, client *http.Client) (string, bool) {
+	req, err := http.NewRequest(http.MethodGet, shortURL, nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("User-Agent", "gwiki")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	_ = resp.Body.Close()
+
+	finalURL := resp.Request.URL.String()
+	if embedURL, ok := buildMapsEmbedURL(finalURL); ok {
+		return embedURL, true
+	}
+
+	if linkValue := strings.TrimSpace(resp.Request.URL.Query().Get("link")); linkValue != "" {
+		if decoded, err := url.QueryUnescape(linkValue); err == nil {
+			if embedURL, ok := buildMapsEmbedURL(decoded); ok {
+				return embedURL, true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func mapsEmbedIsInFlight(shortURL string) bool {
+	now := time.Now()
+	mapsEmbedInFlight.mu.Lock()
+	defer mapsEmbedInFlight.mu.Unlock()
+	if until, ok := mapsEmbedInFlight.data[shortURL]; ok {
+		if until.After(now) {
+			return true
+		}
+		delete(mapsEmbedInFlight.data, shortURL)
+	}
+	return false
+}
+
+func mapsEmbedMarkInFlight(shortURL string) {
+	mapsEmbedInFlight.mu.Lock()
+	mapsEmbedInFlight.data[shortURL] = time.Now().Add(mapsEmbedPendingTTL)
+	mapsEmbedInFlight.mu.Unlock()
+}
+
+func mapsEmbedClearInFlight(shortURL string) {
+	mapsEmbedInFlight.mu.Lock()
+	delete(mapsEmbedInFlight.data, shortURL)
+	mapsEmbedInFlight.mu.Unlock()
+}
+
+func mapsEmbedStoreFound(shortURL, embedURL string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       shortURL,
+		Kind:      mapsEmbedCacheKind,
+		EmbedURL:  embedURL,
+		Status:    index.EmbedCacheStatusFound,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(mapsEmbedSuccessTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(context.Background(), entry)
+}
+
+func mapsEmbedStoreFailure(shortURL, message string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       shortURL,
+		Kind:      mapsEmbedCacheKind,
+		Status:    index.EmbedCacheStatusFailed,
+		ErrorMsg:  message,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(mapsEmbedFailureTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(context.Background(), entry)
+}
+
+func buildMapsEmbedURL(finalURL string) (string, bool) {
+	parsed, err := url.Parse(finalURL)
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+
+	if coords := mapsEmbedCoordsRegexp.FindStringSubmatch(finalURL); len(coords) == 3 {
+		return mapsEmbedQueryURL(coords[1] + "," + coords[2]), true
+	}
+
+	queryValue := strings.TrimSpace(parsed.Query().Get("q"))
+	if queryValue != "" {
+		return mapsEmbedQueryURL(queryValue), true
+	}
+
+	if ll := strings.TrimSpace(parsed.Query().Get("ll")); ll != "" {
+		return mapsEmbedQueryURL(ll), true
+	}
+
+	path := parsed.EscapedPath()
+	if strings.HasPrefix(path, "/maps/place/") {
+		trimmed := strings.TrimPrefix(path, "/maps/place/")
+		segment := strings.SplitN(trimmed, "/", 2)[0]
+		if segment != "" {
+			if decoded, err := url.PathUnescape(segment); err == nil {
+				segment = decoded
+			}
+			segment = strings.TrimSpace(segment)
+			if segment != "" {
+				return mapsEmbedQueryURL(segment), true
+			}
+		}
+	}
+
+	if strings.HasPrefix(path, "/maps/search/") {
+		trimmed := strings.TrimPrefix(path, "/maps/search/")
+		segment := strings.SplitN(trimmed, "/", 2)[0]
+		if segment != "" {
+			if decoded, err := url.PathUnescape(segment); err == nil {
+				segment = decoded
+			}
+			segment = strings.TrimSpace(segment)
+			if segment != "" {
+				return mapsEmbedQueryURL(segment), true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func mapsEmbedQueryURL(value string) string {
+	return "https://www.google.com/maps?output=embed&q=" + url.QueryEscape(value)
+}
 
 const homeNotesPageSize = 6
 

@@ -77,16 +77,8 @@
         </div>
       </div>
 
-      <div class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
-        <div class="flex items-center justify-between border-b border-slate-800/70 px-6 py-4 text-xs uppercase tracking-[0.25em] text-slate-500">
-          <span>Notes</span>
-          <a class="text-slate-400 transition hover:text-slate-200" href="/notes/new">New note</a>
-        </div>
-        <div class="max-h-[calc(100vh-320px)] overflow-y-auto">
-          <div id="notes-feed" class="space-y-4 px-6 py-5">
-            {{template "home_notes" .}}
-          </div>
-        </div>
+      <div id="notes-feed" class="space-y-4">
+        {{template "home_notes" .}}
       </div>
     </section>
   </div>

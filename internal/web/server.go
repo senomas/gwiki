@@ -30,6 +30,7 @@ func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
 		views:  MustParseTemplates(),
 		auth:   auth,
 	}
+	embedCacheStore = idx
 
 	s.routes()
 	return s, nil
