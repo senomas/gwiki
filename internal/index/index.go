@@ -91,7 +91,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 		return err
 	}
 	stmts := []string{
-		"DELETE FROM file_updates WHERE file_id=?",
+		"DELETE FROM file_histories WHERE file_id=?",
 		"DELETE FROM file_tags WHERE file_id=?",
 		"DELETE FROM links WHERE from_file_id=? OR to_file_id=?",
 		"DELETE FROM tasks WHERE file_id=?",
@@ -159,7 +159,7 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 	notesRoot := filepath.Join(repoPath, "notes")
 	clear := []string{
 		"DELETE FROM embed_cache",
-		"DELETE FROM file_updates",
+		"DELETE FROM file_histories",
 		"DELETE FROM file_tags",
 		"DELETE FROM tags",
 		"DELETE FROM links",
@@ -305,9 +305,12 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE file_id=?", existingID); err != nil {
 		return err
 	}
-	updatedAt := mtime.Unix()
-	updatedDay := updatedAt / secondsPerDay
-	if _, err := tx.ExecContext(ctx, "INSERT INTO file_updates(file_id, updated_at, updated_day) VALUES(?, ?, ?)", existingID, updatedAt, updatedDay); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM file_histories WHERE file_id=?", existingID); err != nil {
+		return err
+	}
+	actionTime := mtime.Unix()
+	actionDate := actionTime / secondsPerDay
+	if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(file_id, action, action_time, action_date) VALUES(?, ?, ?, ?)", existingID, "save", actionTime, actionDate); err != nil {
 		return err
 	}
 
@@ -896,10 +899,10 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySumma
 		limit = 30
 	}
 	rows, err := i.db.QueryContext(ctx, `
-		SELECT updated_day, COUNT(*)
-		FROM file_updates
-		GROUP BY updated_day
-		ORDER BY updated_day DESC
+		SELECT action_date, COUNT(*)
+		FROM file_histories
+		GROUP BY action_date
+		ORDER BY action_date DESC
 		LIMIT ?
 	`, limit)
 	if err != nil {
@@ -1099,7 +1102,7 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		if _, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE file_id=?", row.id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM file_updates WHERE file_id=?", row.id); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM file_histories WHERE file_id=?", row.id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE path=?", row.path); err != nil {

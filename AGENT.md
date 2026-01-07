@@ -141,7 +141,7 @@ Current schema (SQLite)
 
 - `schema_version(version)`
 - `files(id, path UNIQUE, title, hash, mtime_unix, size, created_at, updated_at, priority DEFAULT 10)`
-- `file_updates(id, file_id, updated_at)`
+- `file_histories(id, file_id, action, action_time, action_date)`
 - `tags(id, name UNIQUE)`
 - `file_tags(file_id, tag_id, PRIMARY KEY(file_id, tag_id))`
 - `links(id, from_file_id, to_ref, to_file_id NULL, kind)` where kind in ('wikilink','mdlink')
