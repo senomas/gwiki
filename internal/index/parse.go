@@ -32,7 +32,7 @@ type Metadata struct {
 var (
 	wikiLinkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	mdLinkRe   = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
-	tagRe      = regexp.MustCompile(`#([A-Za-z0-9_-]+)`)
+	tagRe      = regexp.MustCompile(`#([A-Za-z0-9_/-]+)`)
 	taskRe     = regexp.MustCompile(`^\s*- \[( |x|X)\] (.+)$`)
 	dueRe      = regexp.MustCompile(`(?:@due\((\d{4}-\d{2}-\d{2})\)|due:(\d{4}-\d{2}-\d{2}))`)
 )
@@ -49,7 +49,9 @@ func ParseContent(input string) Metadata {
 		tags[t] = struct{}{}
 	}
 	for _, m := range tagRe.FindAllStringSubmatch(body, -1) {
-		tags[m[1]] = struct{}{}
+		for _, tag := range expandTagPrefixes(m[1]) {
+			tags[tag] = struct{}{}
+		}
 	}
 	for t := range tags {
 		meta.Tags = append(meta.Tags, t)
@@ -91,6 +93,40 @@ func ParseContent(input string) Metadata {
 func TaskLineHash(line string) string {
 	sum := sha256.Sum256([]byte(line))
 	return hex.EncodeToString(sum[:])
+}
+
+func expandTagPrefixes(tag string) []string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return nil
+	}
+	parts := splitTagParts(tag)
+	if len(parts) == 1 {
+		return []string{tag}
+	}
+	out := make([]string, 0, len(parts))
+	for i := range parts {
+		segment := strings.Join(parts[:i+1], "/")
+		if segment != "" {
+			out = append(out, segment)
+		}
+	}
+	return out
+}
+
+func splitTagParts(tag string) []string {
+	parts := strings.FieldsFunc(tag, func(r rune) bool {
+		return r == '/'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
 }
 
 func StripFrontmatter(input string) string {

@@ -9,7 +9,7 @@ tags: [alpha, beta]
 ---
 # Ignored Title
 
-Some text with #inline tag and a link [[Wiki Note]].
+Some text with #inline tag, #travel/food and a link [[Wiki Note]].
 
 - [ ] Task one @due(2024-01-01)
 - [x] Done task due:2024-02-02
@@ -22,6 +22,18 @@ Some text with #inline tag and a link [[Wiki Note]].
 	}
 	if len(meta.Tags) < 2 {
 		t.Fatalf("expected tags, got %v", meta.Tags)
+	}
+	for _, tag := range []string{"travel", "travel/food"} {
+		found := false
+		for _, existing := range meta.Tags {
+			if existing == tag {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected tag %q, got %v", tag, meta.Tags)
+		}
 	}
 	if len(meta.Links) != 2 {
 		t.Fatalf("expected 2 links, got %d", len(meta.Links))
