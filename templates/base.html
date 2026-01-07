@@ -6,22 +6,71 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{if .Title}}{{.Title}} - {{end}}gwiki</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap');
+
+    .view-shell {
+      font-family: "Sora", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    .note-body h1,
+    .note-body h2,
+    .note-body h3 {
+      font-weight: 600;
+      margin: 1rem 0 0.5rem;
+    }
+    .note-body h1 {
+      font-size: 1.5rem;
+    }
+    .note-body h2 {
+      font-size: 1.25rem;
+    }
+    .note-body h3 {
+      font-size: 1.125rem;
+    }
+    .note-body p {
+      margin: 0.75rem 0;
+    }
+    .note-body ul,
+    .note-body ol {
+      margin: 0.75rem 0 0.75rem 1.25rem;
+    }
+    .note-body ul {
+      list-style: disc;
+    }
+    .note-body ol {
+      list-style: decimal;
+    }
+    .note-body a {
+      color: #7dd3fc;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .note-body code {
+      background: rgba(15, 23, 42, 0.7);
+      border-radius: 0.375rem;
+      padding: 0.1rem 0.35rem;
+    }
+  </style>
 </head>
-<body class="min-h-screen bg-slate-50 text-slate-900">
-<div class="mx-auto max-w-5xl px-6 py-8">
-  <header class="flex flex-wrap items-end justify-between gap-4">
-    <div class="text-lg font-semibold">
-      <a class="text-emerald-600 hover:text-emerald-700" href="/">gwiki</a>
-    </div>
-    <form class="w-full max-w-xs" action="/search" method="get">
-      <input class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" type="search" name="q" placeholder="Search" value="{{.SearchQuery}}">
-    </form>
-  </header>
-  <hr class="my-6 border-slate-200">
-  <main class="max-w-4xl">
-    {{.ContentHTML}}
-  </main>
-</div>
+<body class="{{if eq .ContentTemplate "view"}}min-h-screen bg-slate-950 text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
+{{if eq .ContentTemplate "view"}}
+  {{.ContentHTML}}
+{{else}}
+  <div class="mx-auto max-w-5xl px-6 py-8">
+    <header class="flex flex-wrap items-end justify-between gap-4">
+      <div class="text-lg font-semibold">
+        <a class="text-emerald-600 hover:text-emerald-700" href="/">gwiki</a>
+      </div>
+      <form class="w-full max-w-xs" action="/search" method="get">
+        <input class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" type="search" name="q" placeholder="Search" value="{{.SearchQuery}}">
+      </form>
+    </header>
+    <hr class="my-6 border-slate-200">
+    <main class="max-w-4xl">
+      {{.ContentHTML}}
+    </main>
+  </div>
+{{end}}
 </body>
 </html>
 {{end}}

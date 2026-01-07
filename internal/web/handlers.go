@@ -169,12 +169,33 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 
+	recent, err := s.idx.RecentNotes(r.Context(), 6)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tags, err := s.idx.ListTags(r.Context(), 30)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	calendar := buildCalendarMonth(time.Now(), updateDays)
+
 	data := ViewData{
 		Title:           meta.Title,
 		ContentTemplate: "view",
 		NotePath:        notePath,
 		NoteTitle:       meta.Title,
 		RenderedHTML:    template.HTML(htmlStr),
+		RecentNotes:     recent,
+		Tags:            tags,
+		UpdateDays:      updateDays,
+		CalendarMonth:   calendar,
 	}
 	s.views.RenderPage(w, data)
 }
