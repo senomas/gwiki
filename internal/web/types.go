@@ -34,6 +34,8 @@ type ViewData struct {
 	TagLinks         []TagLink
 	ActiveTags       []string
 	TagQuery         string
+	ActiveDate       string
+	DateQuery        string
 }
 
 type TagLink struct {

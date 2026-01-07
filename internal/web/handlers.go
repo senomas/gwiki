@@ -118,6 +118,17 @@ func parseTagsParam(raw string) []string {
 	return out
 }
 
+func parseDateParam(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if _, err := time.Parse("2006-01-02", raw); err != nil {
+		return ""
+	}
+	return raw
+}
+
 func splitSpecialTags(tags []string) (bool, bool, []string) {
 	out := make([]string, 0, len(tags))
 	hasTodo := false
@@ -198,7 +209,7 @@ func decorateTaskCheckboxes(htmlStr string, fileID int, tasks []index.Task) stri
 	})
 }
 
-func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]struct{}, basePath string, todoCount int, dueCount int) []TagLink {
+func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]struct{}, basePath string, todoCount int, dueCount int, activeDate string) []TagLink {
 	activeSet := map[string]struct{}{}
 	activeList := make([]string, 0, len(active))
 	for _, tag := range active {
@@ -206,8 +217,8 @@ func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]
 		activeList = append(activeList, tag)
 	}
 	links := make([]TagLink, 0, len(tags)+2)
-	links = append(links, buildDueTagLink(activeList, activeSet, allowed, basePath, dueCount))
-	links = append(links, buildTodoTagLink(activeList, activeSet, allowed, basePath, todoCount))
+	links = append(links, buildDueTagLink(activeList, activeSet, allowed, basePath, dueCount, activeDate))
+	links = append(links, buildTodoTagLink(activeList, activeSet, allowed, basePath, todoCount, activeDate))
 	for _, tag := range tags {
 		_, isActive := activeSet[tag.Name]
 		disabled := false
@@ -229,7 +240,7 @@ func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]
 		}
 		url := ""
 		if !disabled {
-			url = buildTagsURL(basePath, next)
+			url = buildTagsURL(basePath, next, activeDate)
 		}
 		links = append(links, TagLink{
 			Name:     tag.Name,
@@ -242,21 +253,42 @@ func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]
 	return links
 }
 
-func buildTagsURL(basePath string, tags []string) string {
-	if basePath == "" {
-		basePath = "/"
-	}
+func buildTagsQuery(tags []string) string {
 	if len(tags) == 0 {
-		return basePath
+		return ""
 	}
 	escaped := make([]string, 0, len(tags))
 	for _, tag := range tags {
 		escaped = append(escaped, url.QueryEscape(tag))
 	}
-	return basePath + "?t=" + strings.Join(escaped, ",")
+	return strings.Join(escaped, ",")
 }
 
-func buildDueTagLink(activeList []string, activeSet map[string]struct{}, allowed map[string]struct{}, basePath string, count int) TagLink {
+func buildDateQuery(date string) string {
+	if date == "" {
+		return ""
+	}
+	return url.QueryEscape(date)
+}
+
+func buildTagsURL(basePath string, tags []string, activeDate string) string {
+	if basePath == "" {
+		basePath = "/"
+	}
+	params := make([]string, 0, 2)
+	if tagQuery := buildTagsQuery(tags); tagQuery != "" {
+		params = append(params, "t="+tagQuery)
+	}
+	if activeDate != "" {
+		params = append(params, "d="+url.QueryEscape(activeDate))
+	}
+	if len(params) == 0 {
+		return basePath
+	}
+	return basePath + "?" + strings.Join(params, "&")
+}
+
+func buildDueTagLink(activeList []string, activeSet map[string]struct{}, allowed map[string]struct{}, basePath string, count int, activeDate string) TagLink {
 	const name = "DUE"
 	_, isActive := activeSet[name]
 	disabled := false
@@ -278,7 +310,7 @@ func buildDueTagLink(activeList []string, activeSet map[string]struct{}, allowed
 	}
 	url := ""
 	if !disabled {
-		url = buildTagsURL(basePath, next)
+		url = buildTagsURL(basePath, next, activeDate)
 	}
 	return TagLink{
 		Name:     name,
@@ -289,23 +321,26 @@ func buildDueTagLink(activeList []string, activeSet map[string]struct{}, allowed
 	}
 }
 
-func buildTagsQuery(tags []string) string {
-	if len(tags) == 0 {
-		return ""
-	}
-	escaped := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		escaped = append(escaped, url.QueryEscape(tag))
-	}
-	return strings.Join(escaped, ",")
-}
-
-func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool) (int, int, error) {
+func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string) (int, int, error) {
 	todoCount := 0
 	dueCount := 0
 	dueDate := time.Now().Format("2006-01-02")
 
-	if activeTodo || len(noteTags) > 0 {
+	if activeDate != "" {
+		if activeTodo || len(noteTags) > 0 {
+			count, err := s.idx.CountNotesWithOpenTasksByDate(r.Context(), noteTags, activeDate)
+			if err != nil {
+				return 0, 0, err
+			}
+			todoCount = count
+		} else {
+			count, err := s.idx.CountNotesWithOpenTasksByDate(r.Context(), nil, activeDate)
+			if err != nil {
+				return 0, 0, err
+			}
+			todoCount = count
+		}
+	} else if activeTodo || len(noteTags) > 0 {
 		count, err := s.idx.CountNotesWithOpenTasks(r.Context(), noteTags)
 		if err != nil {
 			return 0, 0, err
@@ -319,7 +354,21 @@ func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, active
 		todoCount = count
 	}
 
-	if activeDue || len(noteTags) > 0 {
+	if activeDate != "" {
+		if activeDue || len(noteTags) > 0 {
+			count, err := s.idx.CountNotesWithDueTasksByDate(r.Context(), noteTags, activeDate, dueDate)
+			if err != nil {
+				return 0, 0, err
+			}
+			dueCount = count
+		} else {
+			count, err := s.idx.CountNotesWithDueTasksByDate(r.Context(), nil, activeDate, dueDate)
+			if err != nil {
+				return 0, 0, err
+			}
+			dueCount = count
+		}
+	} else if activeDue || len(noteTags) > 0 {
 		count, err := s.idx.CountNotesWithDueTasks(r.Context(), noteTags, dueDate)
 		if err != nil {
 			return 0, 0, err
@@ -336,8 +385,17 @@ func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, active
 	return todoCount, dueCount, nil
 }
 
-func (s *Server) loadFilteredTags(r *http.Request, noteTags []string, activeTodo bool, activeDue bool) ([]index.TagSummary, error) {
+func (s *Server) loadFilteredTags(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string) ([]index.TagSummary, error) {
 	dueDate := time.Now().Format("2006-01-02")
+	if activeDate != "" {
+		if activeDue {
+			return s.idx.ListTagsWithDueTasksByDate(r.Context(), noteTags, activeDate, dueDate, 100)
+		}
+		if activeTodo {
+			return s.idx.ListTagsWithOpenTasksByDate(r.Context(), noteTags, activeDate, 100)
+		}
+		return s.idx.ListTagsFilteredByDate(r.Context(), noteTags, activeDate, 100)
+	}
 	if activeDue {
 		return s.idx.ListTagsWithDueTasks(r.Context(), noteTags, dueDate, 100)
 	}
@@ -347,7 +405,7 @@ func (s *Server) loadFilteredTags(r *http.Request, noteTags []string, activeTodo
 	return s.idx.ListTagsFiltered(r.Context(), noteTags, 100)
 }
 
-func buildTodoTagLink(activeList []string, activeSet map[string]struct{}, allowed map[string]struct{}, basePath string, count int) TagLink {
+func buildTodoTagLink(activeList []string, activeSet map[string]struct{}, allowed map[string]struct{}, basePath string, count int, activeDate string) TagLink {
 	const name = "TODO"
 	_, isActive := activeSet[name]
 	disabled := false
@@ -369,7 +427,7 @@ func buildTodoTagLink(activeList []string, activeSet map[string]struct{}, allowe
 	}
 	url := ""
 	if !disabled {
-		url = buildTagsURL(basePath, next)
+		url = buildTagsURL(basePath, next, activeDate)
 	}
 	return TagLink{
 		Name:     name,
@@ -848,6 +906,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeDate := parseDateParam(r.URL.Query().Get("d"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
@@ -855,13 +914,13 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue)
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(activeTags) > 0 {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue)
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -876,14 +935,15 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount)
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	calendar := buildCalendarMonth(time.Now(), updateDays)
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, noteTags, activeTodo, activeDue)
+	tagQuery := buildTagsQuery(activeTags)
+	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate)
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, noteTags, activeTodo, activeDue, activeDate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -897,7 +957,9 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		Tags:            tags,
 		TagLinks:        tagLinks,
 		ActiveTags:      activeTags,
-		TagQuery:        buildTagsQuery(activeTags),
+		TagQuery:        tagQuery,
+		ActiveDate:      activeDate,
+		DateQuery:       buildDateQuery(activeDate),
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
 	}
@@ -933,8 +995,9 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeDate := parseDateParam(r.URL.Query().Get("d"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, noteTags, activeTodo, activeDue)
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, noteTags, activeTodo, activeDue, activeDate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -945,6 +1008,8 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		NextHomeOffset: nextOffset,
 		ActiveTags:     activeTags,
 		TagQuery:       buildTagsQuery(activeTags),
+		ActiveDate:     activeDate,
+		DateQuery:      buildDateQuery(activeDate),
 	}
 	s.views.RenderTemplate(w, "home_notes", data)
 }
@@ -955,12 +1020,19 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeDate := parseDateParam(r.URL.Query().Get("d"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	dueDate := ""
 	if activeDue {
 		dueDate = time.Now().Format("2006-01-02")
 	}
-	tasks, err := s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate)
+	var tasks []index.TaskItem
+	var err error
+	if activeDate != "" {
+		tasks, err = s.idx.OpenTasksByDate(r.Context(), noteTags, 300, activeDue, dueDate, activeDate)
+	} else {
+		tasks, err = s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -971,13 +1043,13 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue)
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(activeTags) > 0 {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue)
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -992,13 +1064,14 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/tasks", todoCount, dueCount)
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/tasks", todoCount, dueCount, activeDate)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	calendar := buildCalendarMonth(time.Now(), updateDays)
+	tagQuery := buildTagsQuery(activeTags)
+	calendar := buildCalendarMonth(time.Now(), updateDays, "/tasks", tagQuery, activeDate)
 	data := ViewData{
 		Title:           "Tasks",
 		ContentTemplate: "tasks",
@@ -1006,7 +1079,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		Tags:            tags,
 		TagLinks:        tagLinks,
 		ActiveTags:      activeTags,
-		TagQuery:        buildTagsQuery(activeTags),
+		TagQuery:        tagQuery,
+		ActiveDate:      activeDate,
+		DateQuery:       buildDateQuery(activeDate),
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
 	}
@@ -1096,10 +1171,22 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(taskCheckboxHTML(fileID, lineNo, newHash, strings.TrimSpace(newMark) != "")))
 }
 
-func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, onlyTodo bool, onlyDue bool) ([]NoteCard, int, bool, error) {
+func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, onlyTodo bool, onlyDue bool, activeDate string) ([]NoteCard, int, bool, error) {
 	var notes []index.NoteSummary
 	var err error
 	switch {
+	case activeDate != "" && onlyDue && len(tags) > 0:
+		notes, err = s.idx.NotesWithDueTasksByDate(ctx, tags, activeDate, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset)
+	case activeDate != "" && onlyDue:
+		notes, err = s.idx.NotesWithDueTasksByDate(ctx, nil, activeDate, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset)
+	case activeDate != "" && onlyTodo && len(tags) > 0:
+		notes, err = s.idx.NotesWithOpenTasksByDate(ctx, tags, activeDate, homeNotesPageSize+1, offset)
+	case activeDate != "" && onlyTodo:
+		notes, err = s.idx.NotesWithOpenTasksByDate(ctx, nil, activeDate, homeNotesPageSize+1, offset)
+	case activeDate != "" && len(tags) > 0:
+		notes, err = s.idx.NotesByTagsByDate(ctx, tags, activeDate, homeNotesPageSize+1, offset)
+	case activeDate != "":
+		notes, err = s.idx.NotesByDate(ctx, activeDate, homeNotesPageSize+1, offset)
 	case onlyDue && len(tags) > 0:
 		notes, err = s.idx.NotesWithDueTasks(ctx, tags, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset)
 	case onlyDue:
@@ -1380,6 +1467,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeDate := parseDateParam(r.URL.Query().Get("d"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
@@ -1387,13 +1475,13 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue)
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(activeTags) > 0 {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue)
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1408,13 +1496,14 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount)
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	calendar := buildCalendarMonth(time.Now(), updateDays)
+	tagQuery := buildTagsQuery(activeTags)
+	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate)
 
 	data := ViewData{
 		Title:           meta.Title,
@@ -1425,7 +1514,9 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		Tags:            tags,
 		TagLinks:        tagLinks,
 		ActiveTags:      activeTags,
-		TagQuery:        buildTagsQuery(activeTags),
+		TagQuery:        tagQuery,
+		ActiveDate:      activeDate,
+		DateQuery:       buildDateQuery(activeDate),
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
 	}

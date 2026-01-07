@@ -21,7 +21,7 @@
 {{end}} {{if .HomeHasMore}}
 <div
   class="h-10"
-  hx-get="/notes/page?offset={{.NextHomeOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}"
+  hx-get="/notes/page?offset={{.NextHomeOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .DateQuery}}&d={{.DateQuery}}{{end}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"

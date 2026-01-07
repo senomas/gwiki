@@ -165,6 +165,12 @@ func removeFrontmatterLine(lines *[]string, idx map[string]int, key string) {
 
 const dummyHistoryUser = "dummy"
 
+type HistoryEntry struct {
+	User   string
+	At     time.Time
+	Action string
+}
+
 func DeriveTitleFromBody(body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
@@ -173,6 +179,71 @@ func DeriveTitleFromBody(body string) string {
 		}
 	}
 	return ""
+}
+
+func ParseHistoryEntries(content string) []HistoryEntry {
+	lines, _, ok := splitFrontmatterLines(content)
+	if !ok {
+		return nil
+	}
+	historyIdx := -1
+	for i, line := range lines {
+		key, _ := parseFrontmatterLine(line)
+		if strings.EqualFold(key, "history") {
+			historyIdx = i
+			break
+		}
+	}
+	if historyIdx == -1 {
+		return nil
+	}
+	start := historyIdx + 1
+	end := start
+	for end < len(lines) && isIndentedLine(lines[end]) {
+		end++
+	}
+	if end <= start {
+		return nil
+	}
+	var entries []HistoryEntry
+	var current HistoryEntry
+	hasCurrent := false
+	for i := start; i < end; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "-") {
+			if hasCurrent {
+				entries = append(entries, current)
+			}
+			current = HistoryEntry{}
+			hasCurrent = true
+			line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+			if line == "" {
+				continue
+			}
+		}
+		key, val := parseFrontmatterLine(line)
+		if key == "" {
+			continue
+		}
+		val = strings.TrimSpace(strings.Trim(val, "\""))
+		switch strings.ToLower(key) {
+		case "user":
+			current.User = val
+		case "action":
+			current.Action = val
+		case "at":
+			if at, err := time.Parse(time.RFC3339, val); err == nil {
+				current.At = at
+			}
+		}
+	}
+	if hasCurrent {
+		entries = append(entries, current)
+	}
+	return entries
 }
 
 func LatestHistoryTime(content string) (time.Time, bool) {

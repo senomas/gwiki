@@ -60,6 +60,14 @@ type fileRecord struct {
 
 const secondsPerDay = 86400
 
+func dateToDay(date string) (int64, error) {
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return 0, err
+	}
+	return parsed.UTC().Unix() / secondsPerDay, nil
+}
+
 func Open(path string) (*Index, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -308,10 +316,29 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM file_histories WHERE file_id=?", existingID); err != nil {
 		return err
 	}
-	actionTime := mtime.Unix()
-	actionDate := actionTime / secondsPerDay
-	if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(file_id, action, action_time, action_date) VALUES(?, ?, ?, ?)", existingID, "save", actionTime, actionDate); err != nil {
-		return err
+	historyEntries := ParseHistoryEntries(string(content))
+	validHistory := 0
+	for _, entry := range historyEntries {
+		if entry.At.IsZero() || entry.Action == "" {
+			continue
+		}
+		user := entry.User
+		if user == "" {
+			user = dummyHistoryUser
+		}
+		actionTime := entry.At.UTC().Unix()
+		actionDate := actionTime / secondsPerDay
+		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?)", existingID, user, entry.Action, actionTime, actionDate); err != nil {
+			return err
+		}
+		validHistory++
+	}
+	if validHistory == 0 {
+		actionTime := mtime.Unix()
+		actionDate := actionTime / secondsPerDay
+		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?)", existingID, dummyHistoryUser, "save", actionTime, actionDate); err != nil {
+			return err
+		}
 	}
 
 	for _, tag := range meta.Tags {
@@ -525,6 +552,121 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 	return out, rows.Err()
 }
 
+func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, activityDate string) ([]TaskItem, error) {
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if dueOnly && dueDate == "" {
+		return nil, fmt.Errorf("due date required for due-only tasks")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	var (
+		query string
+		args  []interface{}
+		rows  *sql.Rows
+	)
+	if len(tags) == 0 {
+		if dueOnly {
+			query = `
+				WITH matching_files AS (
+					SELECT DISTINCT file_id
+					FROM file_histories
+					WHERE action_date = ?
+				)
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				FROM tasks
+				JOIN files ON files.id = tasks.file_id
+				JOIN matching_files ON matching_files.file_id = files.id
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+				ORDER BY tasks.due_date ASC, tasks.updated_at DESC
+				LIMIT ?`
+			args = []interface{}{day, dueDate, limit}
+		} else {
+			query = `
+				WITH matching_files AS (
+					SELECT DISTINCT file_id
+					FROM file_histories
+					WHERE action_date = ?
+				)
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				FROM tasks
+				JOIN files ON files.id = tasks.file_id
+				JOIN matching_files ON matching_files.file_id = files.id
+				WHERE tasks.checked = 0
+				ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
+				LIMIT ?`
+			args = []interface{}{day, limit}
+		}
+		rows, err = i.db.QueryContext(ctx, query, args...)
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		base := `
+			WITH matching_files AS (
+				SELECT files.id
+				FROM files
+				JOIN file_histories ON files.id = file_histories.file_id
+				JOIN file_tags ON files.id = file_tags.file_id
+				JOIN tags ON tags.id = file_tags.tag_id
+				WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+				GROUP BY files.id
+				HAVING COUNT(DISTINCT tags.name) = ?
+			)
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+			FROM tasks
+			JOIN files ON files.id = tasks.file_id
+			JOIN matching_files ON matching_files.id = files.id
+			WHERE tasks.checked = 0`
+		if dueOnly {
+			query = base + ` AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+				ORDER BY tasks.due_date ASC, tasks.updated_at DESC
+				LIMIT ?`
+		} else {
+			query = base + `
+				ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
+				LIMIT ?`
+		}
+		args = make([]interface{}, 0, len(tags)+4)
+		args = append(args, day)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags))
+		if dueOnly {
+			args = append(args, dueDate, limit)
+		} else {
+			args = append(args, limit)
+		}
+		rows, err = i.db.QueryContext(ctx, query, args...)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TaskItem
+	for rows.Next() {
+		var item TaskItem
+		var due sql.NullString
+		var updatedUnix int64
+		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &due, &updatedUnix); err != nil {
+			return nil, err
+		}
+		if due.Valid {
+			item.DueDate = due.String
+		}
+		item.UpdatedAt = time.Unix(updatedUnix, 0).Local()
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int, offset int) ([]NoteSummary, error) {
 	if limit <= 0 {
 		limit = 20
@@ -653,6 +795,252 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 	return notes, rows.Err()
 }
 
+func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string, limit int, offset int) ([]NoteSummary, error) {
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			WHERE tasks.checked = 0 AND file_histories.action_date = ?
+			GROUP BY files.id
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = []interface{}{day, limit, offset}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = make([]interface{}, 0, len(tags)+4)
+		args = append(args, day)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags), limit, offset)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, activityDate string, dueDate string, limit int, offset int) ([]NoteSummary, error) {
+	if dueDate == "" {
+		return nil, fmt.Errorf("due date required for due tasks")
+	}
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?
+			GROUP BY files.id
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = []interface{}{dueDate, day, limit, offset}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = make([]interface{}, 0, len(tags)+5)
+		args = append(args, dueDate, day)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags), limit, offset)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+func (i *Index) NotesByDate(ctx context.Context, activityDate string, limit int, offset int) ([]NoteSummary, error) {
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := i.db.QueryContext(ctx, `
+		SELECT files.path, files.title, files.mtime_unix
+		FROM files
+		JOIN file_histories ON files.id = file_histories.file_id
+		WHERE file_histories.action_date = ?
+		GROUP BY files.id
+		ORDER BY files.priority ASC, files.updated_at DESC
+		LIMIT ? OFFSET ?
+	`, day, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+func (i *Index) NotesByTagsByDate(ctx context.Context, tags []string, activityDate string, limit int, offset int) ([]NoteSummary, error) {
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	placeholders := strings.Repeat("?,", len(tags))
+	placeholders = strings.TrimRight(placeholders, ",")
+	query := `
+		SELECT files.path, files.title, files.mtime_unix
+		FROM files
+		JOIN file_histories ON files.id = file_histories.file_id
+		JOIN file_tags ON files.id = file_tags.file_id
+		JOIN tags ON tags.id = file_tags.tag_id
+		WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+		GROUP BY files.id
+		HAVING COUNT(DISTINCT tags.name) = ?
+		ORDER BY files.priority ASC, files.updated_at DESC
+		LIMIT ? OFFSET ?`
+
+	args := make([]interface{}, 0, len(tags)+4)
+	args = append(args, day)
+	for _, tag := range tags {
+		args = append(args, tag)
+	}
+	args = append(args, len(tags), limit, offset)
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
 func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
@@ -752,6 +1140,94 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	return tags, rows.Err()
 }
 
+func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, activityDate string, limit int) ([]TagSummary, error) {
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if len(active) == 0 {
+		if limit <= 0 {
+			limit = 100
+		}
+		rows, err := i.db.QueryContext(ctx, `
+			WITH matching_files AS (
+				SELECT DISTINCT file_id
+				FROM file_histories
+				WHERE action_date = ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.file_id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?
+		`, day, limit)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var tags []TagSummary
+		for rows.Next() {
+			var t TagSummary
+			if err := rows.Scan(&t.Name, &t.Count); err != nil {
+				return nil, err
+			}
+			tags = append(tags, t)
+		}
+		return tags, rows.Err()
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	placeholders := strings.Repeat("?,", len(active))
+	placeholders = strings.TrimRight(placeholders, ",")
+	query := `
+		WITH matching_files AS (
+			SELECT files.id
+			FROM files
+			JOIN file_histories ON files.id = file_histories.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+		)
+		SELECT tags.name, COUNT(file_tags.file_id)
+		FROM tags
+		JOIN file_tags ON tags.id = file_tags.tag_id
+		JOIN matching_files ON matching_files.id = file_tags.file_id
+		GROUP BY tags.id
+		ORDER BY tags.name
+		LIMIT ?`
+
+	args := make([]interface{}, 0, len(active)+3)
+	args = append(args, day)
+	for _, tag := range active {
+		args = append(args, tag)
+	}
+	args = append(args, len(active), limit)
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tags []TagSummary
+	for rows.Next() {
+		var t TagSummary
+		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
 func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limit int) ([]TagSummary, error) {
 	if limit <= 0 {
 		limit = 100
@@ -798,6 +1274,85 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 			ORDER BY tags.name
 			LIMIT ?`
 		args = make([]interface{}, 0, len(active)+2)
+		for _, tag := range active {
+			args = append(args, tag)
+		}
+		args = append(args, len(active), limit)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tags []TagSummary
+	for rows.Next() {
+		var t TagSummary
+		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
+func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string, activityDate string, limit int) ([]TagSummary, error) {
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(active) == 0 {
+		query = `
+			WITH matching_files AS (
+				SELECT DISTINCT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				JOIN file_histories ON files.id = file_histories.file_id
+				WHERE tasks.checked = 0 AND file_histories.action_date = ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = []interface{}{day, limit}
+	} else {
+		placeholders := strings.Repeat("?,", len(active))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			WITH matching_files AS (
+				SELECT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				JOIN file_histories ON files.id = file_histories.file_id
+				JOIN file_tags ON files.id = file_tags.file_id
+				JOIN tags ON tags.id = file_tags.tag_id
+				WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+				GROUP BY files.id
+				HAVING COUNT(DISTINCT tags.name) = ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = make([]interface{}, 0, len(active)+3)
+		args = append(args, day)
 		for _, tag := range active {
 			args = append(args, tag)
 		}
@@ -894,12 +1449,94 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 	return tags, rows.Err()
 }
 
+func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string, activityDate string, dueDate string, limit int) ([]TagSummary, error) {
+	if dueDate == "" {
+		return nil, fmt.Errorf("due date required for due tasks")
+	}
+	if activityDate == "" {
+		return nil, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(active) == 0 {
+		query = `
+			WITH matching_files AS (
+				SELECT DISTINCT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				JOIN file_histories ON files.id = file_histories.file_id
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = []interface{}{dueDate, day, limit}
+	} else {
+		placeholders := strings.Repeat("?,", len(active))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			WITH matching_files AS (
+				SELECT files.id
+				FROM files
+				JOIN tasks ON files.id = tasks.file_id
+				JOIN file_histories ON files.id = file_histories.file_id
+				JOIN file_tags ON files.id = file_tags.file_id
+				JOIN tags ON tags.id = file_tags.tag_id
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+				GROUP BY files.id
+				HAVING COUNT(DISTINCT tags.name) = ?
+			)
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN matching_files ON matching_files.id = file_tags.file_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?`
+		args = make([]interface{}, 0, len(active)+4)
+		args = append(args, dueDate, day)
+		for _, tag := range active {
+			args = append(args, tag)
+		}
+		args = append(args, len(active), limit)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tags []TagSummary
+	for rows.Next() {
+		var t TagSummary
+		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
 func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySummary, error) {
 	if limit <= 0 {
 		limit = 30
 	}
 	rows, err := i.db.QueryContext(ctx, `
-		SELECT action_date, COUNT(*)
+		SELECT action_date, COUNT(DISTINCT file_id)
 		FROM file_histories
 		GROUP BY action_date
 		ORDER BY action_date DESC
@@ -1009,6 +1646,55 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int
 	return count, nil
 }
 
+func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string) (int, error) {
+	if activityDate == "" {
+		return 0, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return 0, err
+	}
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT COUNT(DISTINCT files.id)
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			WHERE tasks.checked = 0 AND file_histories.action_date = ?`
+		args = []interface{}{day}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.id
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?`
+		args = make([]interface{}, 0, len(tags)+2)
+		args = append(args, day)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags))
+		query = `SELECT COUNT(*) FROM (` + query + `)`
+	}
+
+	var count int
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDate string) (int, error) {
 	if dueDate == "" {
 		return 0, fmt.Errorf("due date required for due tasks")
@@ -1038,6 +1724,58 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 			HAVING COUNT(DISTINCT tags.name) = ?`
 		args = make([]interface{}, 0, len(tags)+2)
 		args = append(args, dueDate)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags))
+		query = `SELECT COUNT(*) FROM (` + query + `)`
+	}
+
+	var count int
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string, activityDate string, dueDate string) (int, error) {
+	if dueDate == "" {
+		return 0, fmt.Errorf("due date required for due tasks")
+	}
+	if activityDate == "" {
+		return 0, fmt.Errorf("activity date required")
+	}
+	day, err := dateToDay(activityDate)
+	if err != nil {
+		return 0, err
+	}
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT COUNT(DISTINCT files.id)
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?`
+		args = []interface{}{dueDate, day}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.id
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_histories ON files.id = file_histories.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?`
+		args = make([]interface{}, 0, len(tags)+3)
+		args = append(args, dueDate, day)
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
