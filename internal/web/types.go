@@ -36,6 +36,14 @@ type ViewData struct {
 	TagQuery         string
 	ActiveDate       string
 	DateQuery        string
+	Backlinks        []BacklinkView
+}
+
+type BacklinkView struct {
+	FromPath  string
+	FromTitle string
+	LineNo    int
+	LineHTML  template.HTML
 }
 
 type TagLink struct {

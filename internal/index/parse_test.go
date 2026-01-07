@@ -1,6 +1,9 @@
 package index
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseContent(t *testing.T) {
 	input := `---
@@ -37,6 +40,14 @@ Some text with #inline tag, #travel/food and a link [[Wiki Note]].
 	}
 	if len(meta.Links) != 2 {
 		t.Fatalf("expected 2 links, got %d", len(meta.Links))
+	}
+	for _, link := range meta.Links {
+		if link.LineNo <= 0 {
+			t.Fatalf("expected link line_no to be set, got %d", link.LineNo)
+		}
+		if strings.TrimSpace(link.Line) == "" {
+			t.Fatalf("expected link line to be set")
+		}
 	}
 	if len(meta.Tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(meta.Tasks))

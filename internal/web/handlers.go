@@ -31,9 +31,12 @@ import (
 	"gwiki/internal/storage/fs"
 )
 
-var linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
-var taskCheckboxRe = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
-var taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
+var (
+	linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
+	wikiLinkRe       = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+	taskCheckboxRe   = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
+	taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
+)
 
 var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(extension.NewLinkify(
@@ -1184,9 +1187,18 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 	case activeDate != "" && onlyTodo:
 		notes, err = s.idx.NotesWithOpenTasksByDate(ctx, nil, activeDate, homeNotesPageSize+1, offset)
 	case activeDate != "" && len(tags) > 0:
-		notes, err = s.idx.NotesByTagsByDate(ctx, tags, activeDate, homeNotesPageSize+1, offset)
+		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
+			Tags:   tags,
+			Date:   activeDate,
+			Limit:  homeNotesPageSize + 1,
+			Offset: offset,
+		})
 	case activeDate != "":
-		notes, err = s.idx.NotesByDate(ctx, activeDate, homeNotesPageSize+1, offset)
+		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
+			Date:   activeDate,
+			Limit:  homeNotesPageSize + 1,
+			Offset: offset,
+		})
 	case onlyDue && len(tags) > 0:
 		notes, err = s.idx.NotesWithDueTasks(ctx, tags, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset)
 	case onlyDue:
@@ -1196,9 +1208,16 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 	case onlyTodo:
 		notes, err = s.idx.NotesWithOpenTasks(ctx, nil, homeNotesPageSize+1, offset)
 	case len(tags) > 0:
-		notes, err = s.idx.NotesByTags(ctx, tags, homeNotesPageSize+1, offset)
+		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
+			Tags:   tags,
+			Limit:  homeNotesPageSize + 1,
+			Offset: offset,
+		})
 	default:
-		notes, err = s.idx.RecentNotesPage(ctx, homeNotesPageSize+1, offset)
+		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
+			Limit:  homeNotesPageSize + 1,
+			Offset: offset,
+		})
 	}
 	if err != nil {
 		return nil, offset, false, err
@@ -1504,6 +1523,25 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	tagQuery := buildTagsQuery(activeTags)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate)
+	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	backlinkViews := make([]BacklinkView, 0, len(backlinks))
+	for _, link := range backlinks {
+		lineHTML, err := renderLineMarkdown(link.Line)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		backlinkViews = append(backlinkViews, BacklinkView{
+			FromPath:  link.FromPath,
+			FromTitle: link.FromTitle,
+			LineNo:    link.LineNo,
+			LineHTML:  lineHTML,
+		})
+	}
 
 	data := ViewData{
 		Title:           meta.Title,
@@ -1519,6 +1557,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		DateQuery:       buildDateQuery(activeDate),
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
+		Backlinks:       backlinkViews,
 	}
 	s.views.RenderPage(w, data)
 }
@@ -1820,11 +1859,42 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string)
 
 func renderMarkdown(data []byte) (string, error) {
 	body := index.StripFrontmatter(string(data))
+	body = expandWikiLinks(body)
 	var b strings.Builder
 	if err := mdRenderer.Convert([]byte(body), &b); err != nil {
 		return "", err
 	}
 	return b.String(), nil
+}
+
+func renderLineMarkdown(line string) (template.HTML, error) {
+	if strings.TrimSpace(line) == "" {
+		return template.HTML(""), nil
+	}
+	htmlStr, err := renderMarkdown([]byte(line))
+	if err != nil {
+		return "", err
+	}
+	htmlStr = strings.TrimSpace(htmlStr)
+	if strings.HasPrefix(htmlStr, "<p>") && strings.HasSuffix(htmlStr, "</p>") {
+		htmlStr = strings.TrimSuffix(strings.TrimPrefix(htmlStr, "<p>"), "</p>")
+		htmlStr = strings.TrimSpace(htmlStr)
+	}
+	return template.HTML(htmlStr), nil
+}
+
+func expandWikiLinks(input string) string {
+	if !strings.Contains(input, "[[") {
+		return input
+	}
+	return wikiLinkRe.ReplaceAllStringFunc(input, func(match string) string {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(match, "[["), "]]"))
+		if trimmed == "" {
+			return match
+		}
+		target := slugify(trimmed)
+		return fmt.Sprintf("[%s](/notes/%s)", trimmed, fs.EnsureMDExt(target))
+	})
 }
 
 func slugify(input string) string {

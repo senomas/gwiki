@@ -9,8 +9,10 @@ import (
 )
 
 type Link struct {
-	Ref  string
-	Kind string
+	Ref    string
+	Kind   string
+	LineNo int
+	Line   string
 }
 
 type Task struct {
@@ -57,15 +59,24 @@ func ParseContent(input string) Metadata {
 		meta.Tags = append(meta.Tags, t)
 	}
 
-	for _, m := range wikiLinkRe.FindAllStringSubmatch(body, -1) {
-		meta.Links = append(meta.Links, Link{Ref: strings.TrimSpace(m[1]), Kind: "wikilink"})
-	}
-	for _, m := range mdLinkRe.FindAllStringSubmatch(body, -1) {
-		meta.Links = append(meta.Links, Link{Ref: strings.TrimSpace(m[1]), Kind: "mdlink"})
-	}
-
 	lines := strings.Split(body, "\n")
 	for i, line := range lines {
+		for _, m := range wikiLinkRe.FindAllStringSubmatch(line, -1) {
+			meta.Links = append(meta.Links, Link{
+				Ref:    strings.TrimSpace(m[1]),
+				Kind:   "wikilink",
+				LineNo: i + 1,
+				Line:   line,
+			})
+		}
+		for _, m := range mdLinkRe.FindAllStringSubmatch(line, -1) {
+			meta.Links = append(meta.Links, Link{
+				Ref:    strings.TrimSpace(m[1]),
+				Kind:   "mdlink",
+				LineNo: i + 1,
+				Line:   line,
+			})
+		}
 		match := taskRe.FindStringSubmatch(line)
 		if len(match) == 0 {
 			continue

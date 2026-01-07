@@ -26,6 +26,14 @@ type NoteSummary struct {
 	MTime time.Time
 }
 
+type NoteListFilter struct {
+	Tags   []string
+	Date   string
+	Query  string
+	Limit  int
+	Offset int
+}
+
 type SearchResult struct {
 	Path    string
 	Title   string
@@ -51,6 +59,14 @@ type TaskItem struct {
 	UpdatedAt time.Time
 }
 
+type Backlink struct {
+	FromPath  string
+	FromTitle string
+	LineNo    int
+	Line      string
+	Kind      string
+}
+
 type fileRecord struct {
 	ID        int
 	Hash      string
@@ -66,6 +82,28 @@ func dateToDay(date string) (int64, error) {
 		return 0, err
 	}
 	return parsed.UTC().Unix() / secondsPerDay, nil
+}
+
+func slugify(input string) string {
+	input = strings.ToLower(input)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range input {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		slug = "note"
+	}
+	return slug
 }
 
 func Open(path string) (*Index, error) {
@@ -362,7 +400,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if link.Ref == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO links(from_file_id, to_ref, to_file_id, kind) VALUES(?, ?, NULL, ?)", existingID, link.Ref, link.Kind); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO links(from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, NULL, ?, ?, ?)", existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
 			return err
 		}
 	}
@@ -449,6 +487,84 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 		offset = 0
 	}
 	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY priority ASC, updated_at DESC LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSummary, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	query := strings.TrimSpace(filter.Query)
+	joins := make([]string, 0, 3)
+	clauses := make([]string, 0, 3)
+	args := make([]interface{}, 0, 8)
+	groupBy := false
+
+	if query != "" {
+		joins = append(joins, "JOIN fts ON fts.path = files.path")
+		clauses = append(clauses, "fts MATCH ?")
+		args = append(args, query)
+	}
+	if filter.Date != "" {
+		day, err := dateToDay(filter.Date)
+		if err != nil {
+			return nil, err
+		}
+		joins = append(joins, "JOIN file_histories ON files.id = file_histories.file_id")
+		clauses = append(clauses, "file_histories.action_date = ?")
+		args = append(args, day)
+		groupBy = true
+	}
+	if len(filter.Tags) > 0 {
+		placeholders := strings.Repeat("?,", len(filter.Tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		joins = append(joins, "JOIN file_tags ON files.id = file_tags.file_id")
+		joins = append(joins, "JOIN tags ON tags.id = file_tags.tag_id")
+		clauses = append(clauses, "tags.name IN ("+placeholders+")")
+		for _, tag := range filter.Tags {
+			args = append(args, tag)
+		}
+		groupBy = true
+	}
+
+	sqlStr := "SELECT files.path, files.title, files.mtime_unix FROM files"
+	if len(joins) > 0 {
+		sqlStr += " " + strings.Join(joins, " ")
+	}
+	if len(clauses) > 0 {
+		sqlStr += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	if groupBy {
+		sqlStr += " GROUP BY files.id"
+	}
+	if len(filter.Tags) > 0 {
+		sqlStr += " HAVING COUNT(DISTINCT tags.name) = ?"
+		args = append(args, len(filter.Tags))
+	}
+	sqlStr += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := i.db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -922,105 +1038,6 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 		}
 		args = append(args, len(tags), limit, offset)
 	}
-
-	rows, err := i.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var notes []NoteSummary
-	for rows.Next() {
-		var n NoteSummary
-		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
-			return nil, err
-		}
-		n.MTime = time.Unix(mtimeUnix, 0).UTC()
-		notes = append(notes, n)
-	}
-	return notes, rows.Err()
-}
-
-func (i *Index) NotesByDate(ctx context.Context, activityDate string, limit int, offset int) ([]NoteSummary, error) {
-	if activityDate == "" {
-		return nil, fmt.Errorf("activity date required")
-	}
-	day, err := dateToDay(activityDate)
-	if err != nil {
-		return nil, err
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT files.path, files.title, files.mtime_unix
-		FROM files
-		JOIN file_histories ON files.id = file_histories.file_id
-		WHERE file_histories.action_date = ?
-		GROUP BY files.id
-		ORDER BY files.priority ASC, files.updated_at DESC
-		LIMIT ? OFFSET ?
-	`, day, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var notes []NoteSummary
-	for rows.Next() {
-		var n NoteSummary
-		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
-			return nil, err
-		}
-		n.MTime = time.Unix(mtimeUnix, 0).UTC()
-		notes = append(notes, n)
-	}
-	return notes, rows.Err()
-}
-
-func (i *Index) NotesByTagsByDate(ctx context.Context, tags []string, activityDate string, limit int, offset int) ([]NoteSummary, error) {
-	if activityDate == "" {
-		return nil, fmt.Errorf("activity date required")
-	}
-	if len(tags) == 0 {
-		return nil, nil
-	}
-	day, err := dateToDay(activityDate)
-	if err != nil {
-		return nil, err
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	placeholders := strings.Repeat("?,", len(tags))
-	placeholders = strings.TrimRight(placeholders, ",")
-	query := `
-		SELECT files.path, files.title, files.mtime_unix
-		FROM files
-		JOIN file_histories ON files.id = file_histories.file_id
-		JOIN file_tags ON files.id = file_tags.file_id
-		JOIN tags ON tags.id = file_tags.tag_id
-		WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
-		GROUP BY files.id
-		HAVING COUNT(DISTINCT tags.name) = ?
-		ORDER BY files.priority ASC, files.updated_at DESC
-		LIMIT ? OFFSET ?`
-
-	args := make([]interface{}, 0, len(tags)+4)
-	args = append(args, day)
-	for _, tag := range tags {
-		args = append(args, tag)
-	}
-	args = append(args, len(tags), limit, offset)
 
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1560,54 +1577,6 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySumma
 	return days, rows.Err()
 }
 
-func (i *Index) NotesByTags(ctx context.Context, tags []string, limit int, offset int) ([]NoteSummary, error) {
-	if len(tags) == 0 {
-		return nil, nil
-	}
-	if limit <= 0 {
-		limit = 20
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	placeholders := strings.Repeat("?,", len(tags))
-	placeholders = strings.TrimRight(placeholders, ",")
-	query := `
-		SELECT files.path, files.title, files.mtime_unix
-		FROM files
-		JOIN file_tags ON files.id = file_tags.file_id
-		JOIN tags ON tags.id = file_tags.tag_id
-		WHERE tags.name IN (` + placeholders + `)
-		GROUP BY files.id
-		HAVING COUNT(DISTINCT tags.name) = ?
-		ORDER BY files.priority ASC, files.updated_at DESC
-		LIMIT ? OFFSET ?`
-
-	args := make([]interface{}, 0, len(tags)+3)
-	for _, tag := range tags {
-		args = append(args, tag)
-	}
-	args = append(args, len(tags), limit, offset)
-
-	rows, err := i.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var notes []NoteSummary
-	for rows.Next() {
-		var n NoteSummary
-		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
-			return nil, err
-		}
-		n.MTime = time.Unix(mtimeUnix, 0).UTC()
-		notes = append(notes, n)
-	}
-	return notes, rows.Err()
-}
-
 func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int, error) {
 	var (
 		query string
@@ -1788,6 +1757,85 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 		return 0, err
 	}
 	return count, nil
+}
+
+func (i *Index) Backlinks(ctx context.Context, notePath string, title string) ([]Backlink, error) {
+	candidates := backlinkCandidates(notePath, title)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(candidates))
+	placeholders = strings.TrimRight(placeholders, ",")
+	query := `
+		SELECT files.path, files.title, links.line_no, links.line, links.kind
+		FROM links
+		JOIN files ON files.id = links.from_file_id
+		WHERE lower(links.to_ref) IN (` + placeholders + `) AND files.path != ?
+		ORDER BY files.updated_at DESC, files.title`
+
+	args := make([]interface{}, 0, len(candidates)+1)
+	for _, candidate := range candidates {
+		args = append(args, strings.ToLower(candidate))
+	}
+	args = append(args, notePath)
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var backlinks []Backlink
+	for rows.Next() {
+		var link Backlink
+		if err := rows.Scan(&link.FromPath, &link.FromTitle, &link.LineNo, &link.Line, &link.Kind); err != nil {
+			return nil, err
+		}
+		backlinks = append(backlinks, link)
+	}
+	return backlinks, rows.Err()
+}
+
+func backlinkCandidates(notePath string, title string) []string {
+	notePath = strings.TrimSpace(notePath)
+	title = strings.TrimSpace(title)
+	if notePath == "" && title == "" {
+		return nil
+	}
+	noExt := strings.TrimSuffix(notePath, ".md")
+	titleSlug := slugify(title)
+	var candidates []string
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		candidates = append(candidates, value)
+	}
+	add(notePath)
+	add(noExt)
+	add("notes/" + notePath)
+	add("notes/" + noExt)
+	add("/notes/" + notePath)
+	add("/notes/" + noExt)
+	add(title)
+	add(titleSlug)
+	add(titleSlug + ".md")
+	add("notes/" + titleSlug + ".md")
+	add("/notes/" + titleSlug + ".md")
+	add("notes/" + titleSlug)
+	add("/notes/" + titleSlug)
+	seen := map[string]struct{}{}
+	unique := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		key := strings.ToLower(candidate)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, candidate)
+	}
+	return unique
 }
 
 func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, error) {
