@@ -102,7 +102,7 @@ func parseTagsParam(raw string) []string {
 	return out
 }
 
-func buildTagLinks(active []string, tags []index.TagSummary, basePath string) []TagLink {
+func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]struct{}, basePath string) []TagLink {
 	activeSet := map[string]struct{}{}
 	for _, tag := range active {
 		activeSet[tag] = struct{}{}
@@ -110,6 +110,12 @@ func buildTagLinks(active []string, tags []index.TagSummary, basePath string) []
 	links := make([]TagLink, 0, len(tags))
 	for _, tag := range tags {
 		_, isActive := activeSet[tag.Name]
+		disabled := false
+		if len(active) > 0 && !isActive && allowed != nil {
+			if _, ok := allowed[tag.Name]; !ok {
+				disabled = true
+			}
+		}
 		var next []string
 		if isActive {
 			next = make([]string, 0, len(active))
@@ -121,11 +127,16 @@ func buildTagLinks(active []string, tags []index.TagSummary, basePath string) []
 		} else {
 			next = append(append([]string{}, active...), tag.Name)
 		}
+		url := ""
+		if !disabled {
+			url = buildTagsURL(basePath, next)
+		}
 		links = append(links, TagLink{
-			Name:   tag.Name,
-			Count:  tag.Count,
-			URL:    buildTagsURL(basePath, next),
-			Active: isActive,
+			Name:     tag.Name,
+			Count:    tag.Count,
+			URL:      url,
+			Active:   isActive,
+			Disabled: disabled,
 		})
 	}
 	return links
@@ -629,7 +640,18 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagLinks := buildTagLinks(activeTags, tags, "/")
+	allowed := map[string]struct{}{}
+	if len(activeTags) > 0 {
+		filteredTags, err := s.idx.ListTagsFiltered(r.Context(), activeTags, 100)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+	}
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/")
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -717,7 +739,18 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagLinks := buildTagLinks(activeTags, tags, "/tasks")
+	allowed := map[string]struct{}{}
+	if len(activeTags) > 0 {
+		filteredTags, err := s.idx.ListTagsFiltered(r.Context(), activeTags, 100)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+	}
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/tasks")
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -885,7 +918,18 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagLinks := buildTagLinks(activeTags, tags, "/")
+	allowed := map[string]struct{}{}
+	if len(activeTags) > 0 {
+		filteredTags, err := s.idx.ListTagsFiltered(r.Context(), activeTags, 100)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+	}
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/")
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

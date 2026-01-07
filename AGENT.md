@@ -140,12 +140,13 @@ SQLite first. Postgres optional later behind an interface.
 Current schema (SQLite)
 
 - `schema_version(version)`
-- `files(id, path UNIQUE, title, hash, mtime_unix, size, created_at, updated_at)`
+- `files(id, path UNIQUE, title, hash, mtime_unix, size, created_at, updated_at, priority DEFAULT 10)`
 - `file_updates(id, file_id, updated_at)`
 - `tags(id, name UNIQUE)`
 - `file_tags(file_id, tag_id, PRIMARY KEY(file_id, tag_id))`
 - `links(id, from_file_id, to_ref, to_file_id NULL, kind)` where kind in ('wikilink','mdlink')
-- `tasks(id, file_id, line_no, text, checked, due_date NULL)`
+- `tasks(id, file_id, line_no, text, checked, due_date NULL, updated_at)`
+- `embed_cache(url, kind, embed_url, status, error_msg, updated_at, expires_at, PRIMARY KEY(url, kind))`
 - Search (FTS5):
   - `fts(path UNINDEXED, title, body)`
   - Keep `fts` synced on file changes.

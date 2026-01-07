@@ -30,10 +30,11 @@ type ViewData struct {
 }
 
 type TagLink struct {
-	Name   string
-	Count  int
-	URL    string
-	Active bool
+	Name     string
+	Count    int
+	URL      string
+	Active   bool
+	Disabled bool
 }
 
 type NoteCard struct {
