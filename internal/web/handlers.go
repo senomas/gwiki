@@ -1355,7 +1355,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slug := slugify(title)
-	notePath := fs.EnsureMDExt(slug)
+	notePath := filepath.ToSlash(filepath.Join(time.Now().Format("2006-01"), fs.EnsureMDExt(slug)))
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		s.renderEditError(w, ViewData{
@@ -1737,7 +1737,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
 	if titleChanged && decision == "" {
-		newPath := fs.EnsureMDExt(slugify(derivedTitle))
+		newPath := filepath.ToSlash(filepath.Join(filepath.Dir(notePath), fs.EnsureMDExt(slugify(derivedTitle))))
 		s.renderEditError(w, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
@@ -1758,7 +1758,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	targetPath := notePath
 	targetFullPath := fullPath
 	if titleChanged && decision == "confirm" {
-		targetPath = fs.EnsureMDExt(slugify(derivedTitle))
+		targetPath = filepath.ToSlash(filepath.Join(filepath.Dir(notePath), fs.EnsureMDExt(slugify(derivedTitle))))
 		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
 		if err != nil {
 			s.renderEditError(w, ViewData{
