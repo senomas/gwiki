@@ -630,6 +630,106 @@ func (i *Index) NotesByTags(ctx context.Context, tags []string, limit int, offse
 	return notes, rows.Err()
 }
 
+func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int, offset int) ([]NoteSummary, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			WHERE tasks.checked = 0
+			GROUP BY files.id
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = []interface{}{limit, offset}
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.path, files.title, files.mtime_unix
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY files.priority ASC, files.updated_at DESC
+			LIMIT ? OFFSET ?`
+		args = make([]interface{}, 0, len(tags)+3)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags), limit, offset)
+	}
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int, error) {
+	var (
+		query string
+		args  []interface{}
+	)
+	if len(tags) == 0 {
+		query = `
+			SELECT COUNT(DISTINCT files.id)
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			WHERE tasks.checked = 0`
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT COUNT(DISTINCT files.id)
+			FROM files
+			JOIN tasks ON files.id = tasks.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?`
+		args = make([]interface{}, 0, len(tags)+1)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags))
+		query = `SELECT COUNT(*) FROM (` + query + `)`
+	}
+
+	var count int
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, error) {
 	rows, err := i.db.QueryContext(ctx, "SELECT id, path, hash, mtime_unix, size FROM files")
 	if err != nil {
