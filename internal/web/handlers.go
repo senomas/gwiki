@@ -1,6 +1,7 @@
 package web
 
 import (
+	"container/list"
 	"context"
 	"html"
 	"html/template"
@@ -97,12 +98,7 @@ const (
 
 var embedCacheStore *index.Index
 
-var mapsEmbedInFlight = struct {
-	mu   sync.Mutex
-	data map[string]time.Time
-}{
-	data: map[string]time.Time{},
-}
+var mapsEmbedInFlight = newTTLCache(512)
 
 type mapsEmbedStatus int
 
@@ -370,28 +366,15 @@ func resolveMapsEmbedWithClient(shortURL string, client *http.Client) (string, b
 }
 
 func mapsEmbedIsInFlight(shortURL string) bool {
-	now := time.Now()
-	mapsEmbedInFlight.mu.Lock()
-	defer mapsEmbedInFlight.mu.Unlock()
-	if until, ok := mapsEmbedInFlight.data[shortURL]; ok {
-		if until.After(now) {
-			return true
-		}
-		delete(mapsEmbedInFlight.data, shortURL)
-	}
-	return false
+	return mapsEmbedInFlight.IsActive(shortURL, time.Now())
 }
 
 func mapsEmbedMarkInFlight(shortURL string) {
-	mapsEmbedInFlight.mu.Lock()
-	mapsEmbedInFlight.data[shortURL] = time.Now().Add(mapsEmbedPendingTTL)
-	mapsEmbedInFlight.mu.Unlock()
+	mapsEmbedInFlight.Upsert(shortURL, time.Now().Add(mapsEmbedPendingTTL))
 }
 
 func mapsEmbedClearInFlight(shortURL string) {
-	mapsEmbedInFlight.mu.Lock()
-	delete(mapsEmbedInFlight.data, shortURL)
-	mapsEmbedInFlight.mu.Unlock()
+	mapsEmbedInFlight.Delete(shortURL)
 }
 
 func mapsEmbedStoreFound(shortURL, embedURL string) {
@@ -424,6 +407,80 @@ func mapsEmbedStoreFailure(shortURL, message string) {
 		ExpiresAt: now.Add(mapsEmbedFailureTTL),
 	}
 	_ = embedCacheStore.UpsertEmbedCache(context.Background(), entry)
+}
+
+type ttlLRUCache struct {
+	mu       sync.Mutex
+	capacity int
+	items    map[string]*list.Element
+	lru      *list.List
+}
+
+type ttlLRUEntry struct {
+	key     string
+	expires time.Time
+}
+
+func newTTLCache(capacity int) *ttlLRUCache {
+	if capacity < 1 {
+		capacity = 1
+	}
+	return &ttlLRUCache{
+		capacity: capacity,
+		items:    make(map[string]*list.Element),
+		lru:      list.New(),
+	}
+}
+
+func (c *ttlLRUCache) IsActive(key string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elem, ok := c.items[key]
+	if !ok {
+		return false
+	}
+	entry := elem.Value.(ttlLRUEntry)
+	if entry.expires.After(now) {
+		c.lru.MoveToFront(elem)
+		return true
+	}
+	c.lru.Remove(elem)
+	delete(c.items, key)
+	return false
+}
+
+func (c *ttlLRUCache) Upsert(key string, expires time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if elem, ok := c.items[key]; ok {
+		elem.Value = ttlLRUEntry{key: key, expires: expires}
+		c.lru.MoveToFront(elem)
+		return
+	}
+	elem := c.lru.PushFront(ttlLRUEntry{key: key, expires: expires})
+	c.items[key] = elem
+	if c.lru.Len() > c.capacity {
+		c.evictOldest()
+	}
+}
+
+func (c *ttlLRUCache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if elem, ok := c.items[key]; ok {
+		c.lru.Remove(elem)
+		delete(c.items, key)
+	}
+}
+
+func (c *ttlLRUCache) evictOldest() {
+	elem := c.lru.Back()
+	if elem == nil {
+		return
+	}
+	entry := elem.Value.(ttlLRUEntry)
+	delete(c.items, entry.key)
+	c.lru.Remove(elem)
 }
 
 func buildMapsEmbedURL(finalURL string) (string, bool) {
