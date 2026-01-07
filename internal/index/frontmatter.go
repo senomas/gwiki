@@ -24,7 +24,6 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 			"id: " + id,
 			"created: " + nowStr,
 			"updated: " + nowStr,
-			"title: " + title,
 			"priority: 10",
 			"history:",
 			"  - user: " + dummyHistoryUser,
@@ -54,12 +53,6 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 	if idVal == "" {
 		idVal = uuid.NewString()
 	}
-	if title == "" {
-		title = valueOrEmpty(fmLines, lineIdx, "title")
-		if title == "" {
-			title = DeriveTitleFromBody(body)
-		}
-	}
 	createdVal := valueOrEmpty(fmLines, lineIdx, "created")
 	createdMissing := createdVal == ""
 	if createdVal == "" {
@@ -76,8 +69,8 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 	setFrontmatterLine(&fmLines, lineIdx, "id", idVal)
 	setFrontmatterLine(&fmLines, lineIdx, "created", createdVal)
 	setFrontmatterLine(&fmLines, lineIdx, "updated", nowStr)
-	setFrontmatterLine(&fmLines, lineIdx, "title", title)
 	setFrontmatterLine(&fmLines, lineIdx, "priority", priorityVal)
+	removeFrontmatterLine(&fmLines, lineIdx, "title")
 
 	action := "edit"
 	if createdMissing {
@@ -146,6 +139,20 @@ func setFrontmatterLine(lines *[]string, idx map[string]int, key, val string) {
 	}
 	*lines = append(*lines, line)
 	idx[key] = len(*lines) - 1
+}
+
+func removeFrontmatterLine(lines *[]string, idx map[string]int, key string) {
+	pos, ok := idx[key]
+	if !ok || pos < 0 || pos >= len(*lines) {
+		return
+	}
+	*lines = append((*lines)[:pos], (*lines)[pos+1:]...)
+	delete(idx, key)
+	for k, v := range idx {
+		if v > pos {
+			idx[k] = v - 1
+		}
+	}
 }
 
 const dummyHistoryUser = "dummy"

@@ -127,11 +127,6 @@ func parseFrontmatter(lines []string) map[string]string {
 }
 
 func parseTitle(body string, fm map[string]string) string {
-	if fm != nil {
-		if t := strings.TrimSpace(fm["title"]); t != "" {
-			return t
-		}
-	}
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "# ") {

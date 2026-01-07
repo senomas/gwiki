@@ -10,8 +10,7 @@
         <a class="text-slate-400 transition hover:text-slate-200" href="/notes/{{.NotePath}}/edit">Edit</a>
       </div>
       <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
-        <h1 class="text-2xl font-semibold text-slate-100">{{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>
-        <div class="note-body mt-4 text-sm leading-relaxed text-slate-200">
+        <div class="note-body text-sm leading-relaxed text-slate-200">
           {{template "note_content" .}}
         </div>
       </article>

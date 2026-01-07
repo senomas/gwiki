@@ -34,6 +34,9 @@ func TestEnsureFrontmatterAddsFields(t *testing.T) {
 	if fm["priority"] != "10" {
 		t.Fatalf("expected priority to be 10, got %s", fm["priority"])
 	}
+	if _, ok := fm["title"]; ok {
+		t.Fatalf("expected title to be omitted from frontmatter")
+	}
 	if !strings.Contains(strings.Join(fmLines, "\n"), "history:\n  - user: dummy") {
 		t.Fatalf("expected history to be added")
 	}
@@ -68,6 +71,9 @@ func TestEnsureFrontmatterPreservesIDAndCreated(t *testing.T) {
 	}
 	if fm["priority"] != "10" {
 		t.Fatalf("expected priority to default to 10, got %s", fm["priority"])
+	}
+	if _, ok := fm["title"]; ok {
+		t.Fatalf("expected title to be omitted from frontmatter")
 	}
 	expectedUpdated := now.Format(time.RFC3339)
 	if fm["updated"] != expectedUpdated {

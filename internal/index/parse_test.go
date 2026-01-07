@@ -17,8 +17,8 @@ Some text with #inline tag and a link [[Wiki Note]].
 [md](path/to.md)
 `
 	meta := ParseContent(input)
-	if meta.Title != "Test Note" {
-		t.Fatalf("expected title from frontmatter, got %q", meta.Title)
+	if meta.Title != "Ignored Title" {
+		t.Fatalf("expected title from H1, got %q", meta.Title)
 	}
 	if len(meta.Tags) < 2 {
 		t.Fatalf("expected tags, got %v", meta.Tags)
