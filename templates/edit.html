@@ -22,6 +22,32 @@
         </div>
       </div>
       {{end}}
+      {{if .RenamePrompt}}
+      <div>
+        <input id="rename-modal" class="peer hidden" type="checkbox" checked>
+        <div class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/70 px-4 peer-checked:flex">
+          <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <div class="text-sm font-semibold text-slate-900">Rename note file?</div>
+            <div class="mt-2 text-sm text-slate-600">
+              H1 changed. Rename file from <span class="font-semibold text-slate-800">{{.RenameFromPath}}</span>
+              to <span class="font-semibold text-slate-800">{{.RenameToPath}}</span>?
+            </div>
+            <div class="mt-4 flex flex-wrap justify-end gap-2">
+              <form action="/notes/{{.NotePath}}/save" method="post">
+                <textarea class="hidden" name="content">{{.RawContent}}</textarea>
+                <input type="hidden" name="rename_decision" value="cancel">
+                <button class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="submit">Keep name</button>
+              </form>
+              <form action="/notes/{{.NotePath}}/save" method="post">
+                <textarea class="hidden" name="content">{{.RawContent}}</textarea>
+                <input type="hidden" name="rename_decision" value="confirm">
+                <button class="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700" type="submit">Rename file</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+      {{end}}
       <form class="mt-6 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post">
         <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="content">{{.RawContent}}</textarea>
         <div class="flex justify-end">

@@ -75,6 +75,48 @@ func (i *Index) Close() error {
 	return i.db.Close()
 }
 
+func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var id int
+	err = tx.QueryRowContext(ctx, "SELECT id FROM files WHERE path=?", path).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	stmts := []string{
+		"DELETE FROM file_updates WHERE file_id=?",
+		"DELETE FROM file_tags WHERE file_id=?",
+		"DELETE FROM links WHERE from_file_id=? OR to_file_id=?",
+		"DELETE FROM tasks WHERE file_id=?",
+		"DELETE FROM fts WHERE path=?",
+		"DELETE FROM files WHERE id=?",
+	}
+	for _, stmt := range stmts {
+		switch stmt {
+		case "DELETE FROM links WHERE from_file_id=? OR to_file_id=?":
+			if _, err := tx.ExecContext(ctx, stmt, id, id); err != nil {
+				return err
+			}
+		case "DELETE FROM fts WHERE path=?":
+			if _, err := tx.ExecContext(ctx, stmt, path); err != nil {
+				return err
+			}
+		default:
+			if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
 func (i *Index) Init(ctx context.Context, repoPath string) error {
 	if _, err := i.db.ExecContext(ctx, schemaSQL); err != nil {
 		return err

@@ -16,6 +16,9 @@ type ViewData struct {
 	SaveAction      string
 	ErrorMessage    string
 	ErrorReturnURL  string
+	RenamePrompt    bool
+	RenameFromPath  string
+	RenameToPath    string
 	RenderedHTML    template.HTML
 	SearchQuery     string
 	SearchResults   []index.SearchResult

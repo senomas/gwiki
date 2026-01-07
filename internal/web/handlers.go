@@ -1326,6 +1326,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 
+	decision := r.Form.Get("rename_decision")
 	derivedTitle := index.DeriveTitleFromBody(content)
 	if derivedTitle == "" {
 		derivedTitle = time.Now().Format("2006-01-02 15-04")
@@ -1357,40 +1358,132 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusBadRequest)
 		return
 	}
+	existingContent, err := os.ReadFile(fullPath)
+	if err != nil && !os.IsNotExist(err) {
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+		}, http.StatusInternalServerError)
+		return
+	}
+	oldTitle := ""
+	if err == nil {
+		oldTitle = index.DeriveTitleFromBody(string(existingContent))
+	}
+	titleChanged := oldTitle != "" && oldTitle != derivedTitle
+	if titleChanged && decision == "" {
+		newPath := fs.EnsureMDExt(slugify(derivedTitle))
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			RenamePrompt:    true,
+			RenameFromPath:  notePath,
+			RenameToPath:    newPath,
+		}, http.StatusOK)
+		return
+	}
 
 	unlock := s.locker.Lock(notePath)
 	defer unlock()
 
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        notePath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + notePath + "/edit",
-		}, http.StatusInternalServerError)
-		return
-	}
-	if err := fs.WriteFileAtomic(fullPath, []byte(content), 0o644); err != nil {
-		s.renderEditError(w, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        notePath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + notePath + "/edit",
-		}, http.StatusInternalServerError)
-		return
-	}
-	info, err := os.Stat(fullPath)
-	if err == nil {
-		_ = s.idx.IndexNote(context.Background(), notePath, []byte(content), info.ModTime(), info.Size())
+	targetPath := notePath
+	targetFullPath := fullPath
+	if titleChanged && decision == "confirm" {
+		targetPath = fs.EnsureMDExt(slugify(derivedTitle))
+		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
+		if err != nil {
+			s.renderEditError(w, ViewData{
+				Title:           "Edit note",
+				ContentTemplate: "edit",
+				NotePath:        notePath,
+				NoteTitle:       derivedTitle,
+				RawContent:      content,
+				ErrorMessage:    err.Error(),
+				ErrorReturnURL:  "/notes/" + notePath + "/edit",
+			}, http.StatusBadRequest)
+			return
+		}
+		if targetPath != notePath {
+			if _, err := os.Stat(targetFullPath); err == nil {
+				s.renderEditError(w, ViewData{
+					Title:           "Edit note",
+					ContentTemplate: "edit",
+					NotePath:        notePath,
+					NoteTitle:       derivedTitle,
+					RawContent:      content,
+					ErrorMessage:    "note already exists",
+					ErrorReturnURL:  "/notes/" + notePath + "/edit",
+				}, http.StatusConflict)
+				return
+			}
+			if err != nil && !os.IsNotExist(err) {
+				s.renderEditError(w, ViewData{
+					Title:           "Edit note",
+					ContentTemplate: "edit",
+					NotePath:        notePath,
+					NoteTitle:       derivedTitle,
+					RawContent:      content,
+					ErrorMessage:    err.Error(),
+					ErrorReturnURL:  "/notes/" + notePath + "/edit",
+				}, http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 
-	http.Redirect(w, r, "/notes/"+notePath, http.StatusSeeOther)
+	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        targetPath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + targetPath + "/edit",
+		}, http.StatusInternalServerError)
+		return
+	}
+	if err := fs.WriteFileAtomic(targetFullPath, []byte(content), 0o644); err != nil {
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        targetPath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + targetPath + "/edit",
+		}, http.StatusInternalServerError)
+		return
+	}
+	if targetPath != notePath {
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			s.renderEditError(w, ViewData{
+				Title:           "Edit note",
+				ContentTemplate: "edit",
+				NotePath:        targetPath,
+				NoteTitle:       derivedTitle,
+				RawContent:      content,
+				ErrorMessage:    err.Error(),
+				ErrorReturnURL:  "/notes/" + targetPath + "/edit",
+			}, http.StatusInternalServerError)
+			return
+		}
+		_ = s.idx.RemoveNoteByPath(context.Background(), notePath)
+	}
+	info, err := os.Stat(targetFullPath)
+	if err == nil {
+		_ = s.idx.IndexNote(context.Background(), targetPath, []byte(content), info.ModTime(), info.Size())
+	}
+
+	http.Redirect(w, r, "/notes/"+targetPath, http.StatusSeeOther)
 }
 
 func (s *Server) renderEditError(w http.ResponseWriter, data ViewData, status int) {
