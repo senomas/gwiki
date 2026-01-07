@@ -395,17 +395,43 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 	return notes, rows.Err()
 }
 
-func (i *Index) OpenTasks(ctx context.Context, limit int) ([]TaskItem, error) {
+func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int) ([]TaskItem, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
-		FROM tasks
-		JOIN files ON files.id = tasks.file_id
-		WHERE tasks.checked = 0
-		ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
-		LIMIT ?`, limit)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if len(tags) == 0 {
+		rows, err = i.db.QueryContext(ctx, `
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+			FROM tasks
+			JOIN files ON files.id = tasks.file_id
+			WHERE tasks.checked = 0
+			ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
+			LIMIT ?`, limit)
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query := `
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+			FROM tasks
+			JOIN files ON files.id = tasks.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+			GROUP BY tasks.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
+			LIMIT ?`
+		args := make([]interface{}, 0, len(tags)+2)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags), limit)
+		rows, err = i.db.QueryContext(ctx, query, args...)
+	}
 	if err != nil {
 		return nil, err
 	}

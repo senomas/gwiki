@@ -102,7 +102,7 @@ func parseTagsParam(raw string) []string {
 	return out
 }
 
-func buildTagLinks(active []string, tags []index.TagSummary) []TagLink {
+func buildTagLinks(active []string, tags []index.TagSummary, basePath string) []TagLink {
 	activeSet := map[string]struct{}{}
 	for _, tag := range active {
 		activeSet[tag] = struct{}{}
@@ -124,22 +124,25 @@ func buildTagLinks(active []string, tags []index.TagSummary) []TagLink {
 		links = append(links, TagLink{
 			Name:   tag.Name,
 			Count:  tag.Count,
-			URL:    buildTagsURL(next),
+			URL:    buildTagsURL(basePath, next),
 			Active: isActive,
 		})
 	}
 	return links
 }
 
-func buildTagsURL(tags []string) string {
+func buildTagsURL(basePath string, tags []string) string {
+	if basePath == "" {
+		basePath = "/"
+	}
 	if len(tags) == 0 {
-		return "/"
+		return basePath
 	}
 	escaped := make([]string, 0, len(tags))
 	for _, tag := range tags {
 		escaped = append(escaped, url.QueryEscape(tag))
 	}
-	return "/?t=" + strings.Join(escaped, ",")
+	return basePath + "?t=" + strings.Join(escaped, ",")
 }
 
 func buildTagsQuery(tags []string) string {
@@ -626,7 +629,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagLinks := buildTagLinks(activeTags, tags)
+	tagLinks := buildTagLinks(activeTags, tags, "/")
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -703,18 +706,18 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	tasks, err := s.idx.OpenTasks(r.Context(), 300)
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	tasks, err := s.idx.OpenTasks(r.Context(), activeTags, 300)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagLinks := buildTagLinks(activeTags, tags)
+	tagLinks := buildTagLinks(activeTags, tags, "/tasks")
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -882,7 +885,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagLinks := buildTagLinks(activeTags, tags)
+	tagLinks := buildTagLinks(activeTags, tags, "/")
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
