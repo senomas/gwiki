@@ -120,8 +120,8 @@
     }
   </style>
 </head>
-<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks")}}
+<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
+{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit")}}
   {{.ContentHTML}}
 {{else}}
   <div class="mx-auto max-w-5xl px-6 py-8">

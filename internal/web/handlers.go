@@ -1005,12 +1005,26 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      r.Form.Get("content"),
+			SaveAction:      "/notes/new",
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusBadRequest)
 		return
 	}
 	content := r.Form.Get("content")
 	if content == "" {
-		http.Error(w, "content required", http.StatusBadRequest)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      "",
+			SaveAction:      "/notes/new",
+			ErrorMessage:    "content required",
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusBadRequest)
 		return
 	}
 	title := index.DeriveTitleFromBody(content)
@@ -1020,7 +1034,14 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 
 	content, err := index.EnsureFrontmatterWithTitle(content, time.Now(), s.cfg.UpdatedHistoryMax, title)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      content,
+			SaveAction:      "/notes/new",
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusInternalServerError)
 		return
 	}
 
@@ -1028,24 +1049,59 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	notePath := fs.EnsureMDExt(slug)
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      content,
+			SaveAction:      "/notes/new",
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusBadRequest)
 		return
 	}
 	if _, err := os.Stat(fullPath); err == nil {
-		http.Error(w, "note already exists", http.StatusConflict)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      content,
+			SaveAction:      "/notes/new",
+			ErrorMessage:    "note already exists",
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusConflict)
 		return
 	}
 	if err != nil && !os.IsNotExist(err) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      content,
+			SaveAction:      "/notes/new",
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusInternalServerError)
 		return
 	}
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      content,
+			SaveAction:      "/notes/new",
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusInternalServerError)
 		return
 	}
 	if err := fs.WriteFileAtomic(fullPath, []byte(content), 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.renderEditError(w, ViewData{
+			Title:           "New note",
+			ContentTemplate: "edit",
+			RawContent:      content,
+			SaveAction:      "/notes/new",
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/new",
+		}, http.StatusInternalServerError)
 		return
 	}
 	info, err := os.Stat(fullPath)
@@ -1247,12 +1303,26 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			RawContent:      r.Form.Get("content"),
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+		}, http.StatusBadRequest)
 		return
 	}
 	content := r.Form.Get("content")
 	if content == "" {
-		http.Error(w, "content required", http.StatusBadRequest)
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			RawContent:      "",
+			ErrorMessage:    "content required",
+			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+		}, http.StatusBadRequest)
 		return
 	}
 
@@ -1262,13 +1332,29 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	content, err := index.EnsureFrontmatterWithTitle(content, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+		}, http.StatusInternalServerError)
 		return
 	}
 
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+		}, http.StatusBadRequest)
 		return
 	}
 
@@ -1276,11 +1362,27 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	defer unlock()
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+		}, http.StatusInternalServerError)
 		return
 	}
 	if err := fs.WriteFileAtomic(fullPath, []byte(content), 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.renderEditError(w, ViewData{
+			Title:           "Edit note",
+			ContentTemplate: "edit",
+			NotePath:        notePath,
+			NoteTitle:       derivedTitle,
+			RawContent:      content,
+			ErrorMessage:    err.Error(),
+			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+		}, http.StatusInternalServerError)
 		return
 	}
 	info, err := os.Stat(fullPath)
@@ -1289,6 +1391,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 
 	http.Redirect(w, r, "/notes/"+notePath, http.StatusSeeOther)
+}
+
+func (s *Server) renderEditError(w http.ResponseWriter, data ViewData, status int) {
+	w.WriteHeader(status)
+	s.views.RenderPage(w, data)
 }
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string) {

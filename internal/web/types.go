@@ -14,6 +14,8 @@ type ViewData struct {
 	NoteTitle       string
 	RawContent      string
 	SaveAction      string
+	ErrorMessage    string
+	ErrorReturnURL  string
 	RenderedHTML    template.HTML
 	SearchQuery     string
 	SearchResults   []index.SearchResult

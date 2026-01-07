@@ -1,9 +1,34 @@
 {{define "edit"}}
-<h1 class="text-2xl font-semibold">Edit {{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>
-<form class="mt-4 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post">
-  <textarea class="min-h-[60vh] w-full rounded-md border border-slate-300 bg-white p-3 font-mono text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" name="content">{{.RawContent}}</textarea>
-  <div>
-    <button class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700" type="submit">Save</button>
+<div class="app-shell relative min-h-screen overflow-hidden">
+  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
+  <div class="relative mx-auto min-h-screen max-w-4xl px-4 py-8 md:px-6 md:py-10">
+    <div class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
+      <a class="text-slate-400 transition hover:text-slate-200" href="/">Back</a>
+      <span class="text-slate-400">Edit</span>
+    </div>
+    <article class="mt-6 rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
+      <h1 class="text-2xl font-semibold text-slate-100">Edit {{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>
+      {{if .ErrorMessage}}
+      <div>
+        <input id="error-modal" class="peer hidden" type="checkbox" checked>
+        <div class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/70 px-4 peer-checked:flex">
+          <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <div class="text-sm font-semibold text-slate-900">Save failed</div>
+            <div class="mt-2 text-sm text-slate-600">{{.ErrorMessage}}</div>
+            <div class="mt-4 flex justify-end">
+              <label class="cursor-pointer rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700" for="error-modal">Close</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      {{end}}
+      <form class="mt-6 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post">
+        <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="content">{{.RawContent}}</textarea>
+        <div class="flex justify-end">
+          <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Save</button>
+        </div>
+      </form>
+    </article>
   </div>
-</form>
+</div>
 {{end}}
