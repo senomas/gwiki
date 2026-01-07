@@ -1134,7 +1134,8 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if err != nil {
 			return nil, offset, false, err
 		}
-		meta := index.ParseContent(normalizeLineEndings(string(content)))
+		normalized := normalizeLineEndings(string(content))
+		meta := index.ParseContent(normalized)
 		fileID, err := s.idx.FileIDByPath(ctx, note.Path)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, offset, false, err
@@ -1142,7 +1143,11 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if err == nil {
 			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
 		}
-		label := note.MTime.Local().Format("Mon, Jan 2, 2006")
+		labelTime := note.MTime
+		if historyTime, ok := index.LatestHistoryTime(normalized); ok {
+			labelTime = historyTime
+		}
+		label := labelTime.Local().Format("Mon, Jan 2, 2006")
 		cards = append(cards, NoteCard{
 			Path:         note.Path,
 			Title:        note.Title,

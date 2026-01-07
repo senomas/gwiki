@@ -175,6 +175,50 @@ func DeriveTitleFromBody(body string) string {
 	return ""
 }
 
+func LatestHistoryTime(content string) (time.Time, bool) {
+	lines, _, ok := splitFrontmatterLines(content)
+	if !ok {
+		return time.Time{}, false
+	}
+	historyIdx := -1
+	for i, line := range lines {
+		key, _ := parseFrontmatterLine(line)
+		if strings.EqualFold(key, "history") {
+			historyIdx = i
+			break
+		}
+	}
+	if historyIdx == -1 {
+		return time.Time{}, false
+	}
+	start := historyIdx + 1
+	end := start
+	for end < len(lines) && isIndentedLine(lines[end]) {
+		end++
+	}
+	if end <= start {
+		return time.Time{}, false
+	}
+	var latest time.Time
+	found := false
+	for i := start; i < end; i++ {
+		key, val := parseFrontmatterLine(lines[i])
+		if !strings.EqualFold(key, "at") {
+			continue
+		}
+		val = strings.TrimSpace(strings.Trim(val, "\""))
+		at, err := time.Parse(time.RFC3339, val)
+		if err != nil {
+			continue
+		}
+		if !found || at.After(latest) {
+			latest = at
+			found = true
+		}
+	}
+	return latest, found
+}
+
 func addHistoryEntry(lines *[]string, idx map[string]int, at, action string) {
 	item := []string{
 		"  - user: " + dummyHistoryUser,
