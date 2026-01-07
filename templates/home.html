@@ -3,6 +3,14 @@
 <p class="mt-2">
   <a class="text-emerald-600 hover:text-emerald-700" href="/notes/new">New note</a>
 </p>
+<h2 class="mt-8 text-lg font-semibold">Recent notes</h2>
+<ul class="mt-2 space-y-1">
+  {{range .RecentNotes}}
+    <li><a class="text-emerald-600 hover:text-emerald-700" href="/notes/{{.Path}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a></li>
+  {{else}}
+    <li class="text-slate-500">No notes yet.</li>
+  {{end}}
+</ul>
 <h2 class="mt-8 text-lg font-semibold">Monthly updates</h2>
 <div class="mt-3 max-w-md">
   <div class="text-sm font-semibold text-slate-700">{{.CalendarMonth.Label}}</div>
@@ -34,8 +42,4 @@
     <li class="text-slate-500">No tags yet.</li>
   {{end}}
 </ul>
-<h2 class="mt-8 text-lg font-semibold">Notes</h2>
-<div id="note-feed" class="mt-4 space-y-6">
-  {{template "note_feed_items" .}}
-</div>
 {{end}}

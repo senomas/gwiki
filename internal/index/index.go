@@ -322,30 +322,6 @@ func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, erro
 	return notes, rows.Err()
 }
 
-func (i *Index) ListNotesByUpdated(ctx context.Context, limit, offset int) ([]NoteSummary, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title FROM files ORDER BY updated_at DESC LIMIT ? OFFSET ?", limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var notes []NoteSummary
-	for rows.Next() {
-		var n NoteSummary
-		if err := rows.Scan(&n.Path, &n.Title); err != nil {
-			return nil, err
-		}
-		notes = append(notes, n)
-	}
-	return notes, rows.Err()
-}
-
 func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, nil

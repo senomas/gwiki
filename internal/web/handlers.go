@@ -18,14 +18,17 @@ import (
 
 var mdRenderer = goldmark.New()
 
-const noteFeedPageSize = 5
-
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 
+	recent, err := s.idx.RecentNotes(r.Context(), 20)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -37,21 +40,14 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	calendar := buildCalendarMonth(time.Now(), updateDays)
-	noteFeed, hasMore, nextOffset, err := s.buildNoteFeed(r.Context(), 0)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
 	data := ViewData{
-		Title:              "Home",
-		ContentTemplate:    "home",
-		Tags:               tags,
-		UpdateDays:         updateDays,
-		CalendarMonth:      calendar,
-		NoteFeed:           noteFeed,
-		NoteFeedHasMore:    hasMore,
-		NoteFeedNextOffset: nextOffset,
+		Title:           "Home",
+		ContentTemplate: "home",
+		RecentNotes:     recent,
+		Tags:            tags,
+		UpdateDays:      updateDays,
+		CalendarMonth:   calendar,
 	}
 	s.views.RenderPage(w, data)
 }
@@ -75,35 +71,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	data.Title = "Search"
 	data.ContentTemplate = "search_results"
 	s.views.RenderPage(w, data)
-}
-
-func (s *Server) handleNoteFeed(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	offset := 0
-	if rawOffset := strings.TrimSpace(r.URL.Query().Get("offset")); rawOffset != "" {
-		parsed, err := strconv.Atoi(rawOffset)
-		if err != nil || parsed < 0 {
-			http.Error(w, "invalid offset", http.StatusBadRequest)
-			return
-		}
-		offset = parsed
-	}
-
-	noteFeed, hasMore, nextOffset, err := s.buildNoteFeed(r.Context(), offset)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	data := ViewData{
-		NoteFeed:           noteFeed,
-		NoteFeedHasMore:    hasMore,
-		NoteFeedNextOffset: nextOffset,
-	}
-	s.views.RenderTemplate(w, "note_feed_items", data)
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
@@ -364,46 +331,4 @@ func (s *Server) uniqueNotePath(slug string) (string, error) {
 			return "", err
 		}
 	}
-}
-
-func (s *Server) buildNoteFeed(ctx context.Context, offset int) ([]NoteFeedItem, bool, int, error) {
-	notes, err := s.idx.ListNotesByUpdated(ctx, noteFeedPageSize+1, offset)
-	if err != nil {
-		return nil, false, offset, err
-	}
-	hasMore := len(notes) > noteFeedPageSize
-	if hasMore {
-		notes = notes[:noteFeedPageSize]
-	}
-
-	items := make([]NoteFeedItem, 0, len(notes))
-	for _, note := range notes {
-		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, note.Path)
-		if err != nil {
-			return nil, false, offset, err
-		}
-		content, err := os.ReadFile(fullPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, false, offset, err
-		}
-		htmlStr, err := renderMarkdown(content)
-		if err != nil {
-			return nil, false, offset, err
-		}
-		title := strings.TrimSpace(note.Title)
-		if title == "" {
-			title = note.Path
-		}
-		items = append(items, NoteFeedItem{
-			Path:         note.Path,
-			Title:        title,
-			RenderedHTML: template.HTML(htmlStr),
-		})
-	}
-
-	nextOffset := offset + len(notes)
-	return items, hasMore, nextOffset, nil
 }
