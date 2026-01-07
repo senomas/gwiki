@@ -18,17 +18,14 @@ import (
 
 var mdRenderer = goldmark.New()
 
+const homeNotesPageSize = 6
+
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 
-	recent, err := s.idx.RecentNotes(r.Context(), 20)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -40,11 +37,17 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	calendar := buildCalendarMonth(time.Now(), updateDays)
-
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := ViewData{
 		Title:           "Home",
 		ContentTemplate: "home",
-		RecentNotes:     recent,
+		HomeNotes:       homeNotes,
+		HomeHasMore:     hasMore,
+		NextHomeOffset:  nextOffset,
 		Tags:            tags,
 		UpdateDays:      updateDays,
 		CalendarMonth:   calendar,
@@ -71,6 +74,60 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	data.Title = "Search"
 	data.ContentTemplate = "search_results"
 	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := ViewData{
+		HomeNotes:      homeNotes,
+		HomeHasMore:    hasMore,
+		NextHomeOffset: nextOffset,
+	}
+	s.views.RenderTemplate(w, "home_notes", data)
+}
+
+func (s *Server) loadHomeNotes(ctx context.Context, offset int) ([]NoteCard, int, bool, error) {
+	notes, err := s.idx.RecentNotesPage(ctx, homeNotesPageSize+1, offset)
+	if err != nil {
+		return nil, offset, false, err
+	}
+	hasMore := len(notes) > homeNotesPageSize
+	if hasMore {
+		notes = notes[:homeNotesPageSize]
+	}
+	cards := make([]NoteCard, 0, len(notes))
+	for _, note := range notes {
+		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, note.Path)
+		if err != nil {
+			return nil, offset, false, err
+		}
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			return nil, offset, false, err
+		}
+		htmlStr, err := renderMarkdown(content)
+		if err != nil {
+			return nil, offset, false, err
+		}
+		label := note.MTime.Local().Format("Mon, Jan 2, 2006")
+		cards = append(cards, NoteCard{
+			Path:         note.Path,
+			Title:        note.Title,
+			RenderedHTML: template.HTML(htmlStr),
+			UpdatedLabel: label,
+		})
+	}
+	return cards, offset + len(notes), hasMore, nil
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
@@ -169,33 +226,12 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 
-	recent, err := s.idx.RecentNotes(r.Context(), 6)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	tags, err := s.idx.ListTags(r.Context(), 30)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	calendar := buildCalendarMonth(time.Now(), updateDays)
-
 	data := ViewData{
 		Title:           meta.Title,
 		ContentTemplate: "view",
 		NotePath:        notePath,
 		NoteTitle:       meta.Title,
 		RenderedHTML:    template.HTML(htmlStr),
-		RecentNotes:     recent,
-		Tags:            tags,
-		UpdateDays:      updateDays,
-		CalendarMonth:   calendar,
 	}
 	s.views.RenderPage(w, data)
 }

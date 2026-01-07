@@ -23,6 +23,7 @@ type Index struct {
 type NoteSummary struct {
 	Path  string
 	Title string
+	MTime time.Time
 }
 
 type SearchResult struct {
@@ -305,7 +306,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 }
 
 func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, error) {
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title FROM files ORDER BY updated_at DESC LIMIT ?", limit)
+	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY updated_at DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}
@@ -314,9 +315,37 @@ func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, erro
 	var notes []NoteSummary
 	for rows.Next() {
 		var n NoteSummary
-		if err := rows.Scan(&n.Path, &n.Title); err != nil {
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
 			return nil, err
 		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]NoteSummary, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY updated_at DESC LIMIT ? OFFSET ?", limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteSummary
+	for rows.Next() {
+		var n NoteSummary
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+			return nil, err
+		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
 	return notes, rows.Err()
@@ -484,7 +513,7 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 }
 
 func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title FROM files ORDER BY path")
+	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY path")
 	if err != nil {
 		return nil, err
 	}
@@ -493,9 +522,11 @@ func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
 	var notes []NoteSummary
 	for rows.Next() {
 		var n NoteSummary
-		if err := rows.Scan(&n.Path, &n.Title); err != nil {
+		var mtimeUnix int64
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
 			return nil, err
 		}
+		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
 	return notes, rows.Err()
@@ -508,7 +539,7 @@ func (i *Index) DebugDump(ctx context.Context) (string, error) {
 	}
 	var b strings.Builder
 	for _, n := range notes {
-		fmt.Fprintf(&b, "%s\t%s\n", n.Path, n.Title)
+		fmt.Fprintf(&b, "%s\t%s\t%s\n", n.Path, n.Title, n.MTime.Format(time.RFC3339))
 	}
 	return b.String(), nil
 }

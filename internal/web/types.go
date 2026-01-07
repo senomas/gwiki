@@ -17,7 +17,17 @@ type ViewData struct {
 	SearchQuery     string
 	SearchResults   []index.SearchResult
 	RecentNotes     []index.NoteSummary
+	HomeNotes       []NoteCard
+	HomeHasMore     bool
+	NextHomeOffset  int
 	Tags            []index.TagSummary
 	UpdateDays      []index.UpdateDaySummary
 	CalendarMonth   CalendarMonth
+}
+
+type NoteCard struct {
+	Path         string
+	Title        string
+	RenderedHTML template.HTML
+	UpdatedLabel string
 }
