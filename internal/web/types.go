@@ -15,6 +15,7 @@ type ViewData struct {
 	RawContent       string
 	FrontmatterBlock string
 	SaveAction       string
+	UploadToken      string
 	ErrorMessage     string
 	ErrorReturnURL   string
 	RenamePrompt     bool
@@ -39,6 +40,8 @@ type ViewData struct {
 	DateQuery        string
 	Backlinks        []BacklinkView
 	SearchQueryParam string
+	Attachments      []string
+	AttachmentBase   string
 }
 
 type BacklinkView struct {

@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +31,8 @@ import (
 
 	"gwiki/internal/index"
 	"gwiki/internal/storage/fs"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -92,6 +96,26 @@ func shouldOpenNewTab(dest []byte) bool {
 func normalizeLineEndings(input string) string {
 	normalized := strings.ReplaceAll(input, "\r\n", "\n")
 	return strings.ReplaceAll(normalized, "\r", "\n")
+}
+
+func listAttachmentNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func parseTagsParam(raw string) []string {
@@ -1292,6 +1316,12 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
+		uploadToken := strings.TrimSpace(r.URL.Query().Get("upload_token"))
+		if uploadToken == "" {
+			uploadToken = uuid.NewString()
+		} else if _, err := uuid.Parse(uploadToken); err != nil {
+			uploadToken = uuid.NewString()
+		}
 		data := ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -1299,6 +1329,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       "",
 			FrontmatterBlock: "",
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 		}
 		s.views.RenderPage(w, data)
 		return
@@ -1308,12 +1340,15 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
+		uploadToken := r.Form.Get("upload_token")
 		s.renderEditError(w, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       r.Form.Get("content"),
 			FrontmatterBlock: r.Form.Get("frontmatter"),
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -1321,6 +1356,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
+	uploadToken := r.Form.Get("upload_token")
 	if content == "" {
 		s.renderEditError(w, ViewData{
 			Title:            "New note",
@@ -1328,6 +1364,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       "",
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     "content required",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -1351,6 +1389,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -1367,6 +1407,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -1379,6 +1421,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     "note already exists",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusConflict)
@@ -1391,6 +1435,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -1404,6 +1450,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -1416,6 +1464,22 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
+		}, http.StatusInternalServerError)
+		return
+	}
+	if err := s.promoteTempAttachments(uploadToken, mergedContent); err != nil {
+		s.renderEditError(w, ViewData{
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -1436,6 +1500,14 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if pathPart == "new/attachments/delete" {
+		s.handleDeleteTempAttachment(w, r)
+		return
+	}
+	if pathPart == "new/upload" {
+		s.handleUploadTempAttachment(w, r)
+		return
+	}
 	if strings.HasSuffix(pathPart, "/edit") {
 		base := strings.TrimSuffix(pathPart, "/edit")
 		resolved, err := s.resolveNotePath(r.Context(), base)
@@ -1454,6 +1526,26 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleSaveNote(w, r, resolved)
+		return
+	}
+	if strings.HasSuffix(pathPart, "/upload") {
+		base := strings.TrimSuffix(pathPart, "/upload")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleUploadAttachment(w, r, resolved)
+		return
+	}
+	if strings.HasSuffix(pathPart, "/attachments/delete") {
+		base := strings.TrimSuffix(pathPart, "/attachments/delete")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleDeleteAttachment(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/delete") {
@@ -1697,6 +1789,13 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 
 	meta := index.ParseContent(string(content))
+	attachments := []string(nil)
+	metaAttrs := index.FrontmatterAttributes(string(content))
+	attachmentBase := ""
+	if metaAttrs.ID != "" {
+		attachments = listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", metaAttrs.ID))
+		attachmentBase = "/" + filepath.ToSlash(filepath.Join("attachments", metaAttrs.ID))
+	}
 	data := ViewData{
 		Title:            "Edit: " + meta.Title,
 		ContentTemplate:  "edit",
@@ -1704,7 +1803,9 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		NoteTitle:        meta.Title,
 		RawContent:       index.StripFrontmatter(string(content)),
 		FrontmatterBlock: index.FrontmatterBlock(string(content)),
-		NoteMeta:         index.FrontmatterAttributes(string(content)),
+		NoteMeta:         metaAttrs,
+		Attachments:      attachments,
+		AttachmentBase:   attachmentBase,
 	}
 	s.views.RenderPage(w, data)
 }
@@ -1719,6 +1820,18 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	attachmentPath := ""
+	if err == nil {
+		meta := index.FrontmatterAttributes(string(content))
+		if meta.ID != "" {
+			attachmentPath = filepath.Join(s.cfg.RepoPath, "attachments", meta.ID)
+		}
+	}
 	unlock := s.locker.Lock(notePath)
 	defer unlock()
 
@@ -1730,8 +1843,332 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if attachmentPath != "" {
+		_ = os.RemoveAll(attachmentPath)
+	}
 	_ = s.idx.RemoveNoteByPath(context.Background(), notePath)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, notePath string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("attachment")
+	if err != nil {
+		http.Error(w, "attachment required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	meta := index.FrontmatterAttributes(string(content))
+	if meta.ID == "" {
+		http.Error(w, "note id missing", http.StatusBadRequest)
+		return
+	}
+	filename := strings.TrimSpace(header.Filename)
+	if filename == "" {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+	filename = filepath.Base(filename)
+	if filename == "." || filename == string(filepath.Separator) || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	attachmentsDir := filepath.Join(s.cfg.RepoPath, "attachments", meta.ID)
+	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	targetPath := filepath.Join(attachmentsDir, filename)
+	tmpFile, err := os.CreateTemp(attachmentsDir, ".upload-*")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := io.Copy(tmpFile, file); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+}
+
+func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	token := strings.TrimSpace(r.FormValue("upload_token"))
+	if token == "" {
+		http.Error(w, "upload token required", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(token); err != nil {
+		http.Error(w, "invalid upload token", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("attachment")
+	if err != nil {
+		http.Error(w, "attachment required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	filename := strings.TrimSpace(header.Filename)
+	if filename == "" {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+	filename = filepath.Base(filename)
+	if filename == "." || filename == string(filepath.Separator) || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	attachmentsDir := filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", token)
+	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	targetPath := filepath.Join(attachmentsDir, filename)
+	tmpFile, err := os.CreateTemp(attachmentsDir, ".upload-*")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := io.Copy(tmpFile, file); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmpPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/notes/new?upload_token="+url.QueryEscape(token), http.StatusSeeOther)
+}
+
+func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	token := strings.TrimSpace(r.FormValue("upload_token"))
+	if token == "" {
+		http.Error(w, "upload token required", http.StatusBadRequest)
+		return
+	}
+	if _, err := uuid.Parse(token); err != nil {
+		http.Error(w, "invalid upload token", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("file"))
+	if name == "" {
+		http.Error(w, "file required", http.StatusBadRequest)
+		return
+	}
+	name = filepath.Base(name)
+	if name == "." || name == string(filepath.Separator) || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	targetPath := filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", token, name)
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/notes/new?upload_token="+url.QueryEscape(token), http.StatusSeeOther)
+}
+
+func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, notePath string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("file"))
+	if name == "" {
+		http.Error(w, "file required", http.StatusBadRequest)
+		return
+	}
+	name = filepath.Base(name)
+	if name == "." || name == string(filepath.Separator) || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	meta := index.FrontmatterAttributes(string(content))
+	if meta.ID == "" {
+		http.Error(w, "note id missing", http.StatusBadRequest)
+		return
+	}
+
+	targetPath := filepath.Join(s.cfg.RepoPath, "attachments", meta.ID, name)
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+}
+
+func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rel := strings.TrimPrefix(r.URL.Path, "/attachments/")
+	if rel == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.HasPrefix(rel, ".tmp/") || rel == ".tmp" {
+		http.NotFound(w, r)
+		return
+	}
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		http.NotFound(w, r)
+		return
+	}
+	attachmentsRoot := filepath.Clean(filepath.Join(s.cfg.RepoPath, "attachments"))
+	fullPath := filepath.Clean(filepath.Join(attachmentsRoot, clean))
+	if !strings.HasPrefix(fullPath, attachmentsRoot+string(filepath.Separator)) && fullPath != attachmentsRoot {
+		http.NotFound(w, r)
+		return
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, fullPath)
+}
+
+func (s *Server) promoteTempAttachments(token, content string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil
+	}
+	if _, err := uuid.Parse(token); err != nil {
+		return fmt.Errorf("invalid upload token")
+	}
+	meta := index.FrontmatterAttributes(content)
+	if meta.ID == "" {
+		return errors.New("note id missing")
+	}
+	tempDir := filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", token)
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if len(entries) == 0 {
+		return os.RemoveAll(tempDir)
+	}
+
+	attachmentsDir := filepath.Join(s.cfg.RepoPath, "attachments", meta.ID)
+	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == "" {
+			continue
+		}
+		src := filepath.Join(tempDir, name)
+		dst := filepath.Join(attachmentsDir, name)
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(tempDir)
 }
 
 func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath string) {

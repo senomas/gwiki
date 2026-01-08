@@ -49,6 +49,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/notes/new", s.handleNewNote)
 	s.mux.HandleFunc("/notes/page", s.handleHomeNotesPage)
 	s.mux.HandleFunc("/notes/", s.handleNotes)
+	s.mux.HandleFunc("/attachments/", s.handleAttachmentFile)
 	s.mux.HandleFunc("/tasks", s.handleTasks)
 	s.mux.HandleFunc("/tasks/toggle", s.handleToggleTask)
 }
