@@ -25,6 +25,7 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 			"created: " + nowStr,
 			"updated: " + nowStr,
 			"priority: 10",
+			"visibility: private",
 			"history:",
 			"  - user: " + dummyHistoryUser,
 			"    at: " + nowStr,
@@ -62,6 +63,10 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 	if priorityVal == "" {
 		priorityVal = "10"
 	}
+	visibilityVal := valueOrEmpty(fmLines, lineIdx, "visibility")
+	if visibilityVal == "" {
+		visibilityVal = "private"
+	}
 	if maxUpdated <= 0 {
 		maxUpdated = 1
 	}
@@ -70,6 +75,7 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 	setFrontmatterLine(&fmLines, lineIdx, "created", createdVal)
 	setFrontmatterLine(&fmLines, lineIdx, "updated", nowStr)
 	setFrontmatterLine(&fmLines, lineIdx, "priority", priorityVal)
+	setFrontmatterLine(&fmLines, lineIdx, "visibility", visibilityVal)
 	removeFrontmatterLine(&fmLines, lineIdx, "title")
 
 	action := "edit"
@@ -178,6 +184,7 @@ type FrontmatterAttrs struct {
 	Updated      time.Time
 	UpdatedRaw   string
 	Priority     string
+	Visibility   string
 	HistoryCount int
 	History      []HistoryEntry
 	Has          bool
@@ -323,11 +330,16 @@ func FrontmatterAttributes(content string) FrontmatterAttrs {
 			attrs.Updated, attrs.UpdatedRaw = parseFrontmatterTime(val)
 		case "priority":
 			attrs.Priority = val
+		case "visibility":
+			attrs.Visibility = val
 		}
 	}
 	attrs.HistoryCount = countHistoryEntries(lines)
 	if attrs.HistoryCount > 0 {
 		attrs.History = ParseHistoryEntries(content)
+	}
+	if attrs.Visibility == "" {
+		attrs.Visibility = "private"
 	}
 	return attrs
 }

@@ -323,10 +323,14 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	err = tx.QueryRowContext(ctx, "SELECT id, created_at FROM files WHERE path=?", notePath).Scan(&existingID, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		createdAt = time.Now().Unix()
+		visibility := attrs.Visibility
+		if visibility == "" {
+			visibility = "private"
+		}
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO files(path, title, uid, hash, mtime_unix, size, created_at, updated_at, priority)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, notePath, meta.Title, uid, checksum, mtime.Unix(), size, createdAt, time.Now().Unix(), meta.Priority)
+			INSERT INTO files(path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, notePath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, time.Now().Unix(), meta.Priority)
 		if err != nil {
 			return err
 		}
@@ -334,9 +338,13 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			return err
 		}
 	} else if err == nil {
+		visibility := attrs.Visibility
+		if visibility == "" {
+			visibility = "private"
+		}
 		_, err = tx.ExecContext(ctx, `
-			UPDATE files SET title=?, uid=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=? WHERE id=?
-		`, meta.Title, uid, checksum, mtime.Unix(), size, time.Now().Unix(), meta.Priority, existingID)
+			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=? WHERE id=?
+		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, time.Now().Unix(), meta.Priority, existingID)
 		if err != nil {
 			return err
 		}

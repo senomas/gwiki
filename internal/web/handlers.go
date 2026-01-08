@@ -1437,23 +1437,52 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasSuffix(pathPart, "/edit") {
-		s.handleEditNote(w, r, strings.TrimSuffix(pathPart, "/edit"))
+		base := strings.TrimSuffix(pathPart, "/edit")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleEditNote(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/save") {
-		s.handleSaveNote(w, r, strings.TrimSuffix(pathPart, "/save"))
+		base := strings.TrimSuffix(pathPart, "/save")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleSaveNote(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/delete") {
-		s.handleDeleteNote(w, r, strings.TrimSuffix(pathPart, "/delete"))
+		base := strings.TrimSuffix(pathPart, "/delete")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleDeleteNote(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/preview") {
-		s.handlePreview(w, r, strings.TrimSuffix(pathPart, "/preview"))
+		base := strings.TrimSuffix(pathPart, "/preview")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handlePreview(w, r, resolved)
 		return
 	}
 
-	s.handleViewNote(w, r, pathPart)
+	resolved, err := s.resolveNotePath(r.Context(), pathPart)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.handleViewNote(w, r, resolved)
 }
 
 func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath string) {
@@ -1597,6 +1626,28 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 	s.views.RenderPage(w, data)
 }
 
+func (s *Server) resolveNotePath(ctx context.Context, noteRef string) (string, error) {
+	noteRef = strings.TrimPrefix(noteRef, "/")
+	if noteRef == "" {
+		return noteRef, nil
+	}
+	exists, err := s.idx.NoteExists(ctx, noteRef)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		return noteRef, nil
+	}
+	path, err := s.idx.PathByUID(ctx, noteRef)
+	if errors.Is(err, sql.ErrNoRows) {
+		return noteRef, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1653,6 +1704,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		NoteTitle:        meta.Title,
 		RawContent:       index.StripFrontmatter(string(content)),
 		FrontmatterBlock: index.FrontmatterBlock(string(content)),
+		NoteMeta:         index.FrontmatterAttributes(string(content)),
 	}
 	s.views.RenderPage(w, data)
 }
