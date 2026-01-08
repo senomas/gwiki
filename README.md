@@ -92,6 +92,7 @@ The command writes to `WIKI_AUTH_FILE` when set, otherwise to
 gwiki supports a few wiki-style extensions in Markdown:
 
 - Wiki links: `[[My Note]]` renders as a link to `/notes/my-note.md`.
+- Wiki links by id: `[[file-id]]` resolves to the note with matching frontmatter `id`.
 - Nested tags with `/`: `#travel/food` expands to tags `travel` and `travel/food`.
 - Embedded maps: a `https://maps.app.goo.gl/...` link auto-renders as an iframe.
 

@@ -36,7 +36,7 @@ Non-goals (v1)
 ```
 
 wiki/
-notes/                # canonical markdown notes
+notes/                # canonical markdown notes (YYYY-MM/ subfolders for new notes)
 assets/               # attachments
 templates/            # html/template files
 .wiki/
@@ -58,13 +58,13 @@ Support:
 
 - YAML frontmatter (optional):
   - `id`, `title`, `tags`, `created`, `updated`
-- Inline tags: `#tag` (simple alnum/underscore/dash)
+- Inline tags: `#tag` and nested tags with `/` (e.g., `#travel/food`)
 - Tasks:
   - `- [ ] task text`
   - `- [x] done text`
   - Optional due marker: `@due(YYYY-MM-DD)` or `due:YYYY-MM-DD`
-- Links:
-  - Wiki links: `[[Some Note]]` (map to slug/path if resolvable)
+Links:
+  - Wiki links: `[[Some Note]]` or `[[file-id]]` (resolve by uid, title, or path)
   - Markdown links: `[text](relative/path.md)`
 
 Rendering:
@@ -140,11 +140,11 @@ SQLite first. Postgres optional later behind an interface.
 Current schema (SQLite)
 
 - `schema_version(version)`
-- `files(id, path UNIQUE, title, hash, mtime_unix, size, created_at, updated_at, priority DEFAULT 10)`
-- `file_histories(id, file_id, action, action_time, action_date)`
+- `files(id, path UNIQUE, title, uid, hash, mtime_unix, size, created_at, updated_at, priority DEFAULT 10)`
+- `file_histories(id, file_id, user, action, action_time, action_date)`
 - `tags(id, name UNIQUE)`
 - `file_tags(file_id, tag_id, PRIMARY KEY(file_id, tag_id))`
-- `links(id, from_file_id, to_ref, to_file_id NULL, kind)` where kind in ('wikilink','mdlink')
+- `links(id, from_file_id, to_ref, to_file_id NULL, kind, line_no, line)` where kind in ('wikilink','mdlink')
 - `tasks(id, file_id, line_no, text, checked, due_date NULL, updated_at)`
 - `embed_cache(url, kind, embed_url, status, error_msg, updated_at, expires_at, PRIMARY KEY(url, kind))`
 - Search (FTS5):
