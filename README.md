@@ -86,3 +86,23 @@ go run ./cmd/user-add <username>
 
 The command writes to `WIKI_AUTH_FILE` when set, otherwise to
 `$WIKI_REPO_PATH/.wiki/auth.txt`.
+
+## Note format
+
+gwiki supports a few wiki-style extensions in Markdown:
+
+- Wiki links: `[[My Note]]` renders as a link to `/notes/my-note.md`.
+- Nested tags with `/`: `#travel/food` expands to tags `travel` and `travel/food`.
+- Embedded maps: a `https://maps.app.goo.gl/...` link auto-renders as an iframe.
+
+Example:
+
+```markdown
+# Staycation
+
+Planning #travel/food and #travel/japan
+
+[[Ama Awa Resort]]
+
+https://maps.app.goo.gl/FiNsEb1Q9CSfmT1SA
+```
