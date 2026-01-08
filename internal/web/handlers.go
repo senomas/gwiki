@@ -1444,6 +1444,10 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		s.handleSaveNote(w, r, strings.TrimSuffix(pathPart, "/save"))
 		return
 	}
+	if strings.HasSuffix(pathPart, "/delete") {
+		s.handleDeleteNote(w, r, strings.TrimSuffix(pathPart, "/delete"))
+		return
+	}
 	if strings.HasSuffix(pathPart, "/preview") {
 		s.handlePreview(w, r, strings.TrimSuffix(pathPart, "/preview"))
 		return
@@ -1650,6 +1654,31 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		FrontmatterBlock: index.FrontmatterBlock(string(content)),
 	}
 	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePath string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	unlock := s.locker.Lock(notePath)
+	defer unlock()
+
+	if err := os.Remove(fullPath); err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = s.idx.RemoveNoteByPath(context.Background(), notePath)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath string) {

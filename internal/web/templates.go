@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 type Templates struct {
@@ -35,6 +36,26 @@ func MustParseTemplates() *Templates {
 				out[key] = values[i+1]
 			}
 			return out, nil
+		},
+		"safeID": func(value string) string {
+			var b strings.Builder
+			lastDash := false
+			for _, r := range value {
+				if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+					b.WriteRune(r)
+					lastDash = false
+					continue
+				}
+				if !lastDash {
+					b.WriteRune('-')
+					lastDash = true
+				}
+			}
+			out := strings.Trim(b.String(), "-")
+			if out == "" {
+				return "note"
+			}
+			return out
 		},
 	})
 	t = template.Must(t.ParseGlob(glob))
