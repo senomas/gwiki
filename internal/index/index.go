@@ -307,6 +307,8 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) error {
 
 func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
 	meta := ParseContent(string(content))
+	attrs := FrontmatterAttributes(string(content))
+	uid := strings.TrimSpace(attrs.ID)
 	hash := sha256.Sum256(content)
 	checksum := hex.EncodeToString(hash[:])
 
@@ -322,9 +324,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if errors.Is(err, sql.ErrNoRows) {
 		createdAt = time.Now().Unix()
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO files(path, title, hash, mtime_unix, size, created_at, updated_at, priority)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-		`, notePath, meta.Title, checksum, mtime.Unix(), size, createdAt, time.Now().Unix(), meta.Priority)
+			INSERT INTO files(path, title, uid, hash, mtime_unix, size, created_at, updated_at, priority)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, notePath, meta.Title, uid, checksum, mtime.Unix(), size, createdAt, time.Now().Unix(), meta.Priority)
 		if err != nil {
 			return err
 		}
@@ -333,8 +335,8 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 	} else if err == nil {
 		_, err = tx.ExecContext(ctx, `
-			UPDATE files SET title=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=? WHERE id=?
-		`, meta.Title, checksum, mtime.Unix(), size, time.Now().Unix(), meta.Priority, existingID)
+			UPDATE files SET title=?, uid=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=? WHERE id=?
+		`, meta.Title, uid, checksum, mtime.Unix(), size, time.Now().Unix(), meta.Priority, existingID)
 		if err != nil {
 			return err
 		}
@@ -1759,8 +1761,8 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 	return count, nil
 }
 
-func (i *Index) Backlinks(ctx context.Context, notePath string, title string) ([]Backlink, error) {
-	candidates := backlinkCandidates(notePath, title)
+func (i *Index) Backlinks(ctx context.Context, notePath string, title string, uid string) ([]Backlink, error) {
+	candidates := backlinkCandidates(notePath, title, uid)
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -1796,10 +1798,11 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string) ([
 	return backlinks, rows.Err()
 }
 
-func backlinkCandidates(notePath string, title string) []string {
+func backlinkCandidates(notePath string, title string, uid string) []string {
 	notePath = strings.TrimSpace(notePath)
 	title = strings.TrimSpace(title)
-	if notePath == "" && title == "" {
+	uid = strings.TrimSpace(uid)
+	if notePath == "" && title == "" && uid == "" {
 		return nil
 	}
 	noExt := strings.TrimSuffix(notePath, ".md")
@@ -1825,6 +1828,7 @@ func backlinkCandidates(notePath string, title string) []string {
 	add("/notes/" + titleSlug + ".md")
 	add("notes/" + titleSlug)
 	add("/notes/" + titleSlug)
+	add(uid)
 	seen := map[string]struct{}{}
 	unique := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -1932,6 +1936,49 @@ func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) 
 func (i *Index) PathByFileID(ctx context.Context, id int) (string, error) {
 	var path string
 	if err := i.db.QueryRowContext(ctx, "SELECT path FROM files WHERE id=?", id).Scan(&path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (i *Index) PathByUID(ctx context.Context, uid string) (string, error) {
+	uid = strings.TrimSpace(uid)
+	if uid == "" {
+		return "", sql.ErrNoRows
+	}
+	var path string
+	if err := i.db.QueryRowContext(ctx, "SELECT path FROM files WHERE lower(uid)=lower(?)", uid).Scan(&path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (i *Index) PathTitleByUID(ctx context.Context, uid string) (string, string, error) {
+	uid = strings.TrimSpace(uid)
+	if uid == "" {
+		return "", "", sql.ErrNoRows
+	}
+	var path string
+	var title string
+	if err := i.db.QueryRowContext(ctx, "SELECT path, title FROM files WHERE lower(uid)=lower(?)", uid).Scan(&path, &title); err != nil {
+		return "", "", err
+	}
+	return path, title, nil
+}
+
+func (i *Index) PathByTitleNewest(ctx context.Context, title string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", sql.ErrNoRows
+	}
+	var path string
+	if err := i.db.QueryRowContext(ctx, `
+		SELECT path
+		FROM files
+		WHERE lower(title)=lower(?)
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, title).Scan(&path); err != nil {
 		return "", err
 	}
 	return path, nil

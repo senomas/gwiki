@@ -34,13 +34,16 @@
     .note-body ul,
     .note-body ol {
       margin: 0.75rem 0 0.75rem 1.25rem;
+      padding-left: 0;
     }
     .note-body li {
       margin: 0.35rem 0;
+      padding-left: 0.3rem;
     }
     .note-body li:has(> input[type="checkbox"]) {
       list-style: none;
-      padding-left: 1.25rem;
+      position: relative;
+      padding-left: 0.3rem;
     }
     .note-body input[type="checkbox"] {
       appearance: none;
@@ -56,8 +59,13 @@
       position: relative;
       top: -1px;
       place-content: center;
-      margin-right: 0.5rem;
+      margin: 0;
       vertical-align: -0.05rem;
+    }
+    .note-body li:has(> input[type="checkbox"]) > input[type="checkbox"] {
+      position: absolute;
+      left: -1rem;
+      top: 0.1rem;
     }
     .note-body input[type="checkbox"][data-task-id] {
       cursor: pointer;

@@ -1259,7 +1259,7 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if err != nil {
 			return nil, offset, false, err
 		}
-		htmlStr, err := renderNoteBody(content)
+		htmlStr, err := s.renderNoteBody(content)
 		if err != nil {
 			return nil, offset, false, err
 		}
@@ -1502,7 +1502,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
-	htmlStr, err := renderNoteBody(normalizedContent)
+	htmlStr, err := s.renderNoteBody(normalizedContent)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1554,14 +1554,15 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	tagQuery := buildTagsQuery(activeTags)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch)
-	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title)
+	noteMeta := index.FrontmatterAttributes(string(content))
+	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title, noteMeta.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	backlinkViews := make([]BacklinkView, 0, len(backlinks))
 	for _, link := range backlinks {
-		lineHTML, err := renderLineMarkdown(link.Line)
+		lineHTML, err := s.renderLineMarkdown(link.Line)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1579,7 +1580,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		ContentTemplate:  "view",
 		NotePath:         notePath,
 		NoteTitle:        meta.Title,
-		NoteMeta:         index.FrontmatterAttributes(string(content)),
+		NoteMeta:         noteMeta,
 		RenderedHTML:     template.HTML(htmlStr),
 		Tags:             tags,
 		TagLinks:         tagLinks,
@@ -1906,7 +1907,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string)
 		return
 	}
 
-	htmlStr, err := renderMarkdown([]byte(content))
+	htmlStr, err := s.renderMarkdown([]byte(content))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1916,9 +1917,9 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string)
 	s.views.RenderTemplate(w, "note_content", data)
 }
 
-func renderMarkdown(data []byte) (string, error) {
+func (s *Server) renderMarkdown(data []byte) (string, error) {
 	body := index.StripFrontmatter(string(data))
-	body = expandWikiLinks(body)
+	body = s.expandWikiLinks(body)
 	var b strings.Builder
 	if err := mdRenderer.Convert([]byte(body), &b); err != nil {
 		return "", err
@@ -1926,10 +1927,10 @@ func renderMarkdown(data []byte) (string, error) {
 	return b.String(), nil
 }
 
-func renderNoteBody(data []byte) (string, error) {
+func (s *Server) renderNoteBody(data []byte) (string, error) {
 	body := index.StripFrontmatter(string(data))
 	body = stripFirstHeading(body)
-	body = expandWikiLinks(body)
+	body = s.expandWikiLinks(body)
 	var b strings.Builder
 	if err := mdRenderer.Convert([]byte(body), &b); err != nil {
 		return "", err
@@ -1937,11 +1938,11 @@ func renderNoteBody(data []byte) (string, error) {
 	return b.String(), nil
 }
 
-func renderLineMarkdown(line string) (template.HTML, error) {
+func (s *Server) renderLineMarkdown(line string) (template.HTML, error) {
 	if strings.TrimSpace(line) == "" {
 		return template.HTML(""), nil
 	}
-	htmlStr, err := renderMarkdown([]byte(line))
+	htmlStr, err := s.renderMarkdown([]byte(line))
 	if err != nil {
 		return "", err
 	}
@@ -1953,7 +1954,7 @@ func renderLineMarkdown(line string) (template.HTML, error) {
 	return template.HTML(htmlStr), nil
 }
 
-func expandWikiLinks(input string) string {
+func (s *Server) expandWikiLinks(input string) string {
 	if !strings.Contains(input, "[[") {
 		return input
 	}
@@ -1962,8 +1963,14 @@ func expandWikiLinks(input string) string {
 		if trimmed == "" {
 			return match
 		}
-		target := slugify(trimmed)
-		return fmt.Sprintf("[%s](/notes/%s)", trimmed, fs.EnsureMDExt(target))
+		target, label, err := s.resolveWikiLink(trimmed)
+		if err != nil || target == "" {
+			target = fs.EnsureMDExt(slugify(trimmed))
+		}
+		if label == "" {
+			label = trimmed
+		}
+		return fmt.Sprintf("[%s](/notes/%s)", label, target)
 	})
 }
 
@@ -1980,6 +1987,52 @@ func stripFirstHeading(body string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *Server) resolveWikiLink(ref string) (string, string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", "", nil
+	}
+	ctx := context.Background()
+	if path, title, err := s.idx.PathTitleByUID(ctx, ref); err == nil {
+		return path, title, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	if path, err := s.idx.PathByTitleNewest(ctx, ref); err == nil {
+		return path, "", nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+
+	candidates := []string{ref}
+	trimmed := strings.TrimPrefix(ref, "/notes/")
+	trimmed = strings.TrimPrefix(trimmed, "notes/")
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	if trimmed != ref && trimmed != "" {
+		candidates = append(candidates, trimmed)
+	}
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		for _, variant := range []string{candidate, fs.EnsureMDExt(candidate)} {
+			if variant == "" {
+				continue
+			}
+			if _, ok := seen[variant]; ok {
+				continue
+			}
+			seen[variant] = struct{}{}
+			exists, err := s.idx.NoteExists(ctx, variant)
+			if err != nil {
+				return "", "", err
+			}
+			if exists {
+				return variant, "", nil
+			}
+		}
+	}
+	return "", "", nil
 }
 
 func slugify(input string) string {
