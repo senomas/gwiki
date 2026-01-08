@@ -171,6 +171,15 @@ type HistoryEntry struct {
 	Action string
 }
 
+type FrontmatterAttrs struct {
+	ID           string
+	Created      string
+	Updated      string
+	Priority     string
+	HistoryCount int
+	Has          bool
+}
+
 func DeriveTitleFromBody(body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
@@ -288,6 +297,63 @@ func LatestHistoryTime(content string) (time.Time, bool) {
 		}
 	}
 	return latest, found
+}
+
+func FrontmatterAttributes(content string) FrontmatterAttrs {
+	lines, _, ok := splitFrontmatterLines(content)
+	if !ok {
+		return FrontmatterAttrs{}
+	}
+	attrs := FrontmatterAttrs{Has: true}
+	for _, line := range lines {
+		key, val := parseFrontmatterLine(line)
+		if key == "" {
+			continue
+		}
+		val = strings.TrimSpace(strings.Trim(val, "\""))
+		switch strings.ToLower(key) {
+		case "id":
+			attrs.ID = val
+		case "created":
+			attrs.Created = val
+		case "updated":
+			attrs.Updated = val
+		case "priority":
+			attrs.Priority = val
+		}
+	}
+	attrs.HistoryCount = countHistoryEntries(lines)
+	return attrs
+}
+
+func countHistoryEntries(lines []string) int {
+	historyIdx := -1
+	for i, line := range lines {
+		key, _ := parseFrontmatterLine(line)
+		if strings.EqualFold(key, "history") {
+			historyIdx = i
+			break
+		}
+	}
+	if historyIdx == -1 {
+		return 0
+	}
+	start := historyIdx + 1
+	end := start
+	for end < len(lines) && isIndentedLine(lines[end]) {
+		end++
+	}
+	if end <= start {
+		return 0
+	}
+	count := 0
+	for i := start; i < end; i++ {
+		trimmed := strings.TrimLeft(lines[i], " \t")
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "-\t") || trimmed == "-" {
+			count++
+		}
+	}
+	return count
 }
 
 func addHistoryEntry(lines *[]string, idx map[string]int, at, action string) {

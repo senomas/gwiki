@@ -22,6 +22,7 @@ type ViewData struct {
 	RenameToPath     string
 	RenderedHTML     template.HTML
 	SearchQuery      string
+	NoteMeta         index.FrontmatterAttrs
 	SearchResults    []index.SearchResult
 	RecentNotes      []index.NoteSummary
 	HomeNotes        []NoteCard
@@ -60,4 +61,5 @@ type NoteCard struct {
 	Title        string
 	RenderedHTML template.HTML
 	UpdatedLabel string
+	Meta         index.FrontmatterAttrs
 }

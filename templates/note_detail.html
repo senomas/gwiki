@@ -1,0 +1,17 @@
+{{define "note_detail"}}
+<div class="space-y-3">
+  <h1 class="text-2xl font-semibold text-slate-100">{{.NoteTitle}}</h1>
+  {{if .NoteMeta.Has}}
+    <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+      {{if .NoteMeta.Updated}}<span>Updated {{.NoteMeta.Updated}}</span>{{end}}
+      {{if .NoteMeta.Created}}<span>Created {{.NoteMeta.Created}}</span>{{end}}
+      {{if .NoteMeta.Priority}}<span>Priority {{.NoteMeta.Priority}}</span>{{end}}
+      {{if .NoteMeta.ID}}<span>ID {{.NoteMeta.ID}}</span>{{end}}
+      {{if gt .NoteMeta.HistoryCount 0}}<span>History {{.NoteMeta.HistoryCount}}</span>{{end}}
+    </div>
+  {{end}}
+  <div class="note-body text-sm leading-relaxed text-slate-200">
+    {{if .RenderedHTML}}{{.RenderedHTML}}{{else}}{{template "note_content" .}}{{end}}
+  </div>
+</div>
+{{end}}

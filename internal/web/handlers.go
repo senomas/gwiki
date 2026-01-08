@@ -1259,7 +1259,7 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if err != nil {
 			return nil, offset, false, err
 		}
-		htmlStr, err := renderMarkdown(content)
+		htmlStr, err := renderNoteBody(content)
 		if err != nil {
 			return nil, offset, false, err
 		}
@@ -1277,11 +1277,16 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 			labelTime = historyTime
 		}
 		label := labelTime.Local().Format("Mon, Jan 2, 2006")
+		metaAttrs := index.FrontmatterAttributes(normalized)
+		if metaAttrs.Updated == "" {
+			metaAttrs.Updated = label
+		}
 		cards = append(cards, NoteCard{
 			Path:         note.Path,
 			Title:        note.Title,
 			RenderedHTML: template.HTML(htmlStr),
 			UpdatedLabel: label,
+			Meta:         metaAttrs,
 		})
 	}
 	return cards, offset + len(notes), hasMore, nil
@@ -1495,7 +1500,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
-	htmlStr, err := renderMarkdown(normalizedContent)
+	htmlStr, err := renderNoteBody(normalizedContent)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1572,6 +1577,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		ContentTemplate:  "view",
 		NotePath:         notePath,
 		NoteTitle:        meta.Title,
+		NoteMeta:         index.FrontmatterAttributes(string(content)),
 		RenderedHTML:     template.HTML(htmlStr),
 		Tags:             tags,
 		TagLinks:         tagLinks,
@@ -1893,6 +1899,17 @@ func renderMarkdown(data []byte) (string, error) {
 	return b.String(), nil
 }
 
+func renderNoteBody(data []byte) (string, error) {
+	body := index.StripFrontmatter(string(data))
+	body = stripFirstHeading(body)
+	body = expandWikiLinks(body)
+	var b strings.Builder
+	if err := mdRenderer.Convert([]byte(body), &b); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
 func renderLineMarkdown(line string) (template.HTML, error) {
 	if strings.TrimSpace(line) == "" {
 		return template.HTML(""), nil
@@ -1921,6 +1938,21 @@ func expandWikiLinks(input string) string {
 		target := slugify(trimmed)
 		return fmt.Sprintf("[%s](/notes/%s)", trimmed, fs.EnsureMDExt(target))
 	})
+}
+
+func stripFirstHeading(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# ") {
+			lines = append(lines[:i], lines[i+1:]...)
+			break
+		}
+		if trimmed != "" {
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func slugify(input string) string {

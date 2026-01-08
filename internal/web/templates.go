@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"fmt"
 	"html/template"
 	"net/http"
 	"path/filepath"
@@ -20,7 +21,23 @@ func MustParseTemplates() *Templates {
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	glob := filepath.Join(root, "templates", "*.html")
 
-	t := template.Must(template.ParseGlob(glob))
+	t := template.New("").Funcs(template.FuncMap{
+		"dict": func(values ...any) (map[string]any, error) {
+			if len(values)%2 != 0 {
+				return nil, fmt.Errorf("dict requires even number of arguments")
+			}
+			out := make(map[string]any, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				key, ok := values[i].(string)
+				if !ok {
+					return nil, fmt.Errorf("dict keys must be strings")
+				}
+				out[key] = values[i+1]
+			}
+			return out, nil
+		},
+	})
+	t = template.Must(t.ParseGlob(glob))
 	return &Templates{all: t}
 }
 
