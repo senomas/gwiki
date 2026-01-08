@@ -2,18 +2,8 @@
 <article
   class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]"
 >
-  <div
-    class="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-500"
-  >
-    <span>{{.UpdatedLabel}}</span>
-    <a
-      class="text-slate-400 transition hover:text-slate-200"
-      href="/notes/{{.Path}}"
-      >Open</a
-    >
-  </div>
   <div class="mt-4">
-    {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "RenderedHTML" .RenderedHTML)}}
+    {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "RenderedHTML" .RenderedHTML "NotePath" .Path)}}
   </div>
 </article>
 {{else}}

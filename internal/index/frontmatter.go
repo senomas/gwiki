@@ -173,10 +173,13 @@ type HistoryEntry struct {
 
 type FrontmatterAttrs struct {
 	ID           string
-	Created      string
-	Updated      string
+	Created      time.Time
+	CreatedRaw   string
+	Updated      time.Time
+	UpdatedRaw   string
 	Priority     string
 	HistoryCount int
+	History      []HistoryEntry
 	Has          bool
 }
 
@@ -315,15 +318,29 @@ func FrontmatterAttributes(content string) FrontmatterAttrs {
 		case "id":
 			attrs.ID = val
 		case "created":
-			attrs.Created = val
+			attrs.Created, attrs.CreatedRaw = parseFrontmatterTime(val)
 		case "updated":
-			attrs.Updated = val
+			attrs.Updated, attrs.UpdatedRaw = parseFrontmatterTime(val)
 		case "priority":
 			attrs.Priority = val
 		}
 	}
 	attrs.HistoryCount = countHistoryEntries(lines)
+	if attrs.HistoryCount > 0 {
+		attrs.History = ParseHistoryEntries(content)
+	}
 	return attrs
+}
+
+func parseFrontmatterTime(raw string) (time.Time, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, ""
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, ""
+	}
+	return time.Time{}, raw
 }
 
 func countHistoryEntries(lines []string) int {

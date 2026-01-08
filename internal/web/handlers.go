@@ -1276,16 +1276,14 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if historyTime, ok := index.LatestHistoryTime(normalized); ok {
 			labelTime = historyTime
 		}
-		label := labelTime.Local().Format("Mon, Jan 2, 2006")
 		metaAttrs := index.FrontmatterAttributes(normalized)
-		if metaAttrs.Updated == "" {
-			metaAttrs.Updated = label
+		if metaAttrs.Updated.IsZero() {
+			metaAttrs.Updated = labelTime.Local()
 		}
 		cards = append(cards, NoteCard{
 			Path:         note.Path,
 			Title:        note.Title,
 			RenderedHTML: template.HTML(htmlStr),
-			UpdatedLabel: label,
 			Meta:         metaAttrs,
 		})
 	}

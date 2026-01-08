@@ -60,6 +60,5 @@ type NoteCard struct {
 	Path         string
 	Title        string
 	RenderedHTML template.HTML
-	UpdatedLabel string
 	Meta         index.FrontmatterAttrs
 }
