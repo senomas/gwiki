@@ -483,6 +483,7 @@ var (
 	mapsEmbedCoordsRegexp = regexp.MustCompile(`@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)`)
 	mapsEmbedHTTPClient   = &http.Client{Timeout: 3 * time.Second}
 	mapsEmbedCacheKind    = "maps"
+	mapsEmbedContextKey   = parser.NewContextKey()
 )
 
 const (
@@ -537,6 +538,7 @@ func (e *mapsEmbedExtension) Extend(m goldmark.Markdown) {
 type mapsEmbedTransformer struct{}
 
 func (t *mapsEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ctx := mapsEmbedContext(pc)
 	source := reader.Source()
 	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -559,7 +561,7 @@ func (t *mapsEmbedTransformer) Transform(node *ast.Document, reader text.Reader,
 			return ast.WalkContinue, nil
 		}
 
-		status, embedURL, errMsg := lookupMapsEmbed(url)
+		status, embedURL, errMsg := lookupMapsEmbed(ctx, url)
 		switch status {
 		case mapsEmbedStatusFound:
 			embed := &mapsEmbed{URL: embedURL, OriginalURL: url}
@@ -684,9 +686,21 @@ func isMapsAppShortLink(url string) bool {
 		strings.HasPrefix(lower, mapsAppShortLinkPrefixInsecure)
 }
 
-func lookupMapsEmbed(shortURL string) (mapsEmbedStatus, string, string) {
+func mapsEmbedContext(pc parser.Context) context.Context {
+	if pc == nil {
+		return context.TODO()
+	}
+	if value := pc.Get(mapsEmbedContextKey); value != nil {
+		if ctx, ok := value.(context.Context); ok && ctx != nil {
+			return ctx
+		}
+	}
+	return context.TODO()
+}
+
+func lookupMapsEmbed(ctx context.Context, shortURL string) (mapsEmbedStatus, string, string) {
 	if embedCacheStore != nil {
-		entry, ok, err := embedCacheStore.GetEmbedCache(context.Background(), shortURL, mapsEmbedCacheKind)
+		entry, ok, err := embedCacheStore.GetEmbedCache(ctx, shortURL, mapsEmbedCacheKind)
 		if err == nil && ok {
 			if entry.Status == index.EmbedCacheStatusFound {
 				return mapsEmbedStatusFound, entry.EmbedURL, ""
@@ -707,12 +721,12 @@ func lookupMapsEmbed(shortURL string) (mapsEmbedStatus, string, string) {
 	mapsEmbedMarkInFlight(shortURL)
 
 	if embedURL, ok := resolveMapsEmbedNow(shortURL, mapsEmbedSyncTimeout); ok {
-		mapsEmbedStoreFound(shortURL, embedURL)
+		mapsEmbedStoreFound(ctx, shortURL, embedURL)
 		mapsEmbedClearInFlight(shortURL)
 		return mapsEmbedStatusFound, embedURL, ""
 	}
 
-	go resolveMapsEmbedAsync(shortURL)
+	go resolveMapsEmbedAsync(context.WithoutCancel(ctx), shortURL)
 	return mapsEmbedStatusPending, "", ""
 }
 
@@ -721,15 +735,15 @@ func resolveMapsEmbedNow(shortURL string, timeout time.Duration) (string, bool) 
 	return resolveMapsEmbedWithClient(shortURL, client)
 }
 
-func resolveMapsEmbedAsync(shortURL string) {
+func resolveMapsEmbedAsync(ctx context.Context, shortURL string) {
 	embedURL, ok := resolveMapsEmbedWithClient(shortURL, mapsEmbedHTTPClient)
 	if !ok {
-		mapsEmbedStoreFailure(shortURL, "Map preview unavailable.")
+		mapsEmbedStoreFailure(ctx, shortURL, "Map preview unavailable.")
 		mapsEmbedClearInFlight(shortURL)
 		return
 	}
 
-	mapsEmbedStoreFound(shortURL, embedURL)
+	mapsEmbedStoreFound(ctx, shortURL, embedURL)
 	mapsEmbedClearInFlight(shortURL)
 }
 
@@ -773,7 +787,7 @@ func mapsEmbedClearInFlight(shortURL string) {
 	mapsEmbedInFlight.Delete(shortURL)
 }
 
-func mapsEmbedStoreFound(shortURL, embedURL string) {
+func mapsEmbedStoreFound(ctx context.Context, shortURL, embedURL string) {
 	if embedCacheStore == nil {
 		return
 	}
@@ -786,10 +800,10 @@ func mapsEmbedStoreFound(shortURL, embedURL string) {
 		UpdatedAt: now,
 		ExpiresAt: now.Add(mapsEmbedSuccessTTL),
 	}
-	_ = embedCacheStore.UpsertEmbedCache(context.Background(), entry)
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
 }
 
-func mapsEmbedStoreFailure(shortURL, message string) {
+func mapsEmbedStoreFailure(ctx context.Context, shortURL, message string) {
 	if embedCacheStore == nil {
 		return
 	}
@@ -802,7 +816,7 @@ func mapsEmbedStoreFailure(shortURL, message string) {
 		UpdatedAt: now,
 		ExpiresAt: now.Add(mapsEmbedFailureTTL),
 	}
-	_ = embedCacheStore.UpsertEmbedCache(context.Background(), entry)
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
 }
 
 type ttlLRUCache struct {
@@ -1283,7 +1297,7 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if err != nil {
 			return nil, offset, false, err
 		}
-		htmlStr, err := s.renderNoteBody(content)
+		htmlStr, err := s.renderNoteBody(ctx, content)
 		if err != nil {
 			return nil, offset, false, err
 		}
@@ -1623,7 +1637,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
-	htmlStr, err := s.renderNoteBody(normalizedContent)
+	htmlStr, err := s.renderNoteBody(r.Context(), normalizedContent)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1683,7 +1697,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	backlinkViews := make([]BacklinkView, 0, len(backlinks))
 	for _, link := range backlinks {
-		lineHTML, err := s.renderLineMarkdown(link.Line)
+		lineHTML, err := s.renderLineMarkdown(r.Context(), link.Line)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1815,6 +1829,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	ctx := r.Context()
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1846,7 +1861,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	if attachmentPath != "" {
 		_ = os.RemoveAll(attachmentPath)
 	}
-	_ = s.idx.RemoveNoteByPath(context.Background(), notePath)
+	_ = s.idx.RemoveNoteByPath(ctx, notePath)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -2176,6 +2191,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	ctx := r.Context()
 	if err := r.ParseForm(); err != nil {
 		s.renderEditError(w, ViewData{
 			Title:           "Edit note",
@@ -2366,11 +2382,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			}, http.StatusInternalServerError)
 			return
 		}
-		_ = s.idx.RemoveNoteByPath(context.Background(), notePath)
+		_ = s.idx.RemoveNoteByPath(ctx, notePath)
 	}
 	info, err := os.Stat(targetFullPath)
 	if err == nil {
-		_ = s.idx.IndexNote(context.Background(), targetPath, []byte(mergedContent), info.ModTime(), info.Size())
+		_ = s.idx.IndexNote(ctx, targetPath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
 
 	http.Redirect(w, r, "/notes/"+targetPath, http.StatusSeeOther)
@@ -2396,7 +2412,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string)
 		return
 	}
 
-	htmlStr, err := s.renderMarkdown([]byte(content))
+	htmlStr, err := s.renderMarkdown(r.Context(), []byte(content))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2406,32 +2422,36 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string)
 	s.views.RenderTemplate(w, "note_content", data)
 }
 
-func (s *Server) renderMarkdown(data []byte) (string, error) {
+func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error) {
 	body := index.StripFrontmatter(string(data))
-	body = s.expandWikiLinks(body)
+	body = s.expandWikiLinks(ctx, body)
 	var b strings.Builder
-	if err := mdRenderer.Convert([]byte(body), &b); err != nil {
+	parseContext := parser.NewContext()
+	parseContext.Set(mapsEmbedContextKey, ctx)
+	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
 	return b.String(), nil
 }
 
-func (s *Server) renderNoteBody(data []byte) (string, error) {
+func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error) {
 	body := index.StripFrontmatter(string(data))
 	body = stripFirstHeading(body)
-	body = s.expandWikiLinks(body)
+	body = s.expandWikiLinks(ctx, body)
 	var b strings.Builder
-	if err := mdRenderer.Convert([]byte(body), &b); err != nil {
+	parseContext := parser.NewContext()
+	parseContext.Set(mapsEmbedContextKey, ctx)
+	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
 	return b.String(), nil
 }
 
-func (s *Server) renderLineMarkdown(line string) (template.HTML, error) {
+func (s *Server) renderLineMarkdown(ctx context.Context, line string) (template.HTML, error) {
 	if strings.TrimSpace(line) == "" {
 		return template.HTML(""), nil
 	}
-	htmlStr, err := s.renderMarkdown([]byte(line))
+	htmlStr, err := s.renderMarkdown(ctx, []byte(line))
 	if err != nil {
 		return "", err
 	}
@@ -2443,7 +2463,7 @@ func (s *Server) renderLineMarkdown(line string) (template.HTML, error) {
 	return template.HTML(htmlStr), nil
 }
 
-func (s *Server) expandWikiLinks(input string) string {
+func (s *Server) expandWikiLinks(ctx context.Context, input string) string {
 	if !strings.Contains(input, "[[") {
 		return input
 	}
@@ -2452,7 +2472,7 @@ func (s *Server) expandWikiLinks(input string) string {
 		if trimmed == "" {
 			return match
 		}
-		target, label, err := s.resolveWikiLink(trimmed)
+		target, label, err := s.resolveWikiLink(ctx, trimmed)
 		if err != nil || target == "" {
 			target = fs.EnsureMDExt(slugify(trimmed))
 		}
@@ -2478,12 +2498,11 @@ func stripFirstHeading(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (s *Server) resolveWikiLink(ref string) (string, string, error) {
+func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return "", "", nil
 	}
-	ctx := context.Background()
 	if path, title, err := s.idx.PathTitleByUID(ctx, ref); err == nil {
 		return path, title, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
