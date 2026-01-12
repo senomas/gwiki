@@ -1,4 +1,5 @@
 .wiki
+.env
 notes
 tmp/
 attachments/

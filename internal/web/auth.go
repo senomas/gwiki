@@ -1,12 +1,16 @@
 package web
 
 import (
-	"crypto/rand"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
-	"sync"
+	"os"
+	"strings"
 	"time"
 
 	"gwiki/internal/auth"
@@ -20,14 +24,8 @@ type authEntry struct {
 }
 
 type Auth struct {
-	users    map[string]authEntry
-	sessions map[string]sessionEntry
-	mu       sync.Mutex
-}
-
-type sessionEntry struct {
-	user    string
-	expires time.Time
+	users  map[string]authEntry
+	secret []byte
 }
 
 func newAuth(cfg config.Config) (*Auth, error) {
@@ -54,15 +52,19 @@ func newAuth(cfg config.Config) (*Auth, error) {
 		return nil, nil
 	}
 
+	secret, err := authSecret(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &Auth{
-		users:    users,
-		sessions: make(map[string]sessionEntry),
+		users:  users,
+		secret: secret,
 	}, nil
 }
 
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if user, ok := a.sessionUser(r); ok {
+		if user, ok := a.tokenUser(r); ok {
 			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -98,44 +100,95 @@ func (a *Auth) Authenticate(user, pass string) bool {
 	return a.verify(user, pass)
 }
 
-func (a *Auth) CreateSession(user string) (string, error) {
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return "", err
+func (a *Auth) CreateToken(user string) (string, error) {
+	claims := jwtClaims{
+		Sub: user,
+		Iat: time.Now().Unix(),
+		Exp: time.Now().Add(24 * time.Hour).Unix(),
 	}
-	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
-	a.mu.Lock()
-	a.sessions[token] = sessionEntry{
-		user:    user,
-		expires: time.Now().Add(24 * time.Hour),
-	}
-	a.mu.Unlock()
-	return token, nil
+	return signJWT(claims, a.secret)
 }
 
-func (a *Auth) sessionUser(r *http.Request) (string, bool) {
+func (a *Auth) tokenUser(r *http.Request) (string, bool) {
 	cookie, err := r.Cookie("gwiki_session")
 	if err != nil || cookie.Value == "" {
 		return "", false
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	entry, ok := a.sessions[cookie.Value]
-	if !ok {
+	claims, err := parseJWT(cookie.Value, a.secret)
+	if err != nil {
 		return "", false
 	}
-	if time.Now().After(entry.expires) {
-		delete(a.sessions, cookie.Value)
+	if claims.Exp <= time.Now().Unix() {
 		return "", false
 	}
-	return entry.user, true
+	if strings.TrimSpace(claims.Sub) == "" {
+		return "", false
+	}
+	return claims.Sub, true
 }
 
-func (a *Auth) ClearSession(token string) {
-	if token == "" {
-		return
+type jwtClaims struct {
+	Sub string `json:"sub"`
+	Iat int64  `json:"iat"`
+	Exp int64  `json:"exp"`
+}
+
+func authSecret(cfg config.Config) ([]byte, error) {
+	if v := os.Getenv("WIKI_AUTH_SECRET"); v != "" {
+		return []byte(v), nil
 	}
-	a.mu.Lock()
-	delete(a.sessions, token)
-	a.mu.Unlock()
+	if cfg.AuthFile == "" {
+		return nil, errors.New("WIKI_AUTH_SECRET or WIKI_AUTH_FILE required for JWT auth")
+	}
+	data, err := os.ReadFile(cfg.AuthFile)
+	if err != nil {
+		return nil, fmt.Errorf("read auth file for jwt secret: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return sum[:], nil
+}
+
+func signJWT(claims jwtClaims, secret []byte) (string, error) {
+	header := `{"alg":"HS256","typ":"JWT"}`
+	headerEnc := base64.RawURLEncoding.EncodeToString([]byte(header))
+	payloadBytes, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	payloadEnc := base64.RawURLEncoding.EncodeToString(payloadBytes)
+	signingInput := headerEnc + "." + payloadEnc
+	sig := hmacSHA256([]byte(signingInput), secret)
+	sigEnc := base64.RawURLEncoding.EncodeToString(sig)
+	return signingInput + "." + sigEnc, nil
+}
+
+func parseJWT(token string, secret []byte) (jwtClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return jwtClaims{}, errors.New("invalid token format")
+	}
+	signingInput := parts[0] + "." + parts[1]
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return jwtClaims{}, errors.New("invalid token signature")
+	}
+	expected := hmacSHA256([]byte(signingInput), secret)
+	if subtle.ConstantTimeCompare(sig, expected) != 1 {
+		return jwtClaims{}, errors.New("invalid token signature")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return jwtClaims{}, errors.New("invalid token payload")
+	}
+	var claims jwtClaims
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return jwtClaims{}, errors.New("invalid token payload")
+	}
+	return claims, nil
+}
+
+func hmacSHA256(input, secret []byte) []byte {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write(input)
+	return mac.Sum(nil)
 }

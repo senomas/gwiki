@@ -19,6 +19,7 @@ type Config struct {
 }
 
 func Load() Config {
+	initEnvFile()
 	cfg := Config{
 		RepoPath:   os.Getenv("WIKI_REPO_PATH"),
 		ListenAddr: envOr("WIKI_LISTEN_ADDR", "127.0.0.1:8080"),

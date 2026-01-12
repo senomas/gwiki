@@ -1124,7 +1124,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.views.RenderPage(w, data)
 		return
 	}
-	token, err := s.auth.CreateSession(user)
+	token, err := s.auth.CreateToken(user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1145,7 +1145,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cookie, err := r.Cookie("gwiki_session"); err == nil && cookie.Value != "" {
-		s.auth.ClearSession(cookie.Value)
 		http.SetCookie(w, &http.Cookie{
 			Name:     "gwiki_session",
 			Value:    "",
