@@ -11,6 +11,7 @@
     <details class="group">
       <summary class="list-none cursor-pointer select-none text-xs text-slate-500">
         <span class="group-open:hidden">
+          <span class="mr-2">{{if .NoteMeta.Folder}}{{.NoteMeta.Folder}}{{else}}/{{end}}</span>
           {{if .NoteMeta.Updated.IsZero}}
             {{if .NoteMeta.UpdatedRaw}}{{.NoteMeta.UpdatedRaw}}{{else}}Metadata{{end}}
           {{else}}
@@ -20,6 +21,7 @@
         <span class="hidden group-open:inline">Metadata</span>
       </summary>
       <div class="mt-2 grid gap-x-6 gap-y-1 text-xs text-slate-500 sm:grid-cols-[max-content,1fr]">
+        <span class="uppercase tracking-[0.18em] text-slate-600">Folder</span><span>{{if .NoteMeta.Folder}}{{.NoteMeta.Folder}}{{else}}/{{end}}</span>
         {{if .NoteMeta.Updated.IsZero}}{{else}}<span class="uppercase tracking-[0.18em] text-slate-600">Updated</span><span>{{.NoteMeta.Updated.Format "02/01/2006 15:04:05"}}</span>{{end}}
         {{if .NoteMeta.Created.IsZero}}{{else}}<span class="uppercase tracking-[0.18em] text-slate-600">Created</span><span>{{.NoteMeta.Created.Format "02/01/2006 15:04:05"}}</span>{{end}}
         {{if .NoteMeta.UpdatedRaw}}<span class="uppercase tracking-[0.18em] text-slate-600">Updated</span><span>{{.NoteMeta.UpdatedRaw}}</span>{{end}}
