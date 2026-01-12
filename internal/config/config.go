@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -24,6 +25,9 @@ func Load() Config {
 		AuthUser:   os.Getenv("WIKI_AUTH_USER"),
 		AuthPass:   os.Getenv("WIKI_AUTH_PASS"),
 		AuthFile:   os.Getenv("WIKI_AUTH_FILE"),
+	}
+	if cfg.AuthFile == "" && cfg.RepoPath != "" {
+		cfg.AuthFile = filepath.Join(cfg.RepoPath, ".wiki", "auth.txt")
 	}
 
 	cfg.GitDebounce = parseDurationOr("WIKI_GIT_DEBOUNCE", 3*time.Minute)

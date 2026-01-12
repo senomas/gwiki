@@ -7,6 +7,7 @@
       <div class="flex-1">
         {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "RenderedHTML" .RenderedHTML "NotePath" .Path)}}
       </div>
+      {{if and $.AuthEnabled $.IsAuthenticated}}
       <div>
         <input id="delete-modal-{{safeID .Path}}-{{safeID .Meta.ID}}" class="peer hidden" type="checkbox">
         <details class="relative">
@@ -32,6 +33,7 @@
           </div>
         </div>
       </div>
+      {{end}}
     </div>
   </div>
 </article>

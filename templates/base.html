@@ -131,8 +131,8 @@
     }
   </style>
 </head>
-<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit")}}
+<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit") (eq .ContentTemplate "login")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
+{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit") (eq .ContentTemplate "login")}}
   {{.ContentHTML}}
 {{else}}
   <div class="mx-auto max-w-5xl px-6 py-8">
@@ -143,7 +143,12 @@
       <form class="w-full max-w-xs" action="/search" method="get">
         <input class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" type="search" name="q" placeholder="Search" value="{{.SearchQuery}}">
       </form>
-      {{if and .AuthEnabled (not .IsAuthenticated)}}
+      {{if and .AuthEnabled .IsAuthenticated}}
+        <div class="flex items-center gap-2 text-sm">
+          <span class="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-slate-700">{{.CurrentUser.Name}}</span>
+          <a class="rounded-md border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50" href="/logout">Logout</a>
+        </div>
+      {{else if .AuthEnabled}}
         <a class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" href="/login">Login</a>
       {{end}}
     </header>

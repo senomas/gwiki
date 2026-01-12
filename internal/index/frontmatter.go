@@ -124,6 +124,54 @@ func SetVisibility(content string, visibility string) (string, error) {
 	return fmBlock + "\n" + body, nil
 }
 
+func SetFolder(content string, folder string) (string, error) {
+	folder = strings.TrimSpace(folder)
+	if folder == "" {
+		lines, body, ok := splitFrontmatterLines(content)
+		if !ok {
+			return "", fmt.Errorf("frontmatter required")
+		}
+		lineIdx := map[string]int{}
+		for i, line := range lines {
+			key, _ := parseFrontmatterLine(line)
+			if key == "" {
+				continue
+			}
+			key = strings.ToLower(key)
+			if _, exists := lineIdx[key]; !exists {
+				lineIdx[key] = i
+			}
+		}
+		removeFrontmatterLine(&lines, lineIdx, "folder")
+		fmBlock := "---\n" + strings.Join(lines, "\n") + "\n---"
+		if body == "" {
+			return fmBlock + "\n", nil
+		}
+		return fmBlock + "\n" + body, nil
+	}
+	lines, body, ok := splitFrontmatterLines(content)
+	if !ok {
+		return "", fmt.Errorf("frontmatter required")
+	}
+	lineIdx := map[string]int{}
+	for i, line := range lines {
+		key, _ := parseFrontmatterLine(line)
+		if key == "" {
+			continue
+		}
+		key = strings.ToLower(key)
+		if _, exists := lineIdx[key]; !exists {
+			lineIdx[key] = i
+		}
+	}
+	setFrontmatterLine(&lines, lineIdx, "folder", folder)
+	fmBlock := "---\n" + strings.Join(lines, "\n") + "\n---"
+	if body == "" {
+		return fmBlock + "\n", nil
+	}
+	return fmBlock + "\n" + body, nil
+}
+
 func HasFrontmatter(content string) bool {
 	_, _, ok := splitFrontmatterLines(content)
 	return ok
@@ -217,6 +265,7 @@ type FrontmatterAttrs struct {
 	UpdatedRaw   string
 	Priority     string
 	Visibility   string
+	Folder       string
 	HistoryCount int
 	History      []HistoryEntry
 	Has          bool
@@ -364,6 +413,8 @@ func FrontmatterAttributes(content string) FrontmatterAttrs {
 			attrs.Priority = val
 		case "visibility":
 			attrs.Visibility = val
+		case "folder":
+			attrs.Folder = val
 		}
 	}
 	attrs.HistoryCount = countHistoryEntries(lines)

@@ -60,6 +60,10 @@
             <option value="public" {{if eq .NoteMeta.Visibility "public"}}selected{{end}}>Public</option>
           </select>
         </div>
+        <div class="space-y-2">
+          <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Folder</label>
+          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" placeholder="journal/2024" value="{{.NoteMeta.Folder}}">
+        </div>
         <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="content">{{.RawContent}}</textarea>
         <div class="flex justify-end gap-2">
           <a class="rounded-xl border border-slate-700/70 bg-[#121417] px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="javascript:history.back()">Cancel</a>

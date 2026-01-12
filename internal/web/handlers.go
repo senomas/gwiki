@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -116,6 +117,28 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 func normalizeLineEndings(input string) string {
 	normalized := strings.ReplaceAll(input, "\r\n", "\n")
 	return strings.ReplaceAll(normalized, "\r", "\n")
+}
+
+func normalizeFolderPath(input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", nil
+	}
+	if strings.ContainsRune(input, 0) {
+		return "", fs.ErrUnsafePath
+	}
+	input = strings.ReplaceAll(input, "\\", "/")
+	if strings.HasPrefix(input, "/") {
+		return "", fs.ErrUnsafePath
+	}
+	clean := path.Clean(input)
+	if clean == "." {
+		return "", nil
+	}
+	if strings.HasPrefix(clean, "..") {
+		return "", fs.ErrUnsafePath
+	}
+	return clean, nil
 }
 
 func listAttachmentNames(dir string) []string {
@@ -1062,8 +1085,77 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	w.Header().Set("WWW-Authenticate", `Basic realm="gwiki"`)
-	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	if r.Method == http.MethodGet {
+		data := ViewData{
+			Title:           "Login",
+			ContentTemplate: "login",
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderPage(w, data)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	user := strings.TrimSpace(r.FormValue("username"))
+	pass := r.FormValue("password")
+	if user == "" || pass == "" {
+		data := ViewData{
+			Title:           "Login",
+			ContentTemplate: "login",
+			ErrorMessage:    "username and password required",
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderPage(w, data)
+		return
+	}
+	if !s.auth.Authenticate(user, pass) {
+		data := ViewData{
+			Title:           "Login",
+			ContentTemplate: "login",
+			ErrorMessage:    "invalid username or password",
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderPage(w, data)
+		return
+	}
+	token, err := s.auth.CreateSession(user)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "gwiki_session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if cookie, err := r.Cookie("gwiki_session"); err == nil && cookie.Value != "" {
+		s.auth.ClearSession(cookie.Value)
+		http.SetCookie(w, &http.Cookie{
+			Name:     "gwiki_session",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -1436,6 +1528,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	uploadToken := r.Form.Get("upload_token")
 	visibility := strings.TrimSpace(r.Form.Get("visibility"))
+	folderInput := r.Form.Get("folder")
 	if content == "" {
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
@@ -1475,7 +1568,38 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}, http.StatusInternalServerError)
 		return
 	}
+	folder, err := normalizeFolderPath(folderInput)
+	if err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			ErrorMessage:     "invalid folder",
+			ErrorReturnURL:   "/notes/new",
+		}, http.StatusBadRequest)
+		return
+	}
 	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
+		}, http.StatusBadRequest)
+		return
+	} else {
+		mergedContent = updated
+	}
+	if updated, err := index.SetFolder(mergedContent, folder); err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -1493,7 +1617,10 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slug := slugify(title)
-	notePath := filepath.ToSlash(filepath.Join(time.Now().Format("2006-01"), fs.EnsureMDExt(slug)))
+	notePath := fs.EnsureMDExt(slug)
+	if folder != "" {
+		notePath = filepath.ToSlash(filepath.Join(folder, notePath))
+	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		s.renderEditError(w, r, ViewData{
@@ -2339,6 +2466,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	visibility := strings.TrimSpace(r.Form.Get("visibility"))
+	folderInput := r.Form.Get("folder")
 	if content == "" {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
@@ -2376,7 +2504,36 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusInternalServerError)
 		return
 	}
+	folder, err := normalizeFolderPath(folderInput)
+	if err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     "invalid folder",
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+		}, http.StatusBadRequest)
+		return
+	}
 	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+		}, http.StatusBadRequest)
+		return
+	} else {
+		mergedContent = updated
+	}
+	if updated, err := index.SetFolder(mergedContent, folder); err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
@@ -2424,8 +2581,12 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		oldTitle = index.DeriveTitleFromBody(string(existingContent))
 	}
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
-	if titleChanged && decision == "" {
-		newPath := filepath.ToSlash(filepath.Join(filepath.Dir(notePath), fs.EnsureMDExt(slugify(derivedTitle))))
+	desiredPath := fs.EnsureMDExt(slugify(derivedTitle))
+	if folder != "" {
+		desiredPath = filepath.ToSlash(filepath.Join(folder, desiredPath))
+	}
+	if (titleChanged || filepath.ToSlash(notePath) != desiredPath) && decision == "" {
+		newPath := desiredPath
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
@@ -2446,8 +2607,8 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 
 	targetPath := notePath
 	targetFullPath := fullPath
-	if titleChanged && decision == "confirm" {
-		targetPath = filepath.ToSlash(filepath.Join(filepath.Dir(notePath), fs.EnsureMDExt(slugify(derivedTitle))))
+	if (titleChanged || filepath.ToSlash(notePath) != desiredPath) && decision == "confirm" {
+		targetPath = desiredPath
 		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
 		if err != nil {
 			s.renderEditError(w, r, ViewData{
@@ -2544,6 +2705,9 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 
 func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {
 	w.WriteHeader(status)
+	if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
+		data.NoteMeta = index.FrontmatterAttributes(data.FrontmatterBlock)
+	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }

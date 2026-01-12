@@ -8,7 +8,9 @@
       <div class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
         <a class="text-slate-400 transition hover:text-slate-200" href="javascript:history.back()">Back</a>
         <div class="flex items-center gap-2">
-          {{if .IsAuthenticated}}
+          {{if and .AuthEnabled .IsAuthenticated}}
+            <span class="rounded-xl border border-slate-800/80 bg-[#15181c] px-2.5 py-1 text-[10px] text-slate-300">{{.CurrentUser.Name}}</span>
+            <a class="text-slate-400 transition hover:text-slate-200" href="/logout">Logout</a>
             <a class="text-slate-400 transition hover:text-slate-200" href="/notes/{{if .NoteMeta.ID}}{{.NoteMeta.ID}}{{else}}{{.NotePath}}{{end}}/edit">Edit</a>
           {{else if .AuthEnabled}}
             <a class="text-slate-400 transition hover:text-slate-200" href="/login">Login</a>
