@@ -1497,6 +1497,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			NoteTitle:        "",
 			RawContent:       "",
 			FrontmatterBlock: "",
+			NoteMeta:         index.FrontmatterAttrs{Priority: "10"},
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
@@ -1529,6 +1530,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	uploadToken := r.Form.Get("upload_token")
 	visibility := strings.TrimSpace(r.Form.Get("visibility"))
 	folderInput := r.Form.Get("folder")
+	priorityInput := strings.TrimSpace(r.Form.Get("priority"))
 	if content == "" {
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
@@ -1583,7 +1585,42 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}, http.StatusBadRequest)
 		return
 	}
+	priority := "10"
+	if priorityInput != "" {
+		val, err := strconv.Atoi(priorityInput)
+		if err != nil || val <= 0 {
+			s.renderEditError(w, r, ViewData{
+				Title:            "New note",
+				ContentTemplate:  "edit",
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				SaveAction:       "/notes/new",
+				UploadToken:      uploadToken,
+				Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+				ErrorMessage:     "invalid priority",
+				ErrorReturnURL:   "/notes/new",
+			}, http.StatusBadRequest)
+			return
+		}
+		priority = strconv.Itoa(val)
+	}
 	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
+		}, http.StatusBadRequest)
+		return
+	} else {
+		mergedContent = updated
+	}
+	if updated, err := index.SetPriority(mergedContent, priority); err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -2467,6 +2504,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	visibility := strings.TrimSpace(r.Form.Get("visibility"))
 	folderInput := r.Form.Get("folder")
+	priorityInput := strings.TrimSpace(r.Form.Get("priority"))
 	if content == "" {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
@@ -2518,7 +2556,40 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusBadRequest)
 		return
 	}
+	priority := ""
+	if priorityInput != "" {
+		val, err := strconv.Atoi(priorityInput)
+		if err != nil || val <= 0 {
+			s.renderEditError(w, r, ViewData{
+				Title:            "Edit note",
+				ContentTemplate:  "edit",
+				NotePath:         notePath,
+				NoteTitle:        derivedTitle,
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				ErrorMessage:     "invalid priority",
+				ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			}, http.StatusBadRequest)
+			return
+		}
+		priority = strconv.Itoa(val)
+	}
 	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+		}, http.StatusBadRequest)
+		return
+	} else {
+		mergedContent = updated
+	}
+	if updated, err := index.SetPriority(mergedContent, priority); err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",

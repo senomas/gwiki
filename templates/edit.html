@@ -53,6 +53,7 @@
       <form class="mt-6 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post">
         <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
+        <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="content">{{.RawContent}}</textarea>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Visibility</label>
           <select class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="visibility">
@@ -62,9 +63,12 @@
         </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Folder</label>
-          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" placeholder="journal/2024" value="{{.NoteMeta.Folder}}">
+          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" value="{{.NoteMeta.Folder}}">
         </div>
-        <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="content">{{.RawContent}}</textarea>
+        <div class="space-y-2">
+          <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Priority</label>
+          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="number" name="priority" min="1" step="1" value="{{if .NoteMeta.Priority}}{{.NoteMeta.Priority}}{{else}}10{{end}}">
+        </div>
         <div class="flex justify-end gap-2">
           <a class="rounded-xl border border-slate-700/70 bg-[#121417] px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="javascript:history.back()">Cancel</a>
           <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Save</button>

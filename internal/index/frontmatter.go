@@ -172,6 +172,34 @@ func SetFolder(content string, folder string) (string, error) {
 	return fmBlock + "\n" + body, nil
 }
 
+func SetPriority(content string, priority string) (string, error) {
+	priority = strings.TrimSpace(priority)
+	if priority == "" {
+		return content, nil
+	}
+	lines, body, ok := splitFrontmatterLines(content)
+	if !ok {
+		return "", fmt.Errorf("frontmatter required")
+	}
+	lineIdx := map[string]int{}
+	for i, line := range lines {
+		key, _ := parseFrontmatterLine(line)
+		if key == "" {
+			continue
+		}
+		key = strings.ToLower(key)
+		if _, exists := lineIdx[key]; !exists {
+			lineIdx[key] = i
+		}
+	}
+	setFrontmatterLine(&lines, lineIdx, "priority", priority)
+	fmBlock := "---\n" + strings.Join(lines, "\n") + "\n---"
+	if body == "" {
+		return fmBlock + "\n", nil
+	}
+	return fmBlock + "\n" + body, nil
+}
+
 func HasFrontmatter(content string) bool {
 	_, _, ok := splitFrontmatterLines(content)
 	return ok
