@@ -85,7 +85,11 @@ func authFilePath() (string, error) {
 	}
 	repo := os.Getenv("WIKI_REPO_PATH")
 	if repo == "" {
-		return "", errors.New("set WIKI_AUTH_FILE or WIKI_REPO_PATH")
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("get working directory: %w", err)
+		}
+		repo = cwd
 	}
 	return filepath.Join(repo, ".wiki", "auth.txt"), nil
 }
