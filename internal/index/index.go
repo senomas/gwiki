@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +32,8 @@ type NoteListFilter struct {
 	Tags   []string
 	Date   string
 	Query  string
+	Folder string
+	Root   bool
 	Limit  int
 	Offset int
 }
@@ -93,6 +97,37 @@ func applyVisibilityFilter(ctx context.Context, clauses *[]string, args *[]inter
 	}
 	*clauses = append(*clauses, table+".visibility = ?")
 	*args = append(*args, "public")
+}
+
+func applyFolderFilter(folder string, rootOnly bool, clauses *[]string, args *[]interface{}, table string) {
+	if table == "" {
+		table = "files"
+	}
+	if rootOnly {
+		*clauses = append(*clauses, table+".path NOT LIKE ?")
+		*args = append(*args, "%/%")
+		return
+	}
+	if strings.TrimSpace(folder) == "" {
+		return
+	}
+	folder = strings.TrimSuffix(folder, "/")
+	*clauses = append(*clauses, table+".path LIKE ?")
+	*args = append(*args, folder+"/%")
+}
+
+func folderWhere(folder string, rootOnly bool, table string) (string, []interface{}) {
+	if table == "" {
+		table = "files"
+	}
+	if rootOnly {
+		return table + ".path NOT LIKE ?", []interface{}{"%/%"}
+	}
+	if strings.TrimSpace(folder) == "" {
+		return "", nil
+	}
+	folder = strings.TrimSuffix(folder, "/")
+	return table + ".path LIKE ?", []interface{}{folder + "/%"}
 }
 
 func slugify(input string) string {
@@ -584,6 +619,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		groupBy = true
 	}
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	applyFolderFilter(filter.Folder, filter.Root, &clauses, &args, "files")
 
 	sqlStr := "SELECT files.path, files.title, files.mtime_unix FROM files"
 	if len(joins) > 0 {
@@ -621,7 +657,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	return notes, rows.Err()
 }
 
-func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string) ([]TaskItem, error) {
+func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool) ([]TaskItem, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -632,23 +668,42 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 	if dueOnly && dueDate == "" {
 		return nil, fmt.Errorf("due date required for due-only tasks")
 	}
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		if dueOnly {
-			rows, err = i.db.QueryContext(ctx, `
+			query := `
 				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
 				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+			`
+			args := []interface{}{dueDate}
+			if folderClause != "" {
+				query += " AND " + folderClause
+				args = append(args, folderArgs...)
+			}
+			query += `
 				ORDER BY tasks.due_date ASC, tasks.updated_at DESC
-				LIMIT ?`, dueDate, limit)
+				LIMIT ?`
+			args = append(args, limit)
+			rows, err = i.db.QueryContext(ctx, query, args...)
 		} else {
-			rows, err = i.db.QueryContext(ctx, `
+			query := `
 				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
 				WHERE tasks.checked = 0
+			`
+			args := []interface{}{}
+			if folderClause != "" {
+				query += " AND " + folderClause
+				args = append(args, folderArgs...)
+			}
+			query += `
 				ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
-				LIMIT ?`, limit)
+				LIMIT ?`
+			args = append(args, limit)
+			rows, err = i.db.QueryContext(ctx, query, args...)
 		}
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
@@ -661,6 +716,9 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
 		`
+		if folderClause != "" {
+			base += " AND " + folderClause
+		}
 		if dueOnly {
 			base += ` AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?`
 		}
@@ -674,10 +732,11 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			return "(tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC"
 		}() + `
 			LIMIT ?`
-		args := make([]interface{}, 0, len(tags)+3)
+		args := make([]interface{}, 0, len(tags)+3+len(folderArgs))
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
+		args = append(args, folderArgs...)
 		if dueOnly {
 			args = append(args, dueDate)
 		}
@@ -706,7 +765,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 	return out, rows.Err()
 }
 
-func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, activityDate string) ([]TaskItem, error) {
+func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, activityDate string, folder string, rootOnly bool) ([]TaskItem, error) {
 	if activityDate == "" {
 		return nil, fmt.Errorf("activity date required")
 	}
@@ -720,6 +779,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 	if limit <= 0 {
 		limit = 50
 	}
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	var (
 		query string
 		args  []interface{}
@@ -738,9 +798,16 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 				JOIN files ON files.id = tasks.file_id
 				JOIN matching_files ON matching_files.file_id = files.id
 				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+			`
+			args = []interface{}{day, dueDate}
+			if folderClause != "" {
+				query += " AND " + folderClause
+				args = append(args, folderArgs...)
+			}
+			query += `
 				ORDER BY tasks.due_date ASC, tasks.updated_at DESC
 				LIMIT ?`
-			args = []interface{}{day, dueDate, limit}
+			args = append(args, limit)
 		} else {
 			query = `
 				WITH matching_files AS (
@@ -753,9 +820,16 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 				JOIN files ON files.id = tasks.file_id
 				JOIN matching_files ON matching_files.file_id = files.id
 				WHERE tasks.checked = 0
+			`
+			args = []interface{}{day}
+			if folderClause != "" {
+				query += " AND " + folderClause
+				args = append(args, folderArgs...)
+			}
+			query += `
 				ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
 				LIMIT ?`
-			args = []interface{}{day, limit}
+			args = append(args, limit)
 		}
 		rows, err = i.db.QueryContext(ctx, query, args...)
 	} else {
@@ -777,6 +851,9 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 			JOIN files ON files.id = tasks.file_id
 			JOIN matching_files ON matching_files.id = files.id
 			WHERE tasks.checked = 0`
+		if folderClause != "" {
+			base += " AND " + folderClause
+		}
 		if dueOnly {
 			query = base + ` AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
 				ORDER BY tasks.due_date ASC, tasks.updated_at DESC
@@ -786,12 +863,13 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 				ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
 				LIMIT ?`
 		}
-		args = make([]interface{}, 0, len(tags)+4)
+		args = make([]interface{}, 0, len(tags)+4+len(folderArgs))
 		args = append(args, day)
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
 		args = append(args, len(tags))
+		args = append(args, folderArgs...)
 		if dueOnly {
 			args = append(args, dueDate, limit)
 		} else {
@@ -821,7 +899,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 	return out, rows.Err()
 }
 
-func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int, offset int) ([]NoteSummary, error) {
+func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int, offset int, folder string, rootOnly bool) ([]NoteSummary, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -833,16 +911,22 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT files.path, files.title, files.mtime_unix
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
-			WHERE tasks.checked = 0
+			WHERE tasks.checked = 0`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = []interface{}{limit, offset}
+		args = append(args, limit, offset)
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -853,11 +937,19 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+		`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = make([]interface{}, 0, len(tags)+3)
+		if args == nil {
+			args = make([]interface{}, 0, len(tags)+3+len(folderArgs))
+		}
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
@@ -883,7 +975,7 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 	return notes, rows.Err()
 }
 
-func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate string, limit int, offset int) ([]NoteSummary, error) {
+func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate string, limit int, offset int, folder string, rootOnly bool) ([]NoteSummary, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -898,16 +990,24 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT files.path, files.title, files.mtime_unix
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+		`
+		args = []interface{}{dueDate}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = []interface{}{dueDate, limit, offset}
+		args = append(args, limit, offset)
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -918,12 +1018,18 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
+		`
+		args = make([]interface{}, 0, len(tags)+4+len(folderArgs))
+		args = append(args, dueDate)
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = make([]interface{}, 0, len(tags)+4)
-		args = append(args, dueDate)
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
@@ -949,7 +1055,7 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 	return notes, rows.Err()
 }
 
-func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string, limit int, offset int) ([]NoteSummary, error) {
+func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string, limit int, offset int, folder string, rootOnly bool) ([]NoteSummary, error) {
 	if activityDate == "" {
 		return nil, fmt.Errorf("activity date required")
 	}
@@ -968,6 +1074,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT files.path, files.title, files.mtime_unix
@@ -975,10 +1082,17 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
 			WHERE tasks.checked = 0 AND file_histories.action_date = ?
+		`
+		args = []interface{}{day}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = []interface{}{day, limit, offset}
+		args = append(args, limit, offset)
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -990,12 +1104,18 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+		`
+		args = make([]interface{}, 0, len(tags)+4+len(folderArgs))
+		args = append(args, day)
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = make([]interface{}, 0, len(tags)+4)
-		args = append(args, day)
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
@@ -1021,7 +1141,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 	return notes, rows.Err()
 }
 
-func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, activityDate string, dueDate string, limit int, offset int) ([]NoteSummary, error) {
+func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, activityDate string, dueDate string, limit int, offset int, folder string, rootOnly bool) ([]NoteSummary, error) {
 	if dueDate == "" {
 		return nil, fmt.Errorf("due date required for due tasks")
 	}
@@ -1043,6 +1163,7 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT files.path, files.title, files.mtime_unix
@@ -1050,10 +1171,17 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?
+		`
+		args = []interface{}{dueDate, day}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = []interface{}{dueDate, day, limit, offset}
+		args = append(args, limit, offset)
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1065,12 +1193,18 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+		`
+		args = make([]interface{}, 0, len(tags)+5+len(folderArgs))
+		args = append(args, dueDate, day)
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 			ORDER BY files.priority ASC, files.updated_at DESC
 			LIMIT ? OFFSET ?`
-		args = make([]interface{}, 0, len(tags)+5)
-		args = append(args, dueDate, day)
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
@@ -1128,7 +1262,7 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	return results, rows.Err()
 }
 
-func (i *Index) ListTags(ctx context.Context, limit int) ([]TagSummary, error) {
+func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -1136,26 +1270,42 @@ func (i *Index) ListTags(ctx context.Context, limit int) ([]TagSummary, error) {
 		rows *sql.Rows
 		err  error
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if publicOnly(ctx) {
-		rows, err = i.db.QueryContext(ctx, `
+		query := `
 			SELECT tags.name, COUNT(file_tags.file_id)
 			FROM tags
 			JOIN file_tags ON tags.id = file_tags.tag_id
 			JOIN files ON files.id = file_tags.file_id
-			WHERE files.visibility = ?
+			WHERE files.visibility = ?`
+		args := []interface{}{"public"}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY tags.id
 			ORDER BY tags.name
-			LIMIT ?
-		`, "public", limit)
+			LIMIT ?`
+		args = append(args, limit)
+		rows, err = i.db.QueryContext(ctx, query, args...)
 	} else {
-		rows, err = i.db.QueryContext(ctx, `
+		query := `
 			SELECT tags.name, COUNT(file_tags.file_id)
 			FROM tags
 			LEFT JOIN file_tags ON tags.id = file_tags.tag_id
+			LEFT JOIN files ON files.id = file_tags.file_id`
+		args := []interface{}{}
+		if folderClause != "" {
+			query += " WHERE " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY tags.id
 			ORDER BY tags.name
-			LIMIT ?
-		`, limit)
+			LIMIT ?`
+		args = append(args, limit)
+		rows, err = i.db.QueryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, err
@@ -1173,9 +1323,9 @@ func (i *Index) ListTags(ctx context.Context, limit int) ([]TagSummary, error) {
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int) ([]TagSummary, error) {
+func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
 	if len(active) == 0 {
-		return i.ListTags(ctx, limit)
+		return i.ListTags(ctx, limit, folder, rootOnly)
 	}
 	if limit <= 0 {
 		limit = 100
@@ -1186,13 +1336,19 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	if publicOnly(ctx) {
 		visibilityClause = " AND files.visibility = ?"
 	}
+	folderClause := ""
+	if rootOnly {
+		folderClause = " AND files.path NOT LIKE ?"
+	} else if strings.TrimSpace(folder) != "" {
+		folderClause = " AND files.path LIKE ?"
+	}
 	query := `
 		WITH matching_files AS (
 			SELECT files.id
 			FROM files
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tags.name IN (` + placeholders + `)` + visibilityClause + `
+			WHERE tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -1204,12 +1360,18 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 		ORDER BY tags.name
 		LIMIT ?`
 
-	args := make([]interface{}, 0, len(active)+3)
+	args := make([]interface{}, 0, len(active)+4)
 	for _, tag := range active {
 		args = append(args, tag)
 	}
 	if publicOnly(ctx) {
 		args = append(args, "public")
+	}
+	if rootOnly {
+		args = append(args, "%/%")
+	} else if strings.TrimSpace(folder) != "" {
+		folder = strings.TrimSuffix(folder, "/")
+		args = append(args, folder+"/%")
 	}
 	args = append(args, len(active), limit)
 
@@ -1230,7 +1392,7 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, activityDate string, limit int) ([]TagSummary, error) {
+func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, activityDate string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
 	if activityDate == "" {
 		return nil, fmt.Errorf("activity date required")
 	}
@@ -1244,13 +1406,20 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		}
 		var rows *sql.Rows
 		var err error
+		folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 		if publicOnly(ctx) {
-			rows, err = i.db.QueryContext(ctx, `
+			query := `
 				WITH matching_files AS (
 					SELECT DISTINCT file_histories.file_id
 					FROM file_histories
 					JOIN files ON files.id = file_histories.file_id
-					WHERE file_histories.action_date = ? AND files.visibility = ?
+					WHERE file_histories.action_date = ? AND files.visibility = ?`
+			args := []interface{}{day, "public"}
+			if folderClause != "" {
+				query += " AND " + folderClause
+				args = append(args, folderArgs...)
+			}
+			query += `
 				)
 				SELECT tags.name, COUNT(file_tags.file_id)
 				FROM tags
@@ -1258,14 +1427,22 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 				JOIN matching_files ON matching_files.file_id = file_tags.file_id
 				GROUP BY tags.id
 				ORDER BY tags.name
-				LIMIT ?
-			`, day, "public", limit)
+				LIMIT ?`
+			args = append(args, limit)
+			rows, err = i.db.QueryContext(ctx, query, args...)
 		} else {
-			rows, err = i.db.QueryContext(ctx, `
+			query := `
 				WITH matching_files AS (
-					SELECT DISTINCT file_id
+					SELECT DISTINCT file_histories.file_id
 					FROM file_histories
-					WHERE action_date = ?
+					JOIN files ON files.id = file_histories.file_id
+					WHERE file_histories.action_date = ?`
+			args := []interface{}{day}
+			if folderClause != "" {
+				query += " AND " + folderClause
+				args = append(args, folderArgs...)
+			}
+			query += `
 				)
 				SELECT tags.name, COUNT(file_tags.file_id)
 				FROM tags
@@ -1273,8 +1450,9 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 				JOIN matching_files ON matching_files.file_id = file_tags.file_id
 				GROUP BY tags.id
 				ORDER BY tags.name
-				LIMIT ?
-			`, day, limit)
+				LIMIT ?`
+			args = append(args, limit)
+			rows, err = i.db.QueryContext(ctx, query, args...)
 		}
 		if err != nil {
 			return nil, err
@@ -1299,6 +1477,12 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	if publicOnly(ctx) {
 		visibilityClause = " AND files.visibility = ?"
 	}
+	folderClause := ""
+	if rootOnly {
+		folderClause = " AND files.path NOT LIKE ?"
+	} else if strings.TrimSpace(folder) != "" {
+		folderClause = " AND files.path LIKE ?"
+	}
 	query := `
 		WITH matching_files AS (
 			SELECT files.id
@@ -1306,7 +1490,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)` + visibilityClause + `
+			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -1318,13 +1502,19 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		ORDER BY tags.name
 		LIMIT ?`
 
-	args := make([]interface{}, 0, len(active)+4)
+	args := make([]interface{}, 0, len(active)+5)
 	args = append(args, day)
 	for _, tag := range active {
 		args = append(args, tag)
 	}
 	if publicOnly(ctx) {
 		args = append(args, "public")
+	}
+	if rootOnly {
+		args = append(args, "%/%")
+	} else if strings.TrimSpace(folder) != "" {
+		folder = strings.TrimSuffix(folder, "/")
+		args = append(args, folder+"/%")
 	}
 	args = append(args, len(active), limit)
 
@@ -1345,7 +1535,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limit int) ([]TagSummary, error) {
+func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -1353,13 +1543,19 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(active) == 0 {
 		query = `
 			WITH matching_files AS (
 				SELECT DISTINCT files.id
 				FROM files
 				JOIN tasks ON files.id = tasks.file_id
-				WHERE tasks.checked = 0
+				WHERE tasks.checked = 0`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			)
 			SELECT tags.name, COUNT(file_tags.file_id)
 			FROM tags
@@ -1368,7 +1564,7 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = []interface{}{limit}
+		args = append(args, limit)
 	} else {
 		placeholders := strings.Repeat("?,", len(active))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1380,6 +1576,12 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
 				WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+		`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
 			)
@@ -1390,7 +1592,9 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = make([]interface{}, 0, len(active)+2)
+		if args == nil {
+			args = make([]interface{}, 0, len(active)+2+len(folderArgs))
+		}
 		for _, tag := range active {
 			args = append(args, tag)
 		}
@@ -1414,7 +1618,7 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string, activityDate string, limit int) ([]TagSummary, error) {
+func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string, activityDate string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
 	if activityDate == "" {
 		return nil, fmt.Errorf("activity date required")
 	}
@@ -1429,6 +1633,7 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(active) == 0 {
 		query = `
 			WITH matching_files AS (
@@ -1436,7 +1641,13 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 				FROM files
 				JOIN tasks ON files.id = tasks.file_id
 				JOIN file_histories ON files.id = file_histories.file_id
-				WHERE tasks.checked = 0 AND file_histories.action_date = ?
+				WHERE tasks.checked = 0 AND file_histories.action_date = ?`
+		args = []interface{}{day}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			)
 			SELECT tags.name, COUNT(file_tags.file_id)
 			FROM tags
@@ -1445,7 +1656,7 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = []interface{}{day, limit}
+		args = append(args, limit)
 	} else {
 		placeholders := strings.Repeat("?,", len(active))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1457,7 +1668,14 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 				JOIN file_histories ON files.id = file_histories.file_id
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
-				WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+				WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
+		args = make([]interface{}, 0, len(active)+3+len(folderArgs))
+		args = append(args, day)
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
 			)
@@ -1468,8 +1686,6 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = make([]interface{}, 0, len(active)+3)
-		args = append(args, day)
 		for _, tag := range active {
 			args = append(args, tag)
 		}
@@ -1493,7 +1709,7 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDate string, limit int) ([]TagSummary, error) {
+func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDate string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
 	if dueDate == "" {
 		return nil, fmt.Errorf("due date required for due tasks")
 	}
@@ -1504,13 +1720,20 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(active) == 0 {
 		query = `
 			WITH matching_files AS (
 				SELECT DISTINCT files.id
 				FROM files
 				JOIN tasks ON files.id = tasks.file_id
-				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?`
+		args = []interface{}{dueDate}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			)
 			SELECT tags.name, COUNT(file_tags.file_id)
 			FROM tags
@@ -1519,7 +1742,7 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = []interface{}{dueDate, limit}
+		args = append(args, limit)
 	} else {
 		placeholders := strings.Repeat("?,", len(active))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1531,6 +1754,14 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
 				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
+		`
+		args = make([]interface{}, 0, len(active)+3+len(folderArgs))
+		args = append(args, dueDate)
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
 			)
@@ -1541,8 +1772,6 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = make([]interface{}, 0, len(active)+3)
-		args = append(args, dueDate)
 		for _, tag := range active {
 			args = append(args, tag)
 		}
@@ -1566,7 +1795,7 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string, activityDate string, dueDate string, limit int) ([]TagSummary, error) {
+func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string, activityDate string, dueDate string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
 	if dueDate == "" {
 		return nil, fmt.Errorf("due date required for due tasks")
 	}
@@ -1584,14 +1813,21 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(active) == 0 {
+		whereClause := "WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?"
+		args = []interface{}{dueDate, day}
+		if folderClause != "" {
+			whereClause += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
 		query = `
 			WITH matching_files AS (
 				SELECT DISTINCT files.id
 				FROM files
 				JOIN tasks ON files.id = tasks.file_id
 				JOIN file_histories ON files.id = file_histories.file_id
-				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?
+				` + whereClause + `
 			)
 			SELECT tags.name, COUNT(file_tags.file_id)
 			FROM tags
@@ -1600,10 +1836,14 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = []interface{}{dueDate, day, limit}
+		args = append(args, limit)
 	} else {
 		placeholders := strings.Repeat("?,", len(active))
 		placeholders = strings.TrimRight(placeholders, ",")
+		whereClause := "WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (" + placeholders + ")"
+		if folderClause != "" {
+			whereClause += " AND " + folderClause
+		}
 		query = `
 			WITH matching_files AS (
 				SELECT files.id
@@ -1612,7 +1852,7 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 				JOIN file_histories ON files.id = file_histories.file_id
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
-				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+				` + whereClause + `
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
 			)
@@ -1623,8 +1863,11 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 			GROUP BY tags.id
 			ORDER BY tags.name
 			LIMIT ?`
-		args = make([]interface{}, 0, len(active)+4)
+		args = make([]interface{}, 0, len(active)+4+len(folderArgs))
 		args = append(args, dueDate, day)
+		if folderClause != "" {
+			args = append(args, folderArgs...)
+		}
 		for _, tag := range active {
 			args = append(args, tag)
 		}
@@ -1648,7 +1891,59 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 	return tags, rows.Err()
 }
 
-func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySummary, error) {
+func (i *Index) ListFolders(ctx context.Context) ([]string, bool, error) {
+	query := "SELECT path FROM files"
+	args := []interface{}{}
+	if publicOnly(ctx) {
+		query += " WHERE visibility = ?"
+		args = append(args, "public")
+	}
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	folderSet := map[string]struct{}{}
+	hasRoot := false
+	for rows.Next() {
+		var notePath string
+		if err := rows.Scan(&notePath); err != nil {
+			return nil, false, err
+		}
+		dir := path.Dir(notePath)
+		if dir == "." || dir == "/" {
+			hasRoot = true
+			continue
+		}
+		parts := strings.Split(dir, "/")
+		var current string
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if current == "" {
+				current = part
+			} else {
+				current = current + "/" + part
+			}
+			folderSet[current] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	folders := make([]string, 0, len(folderSet))
+	for folder := range folderSet {
+		folders = append(folders, folder)
+	}
+	sort.Strings(folders)
+	return folders, hasRoot, nil
+}
+
+func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, rootOnly bool) ([]UpdateDaySummary, error) {
 	if limit <= 0 {
 		limit = 30
 	}
@@ -1656,24 +1951,40 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySumma
 		rows *sql.Rows
 		err  error
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if publicOnly(ctx) {
-		rows, err = i.db.QueryContext(ctx, `
+		query := `
 			SELECT file_histories.action_date, COUNT(DISTINCT file_histories.file_id)
 			FROM file_histories
 			JOIN files ON files.id = file_histories.file_id
-			WHERE files.visibility = ?
+			WHERE files.visibility = ?`
+		args := []interface{}{"public"}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY file_histories.action_date
 			ORDER BY file_histories.action_date DESC
-			LIMIT ?
-		`, "public", limit)
+			LIMIT ?`
+		args = append(args, limit)
+		rows, err = i.db.QueryContext(ctx, query, args...)
 	} else {
-		rows, err = i.db.QueryContext(ctx, `
-			SELECT action_date, COUNT(DISTINCT file_id)
+		query := `
+			SELECT file_histories.action_date, COUNT(DISTINCT file_histories.file_id)
 			FROM file_histories
-			GROUP BY action_date
-			ORDER BY action_date DESC
-			LIMIT ?
-		`, limit)
+			JOIN files ON files.id = file_histories.file_id`
+		args := []interface{}{}
+		if folderClause != "" {
+			query += " WHERE " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
+			GROUP BY file_histories.action_date
+			ORDER BY file_histories.action_date DESC
+			LIMIT ?`
+		args = append(args, limit)
+		rows, err = i.db.QueryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, err
@@ -1693,17 +2004,22 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySumma
 	return days, rows.Err()
 }
 
-func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int, error) {
+func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, folder string, rootOnly bool) (int, error) {
 	var (
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT COUNT(DISTINCT files.id)
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			WHERE tasks.checked = 0`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1714,9 +2030,17 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+		`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?`
-		args = make([]interface{}, 0, len(tags)+1)
+		if args == nil {
+			args = make([]interface{}, 0, len(tags)+1+len(folderArgs))
+		}
 		for _, tag := range tags {
 			args = append(args, tag)
 		}
@@ -1731,7 +2055,7 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string) (int
 	return count, nil
 }
 
-func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string) (int, error) {
+func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string, folder string, rootOnly bool) (int, error) {
 	if activityDate == "" {
 		return 0, fmt.Errorf("activity date required")
 	}
@@ -1743,6 +2067,7 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT COUNT(DISTINCT files.id)
@@ -1751,6 +2076,10 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 			JOIN file_histories ON files.id = file_histories.file_id
 			WHERE tasks.checked = 0 AND file_histories.action_date = ?`
 		args = []interface{}{day}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1761,10 +2090,17 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?`
-		args = make([]interface{}, 0, len(tags)+2)
+		if args == nil {
+			args = make([]interface{}, 0, len(tags)+2+len(folderArgs))
+		}
 		args = append(args, day)
 		for _, tag := range tags {
 			args = append(args, tag)
@@ -1780,7 +2116,7 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 	return count, nil
 }
 
-func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDate string) (int, error) {
+func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDate string, folder string, rootOnly bool) (int, error) {
 	if dueDate == "" {
 		return 0, fmt.Errorf("due date required for due tasks")
 	}
@@ -1788,6 +2124,7 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT COUNT(DISTINCT files.id)
@@ -1795,6 +2132,10 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 			JOIN tasks ON files.id = tasks.file_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?`
 		args = []interface{}{dueDate}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1804,10 +2145,17 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?`
-		args = make([]interface{}, 0, len(tags)+2)
+		if args == nil {
+			args = make([]interface{}, 0, len(tags)+2+len(folderArgs))
+		}
 		args = append(args, dueDate)
 		for _, tag := range tags {
 			args = append(args, tag)
@@ -1823,7 +2171,7 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 	return count, nil
 }
 
-func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string, activityDate string, dueDate string) (int, error) {
+func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string, activityDate string, dueDate string, folder string, rootOnly bool) (int, error) {
 	if dueDate == "" {
 		return 0, fmt.Errorf("due date required for due tasks")
 	}
@@ -1838,6 +2186,7 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 		query string
 		args  []interface{}
 	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
 			SELECT COUNT(DISTINCT files.id)
@@ -1846,6 +2195,10 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 			JOIN file_histories ON files.id = file_histories.file_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?`
 		args = []interface{}{dueDate, day}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1856,10 +2209,17 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?`
-		args = make([]interface{}, 0, len(tags)+3)
+		if args == nil {
+			args = make([]interface{}, 0, len(tags)+3+len(folderArgs))
+		}
 		args = append(args, dueDate, day)
 		for _, tag := range tags {
 			args = append(args, tag)

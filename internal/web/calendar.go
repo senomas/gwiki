@@ -27,7 +27,7 @@ type CalendarDay struct {
 	Active      bool
 }
 
-func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePath string, tagQuery string, activeDate string, activeSearch string) CalendarMonth {
+func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePath string, tagQuery string, activeDate string, activeSearch string, folderQuery string) CalendarMonth {
 	now = now.UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthEnd := monthStart.AddDate(0, 1, -1)
@@ -51,7 +51,7 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 			if isActive {
 				nextDate = ""
 			}
-			url = buildCalendarURL(basePath, tagQuery, nextDate, activeSearch)
+			url = buildCalendarURL(basePath, tagQuery, nextDate, activeSearch, folderQuery)
 		}
 		days = append(days, CalendarDay{
 			Date:        dateKey,
@@ -78,13 +78,16 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 	}
 }
 
-func buildCalendarURL(basePath string, tagQuery string, date string, activeSearch string) string {
+func buildCalendarURL(basePath string, tagQuery string, date string, activeSearch string, folderQuery string) string {
 	if basePath == "" {
 		basePath = "/"
 	}
-	params := make([]string, 0, 2)
+	params := make([]string, 0, 3)
 	if tagQuery != "" {
 		params = append(params, "t="+tagQuery)
+	}
+	if folderQuery != "" {
+		params = append(params, "f="+url.QueryEscape(folderQuery))
 	}
 	if date != "" {
 		params = append(params, "d="+date)

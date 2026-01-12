@@ -45,6 +45,9 @@ type ViewData struct {
 	SearchQueryParam string
 	Attachments      []string
 	AttachmentBase   string
+	Folders          []FolderLink
+	ActiveFolder     string
+	FolderQuery      string
 }
 
 type BacklinkView struct {
@@ -60,6 +63,14 @@ type TagLink struct {
 	URL      string
 	Active   bool
 	Disabled bool
+}
+
+type FolderLink struct {
+	Name   string
+	Path   string
+	URL    string
+	Active bool
+	Depth  int
 }
 
 type NoteCard struct {
