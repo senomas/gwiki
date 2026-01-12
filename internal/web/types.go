@@ -10,6 +10,9 @@ type ViewData struct {
 	Title            string
 	ContentTemplate  string
 	ContentHTML      template.HTML
+	AuthEnabled      bool
+	IsAuthenticated  bool
+	CurrentUser      User
 	NotePath         string
 	NoteTitle        string
 	RawContent       string

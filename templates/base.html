@@ -143,6 +143,9 @@
       <form class="w-full max-w-xs" action="/search" method="get">
         <input class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" type="search" name="q" placeholder="Search" value="{{.SearchQuery}}">
       </form>
+      {{if and .AuthEnabled (not .IsAuthenticated)}}
+        <a class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" href="/login">Login</a>
+      {{end}}
     </header>
     <hr class="my-6 border-slate-200">
     <main class="max-w-4xl">

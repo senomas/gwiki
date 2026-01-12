@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -85,6 +86,37 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 	upsertHistoryEntry(&fmLines, lineIdx, now, action)
 	trimHistoryEntries(&fmLines, lineIdx, maxUpdated)
 
+	fmBlock := "---\n" + strings.Join(fmLines, "\n") + "\n---"
+	if body == "" {
+		return fmBlock + "\n", nil
+	}
+	return fmBlock + "\n" + body, nil
+}
+
+func SetVisibility(content string, visibility string) (string, error) {
+	visibility = strings.ToLower(strings.TrimSpace(visibility))
+	if visibility == "" {
+		return content, nil
+	}
+	if visibility != "public" && visibility != "private" {
+		return "", fmt.Errorf("invalid visibility")
+	}
+	fmLines, body, ok := splitFrontmatterLines(content)
+	if !ok {
+		return "", fmt.Errorf("frontmatter required")
+	}
+	lineIdx := map[string]int{}
+	for i, line := range fmLines {
+		key, _ := parseFrontmatterLine(line)
+		if key == "" {
+			continue
+		}
+		key = strings.ToLower(key)
+		if _, exists := lineIdx[key]; !exists {
+			lineIdx[key] = i
+		}
+	}
+	setFrontmatterLine(&fmLines, lineIdx, "visibility", visibility)
 	fmBlock := "---\n" + strings.Join(fmLines, "\n") + "\n---"
 	if body == "" {
 		return fmBlock + "\n", nil

@@ -40,10 +40,14 @@ func (s *Server) Handler() http.Handler {
 	if s.auth != nil {
 		return s.auth.Middleware(s.mux)
 	}
-	return s.mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := WithUser(r.Context(), User{Name: "local", Authenticated: true})
+		s.mux.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("/login", s.handleLogin)
 	s.mux.HandleFunc("/", s.handleHome)
 	s.mux.HandleFunc("/search", s.handleSearch)
 	s.mux.HandleFunc("/notes/new", s.handleNewNote)

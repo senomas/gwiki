@@ -84,6 +84,17 @@ func dateToDay(date string) (int64, error) {
 	return parsed.UTC().Unix() / secondsPerDay, nil
 }
 
+func applyVisibilityFilter(ctx context.Context, clauses *[]string, args *[]interface{}, table string) {
+	if !publicOnly(ctx) {
+		return
+	}
+	if table == "" {
+		table = "files"
+	}
+	*clauses = append(*clauses, table+".visibility = ?")
+	*args = append(*args, "public")
+}
+
 func slugify(input string) string {
 	input = strings.ToLower(input)
 	var b strings.Builder
@@ -468,7 +479,15 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 }
 
 func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, error) {
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY priority ASC, updated_at DESC LIMIT ?", limit)
+	query := "SELECT path, title, mtime_unix FROM files"
+	args := []interface{}{}
+	if publicOnly(ctx) {
+		query += " WHERE visibility = ?"
+		args = append(args, "public")
+	}
+	query += " ORDER BY priority ASC, updated_at DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +515,15 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY priority ASC, updated_at DESC LIMIT ? OFFSET ?", limit, offset)
+	query := "SELECT path, title, mtime_unix FROM files"
+	args := []interface{}{}
+	if publicOnly(ctx) {
+		query += " WHERE visibility = ?"
+		args = append(args, "public")
+	}
+	query += " ORDER BY priority ASC, updated_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -556,6 +583,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		}
 		groupBy = true
 	}
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
 
 	sqlStr := "SELECT files.path, files.title, files.mtime_unix FROM files"
 	if len(joins) > 0 {
@@ -1072,7 +1100,18 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title, snippet(fts, 2, '', '', '...', 10) FROM fts WHERE fts MATCH ? LIMIT ?", query, limit)
+	var rows *sql.Rows
+	var err error
+	if publicOnly(ctx) {
+		rows, err = i.db.QueryContext(ctx, `
+			SELECT fts.path, fts.title, snippet(fts, 2, '', '', '...', 10)
+			FROM fts
+			JOIN files ON files.path = fts.path
+			WHERE fts MATCH ? AND files.visibility = ?
+			LIMIT ?`, query, "public", limit)
+	} else {
+		rows, err = i.db.QueryContext(ctx, "SELECT path, title, snippet(fts, 2, '', '', '...', 10) FROM fts WHERE fts MATCH ? LIMIT ?", query, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1093,14 +1132,31 @@ func (i *Index) ListTags(ctx context.Context, limit int) ([]TagSummary, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT tags.name, COUNT(file_tags.file_id)
-		FROM tags
-		LEFT JOIN file_tags ON tags.id = file_tags.tag_id
-		GROUP BY tags.id
-		ORDER BY tags.name
-		LIMIT ?
-	`, limit)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if publicOnly(ctx) {
+		rows, err = i.db.QueryContext(ctx, `
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			JOIN file_tags ON tags.id = file_tags.tag_id
+			JOIN files ON files.id = file_tags.file_id
+			WHERE files.visibility = ?
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?
+		`, "public", limit)
+	} else {
+		rows, err = i.db.QueryContext(ctx, `
+			SELECT tags.name, COUNT(file_tags.file_id)
+			FROM tags
+			LEFT JOIN file_tags ON tags.id = file_tags.tag_id
+			GROUP BY tags.id
+			ORDER BY tags.name
+			LIMIT ?
+		`, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1126,13 +1182,17 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	}
 	placeholders := strings.Repeat("?,", len(active))
 	placeholders = strings.TrimRight(placeholders, ",")
+	visibilityClause := ""
+	if publicOnly(ctx) {
+		visibilityClause = " AND files.visibility = ?"
+	}
 	query := `
 		WITH matching_files AS (
 			SELECT files.id
 			FROM files
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tags.name IN (` + placeholders + `)
+			WHERE tags.name IN (` + placeholders + `)` + visibilityClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -1144,9 +1204,12 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 		ORDER BY tags.name
 		LIMIT ?`
 
-	args := make([]interface{}, 0, len(active)+2)
+	args := make([]interface{}, 0, len(active)+3)
 	for _, tag := range active {
 		args = append(args, tag)
+	}
+	if publicOnly(ctx) {
+		args = append(args, "public")
 	}
 	args = append(args, len(active), limit)
 
@@ -1179,20 +1242,40 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		if limit <= 0 {
 			limit = 100
 		}
-		rows, err := i.db.QueryContext(ctx, `
-			WITH matching_files AS (
-				SELECT DISTINCT file_id
-				FROM file_histories
-				WHERE action_date = ?
-			)
-			SELECT tags.name, COUNT(file_tags.file_id)
-			FROM tags
-			JOIN file_tags ON tags.id = file_tags.tag_id
-			JOIN matching_files ON matching_files.file_id = file_tags.file_id
-			GROUP BY tags.id
-			ORDER BY tags.name
-			LIMIT ?
-		`, day, limit)
+		var rows *sql.Rows
+		var err error
+		if publicOnly(ctx) {
+			rows, err = i.db.QueryContext(ctx, `
+				WITH matching_files AS (
+					SELECT DISTINCT file_histories.file_id
+					FROM file_histories
+					JOIN files ON files.id = file_histories.file_id
+					WHERE file_histories.action_date = ? AND files.visibility = ?
+				)
+				SELECT tags.name, COUNT(file_tags.file_id)
+				FROM tags
+				JOIN file_tags ON tags.id = file_tags.tag_id
+				JOIN matching_files ON matching_files.file_id = file_tags.file_id
+				GROUP BY tags.id
+				ORDER BY tags.name
+				LIMIT ?
+			`, day, "public", limit)
+		} else {
+			rows, err = i.db.QueryContext(ctx, `
+				WITH matching_files AS (
+					SELECT DISTINCT file_id
+					FROM file_histories
+					WHERE action_date = ?
+				)
+				SELECT tags.name, COUNT(file_tags.file_id)
+				FROM tags
+				JOIN file_tags ON tags.id = file_tags.tag_id
+				JOIN matching_files ON matching_files.file_id = file_tags.file_id
+				GROUP BY tags.id
+				ORDER BY tags.name
+				LIMIT ?
+			`, day, limit)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1212,6 +1295,10 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	}
 	placeholders := strings.Repeat("?,", len(active))
 	placeholders = strings.TrimRight(placeholders, ",")
+	visibilityClause := ""
+	if publicOnly(ctx) {
+		visibilityClause = " AND files.visibility = ?"
+	}
 	query := `
 		WITH matching_files AS (
 			SELECT files.id
@@ -1219,7 +1306,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)` + visibilityClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -1231,10 +1318,13 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		ORDER BY tags.name
 		LIMIT ?`
 
-	args := make([]interface{}, 0, len(active)+3)
+	args := make([]interface{}, 0, len(active)+4)
 	args = append(args, day)
 	for _, tag := range active {
 		args = append(args, tag)
+	}
+	if publicOnly(ctx) {
+		args = append(args, "public")
 	}
 	args = append(args, len(active), limit)
 
@@ -1562,13 +1652,29 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int) ([]UpdateDaySumma
 	if limit <= 0 {
 		limit = 30
 	}
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT action_date, COUNT(DISTINCT file_id)
-		FROM file_histories
-		GROUP BY action_date
-		ORDER BY action_date DESC
-		LIMIT ?
-	`, limit)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if publicOnly(ctx) {
+		rows, err = i.db.QueryContext(ctx, `
+			SELECT file_histories.action_date, COUNT(DISTINCT file_histories.file_id)
+			FROM file_histories
+			JOIN files ON files.id = file_histories.file_id
+			WHERE files.visibility = ?
+			GROUP BY file_histories.action_date
+			ORDER BY file_histories.action_date DESC
+			LIMIT ?
+		`, "public", limit)
+	} else {
+		rows, err = i.db.QueryContext(ctx, `
+			SELECT action_date, COUNT(DISTINCT file_id)
+			FROM file_histories
+			GROUP BY action_date
+			ORDER BY action_date DESC
+			LIMIT ?
+		`, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1776,18 +1882,25 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string, ui
 	}
 	placeholders := strings.Repeat("?,", len(candidates))
 	placeholders = strings.TrimRight(placeholders, ",")
+	visibilityClause := ""
+	if publicOnly(ctx) {
+		visibilityClause = " AND files.visibility = ?"
+	}
 	query := `
 		SELECT files.path, files.title, links.line_no, links.line, links.kind
 		FROM links
 		JOIN files ON files.id = links.from_file_id
-		WHERE lower(links.to_ref) IN (` + placeholders + `) AND files.path != ?
+		WHERE lower(links.to_ref) IN (` + placeholders + `) AND files.path != ?` + visibilityClause + `
 		ORDER BY files.updated_at DESC, files.title`
 
-	args := make([]interface{}, 0, len(candidates)+1)
+	args := make([]interface{}, 0, len(candidates)+2)
 	for _, candidate := range candidates {
 		args = append(args, strings.ToLower(candidate))
 	}
 	args = append(args, notePath)
+	if publicOnly(ctx) {
+		args = append(args, "public")
+	}
 
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1923,7 +2036,13 @@ func nullIfEmpty(s string) any {
 
 func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	var id int
-	err := i.db.QueryRowContext(ctx, "SELECT id FROM files WHERE path=?", notePath).Scan(&id)
+	query := "SELECT id FROM files WHERE path=?"
+	args := []interface{}{notePath}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	err := i.db.QueryRowContext(ctx, query, args...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -1935,7 +2054,13 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 
 func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) {
 	var id int
-	if err := i.db.QueryRowContext(ctx, "SELECT id FROM files WHERE path=?", notePath).Scan(&id); err != nil {
+	query := "SELECT id FROM files WHERE path=?"
+	args := []interface{}{notePath}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&id); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -1943,7 +2068,13 @@ func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) 
 
 func (i *Index) PathByFileID(ctx context.Context, id int) (string, error) {
 	var path string
-	if err := i.db.QueryRowContext(ctx, "SELECT path FROM files WHERE id=?", id).Scan(&path); err != nil {
+	query := "SELECT path FROM files WHERE id=?"
+	args := []interface{}{id}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -1955,7 +2086,13 @@ func (i *Index) PathByUID(ctx context.Context, uid string) (string, error) {
 		return "", sql.ErrNoRows
 	}
 	var path string
-	if err := i.db.QueryRowContext(ctx, "SELECT path FROM files WHERE lower(uid)=lower(?)", uid).Scan(&path); err != nil {
+	query := "SELECT path FROM files WHERE lower(uid)=lower(?)"
+	args := []interface{}{uid}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -1968,7 +2105,13 @@ func (i *Index) PathTitleByUID(ctx context.Context, uid string) (string, string,
 	}
 	var path string
 	var title string
-	if err := i.db.QueryRowContext(ctx, "SELECT path, title FROM files WHERE lower(uid)=lower(?)", uid).Scan(&path, &title); err != nil {
+	query := "SELECT path, title FROM files WHERE lower(uid)=lower(?)"
+	args := []interface{}{uid}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path, &title); err != nil {
 		return "", "", err
 	}
 	return path, title, nil
@@ -1980,20 +2123,33 @@ func (i *Index) PathByTitleNewest(ctx context.Context, title string) (string, er
 		return "", sql.ErrNoRows
 	}
 	var path string
-	if err := i.db.QueryRowContext(ctx, `
+	query := `
 		SELECT path
 		FROM files
-		WHERE lower(title)=lower(?)
+		WHERE lower(title)=lower(?)`
+	args := []interface{}{title}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	query += `
 		ORDER BY updated_at DESC
-		LIMIT 1
-	`, title).Scan(&path); err != nil {
+		LIMIT 1`
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
 func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
-	rows, err := i.db.QueryContext(ctx, "SELECT path, title, mtime_unix FROM files ORDER BY path")
+	query := "SELECT path, title, mtime_unix FROM files"
+	args := []interface{}{}
+	if publicOnly(ctx) {
+		query += " WHERE visibility = ?"
+		args = append(args, "public")
+	}
+	query += " ORDER BY path"
+	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

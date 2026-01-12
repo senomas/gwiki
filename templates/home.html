@@ -11,7 +11,14 @@
     <section class="flex-1 space-y-6">
       <div class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
         <a class="text-slate-400 transition hover:text-slate-200" href="/">Home</a>
-        <a class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-3 py-1.5 text-xs text-slate-200 transition hover:border-slate-500" href="/notes/new">New Note</a>
+        <div class="flex items-center gap-2">
+          {{if and .AuthEnabled (not .IsAuthenticated)}}
+            <a class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-3 py-1.5 text-xs text-slate-200 transition hover:border-slate-500" href="/login">Login</a>
+          {{end}}
+          {{if .IsAuthenticated}}
+            <a class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-3 py-1.5 text-xs text-slate-200 transition hover:border-slate-500" href="/notes/new">New Note</a>
+          {{end}}
+        </div>
       </div>
       <div id="notes-feed" class="space-y-4">{{template "home_notes" .}}</div>
     </section>

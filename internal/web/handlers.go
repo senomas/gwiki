@@ -93,6 +93,26 @@ func shouldOpenNewTab(dest []byte) bool {
 		strings.HasPrefix(s, "//")
 }
 
+func (s *Server) attachViewData(r *http.Request, data *ViewData) {
+	data.AuthEnabled = s.auth != nil
+	if user, ok := CurrentUser(r.Context()); ok {
+		data.CurrentUser = user
+		data.IsAuthenticated = user.Authenticated
+	}
+}
+
+func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
+	if s.auth == nil {
+		return true
+	}
+	if IsAuthenticated(r.Context()) {
+		return true
+	}
+	w.Header().Set("WWW-Authenticate", `Basic realm="gwiki"`)
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	return false
+}
+
 func normalizeLineEndings(input string) string {
 	normalized := strings.ReplaceAll(input, "\r\n", "\n")
 	return strings.ReplaceAll(normalized, "\r", "\n")
@@ -236,7 +256,7 @@ func decorateTaskCheckboxes(htmlStr string, fileID int, tasks []index.Task) stri
 	})
 }
 
-func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]struct{}, basePath string, todoCount int, dueCount int, activeDate string, activeSearch string) []TagLink {
+func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]struct{}, basePath string, todoCount int, dueCount int, activeDate string, activeSearch string, includeSpecial bool) []TagLink {
 	activeSet := map[string]struct{}{}
 	activeList := make([]string, 0, len(active))
 	for _, tag := range active {
@@ -244,8 +264,10 @@ func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]
 		activeList = append(activeList, tag)
 	}
 	links := make([]TagLink, 0, len(tags)+2)
-	links = append(links, buildDueTagLink(activeList, activeSet, allowed, basePath, dueCount, activeDate, activeSearch))
-	links = append(links, buildTodoTagLink(activeList, activeSet, allowed, basePath, todoCount, activeDate, activeSearch))
+	if includeSpecial {
+		links = append(links, buildDueTagLink(activeList, activeSet, allowed, basePath, dueCount, activeDate, activeSearch))
+		links = append(links, buildTodoTagLink(activeList, activeSet, allowed, basePath, todoCount, activeDate, activeSearch))
+	}
 	for _, tag := range tags {
 		_, isActive := activeSet[tag.Name]
 		disabled := false
@@ -960,16 +982,26 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := parseDateParam(r.URL.Query().Get("d"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	isAuth := IsAuthenticated(r.Context())
+	if !isAuth {
+		activeTodo = false
+		activeDue = false
+		activeTags = noteTags
+	}
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	todoCount := 0
+	dueCount := 0
+	if isAuth {
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate)
@@ -980,14 +1012,14 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		for _, tag := range filteredTags {
 			allowed[tag.Name] = struct{}{}
 		}
-		if todoCount > 0 || activeTodo {
+		if isAuth && (todoCount > 0 || activeTodo) {
 			allowed["TODO"] = struct{}{}
 		}
-		if dueCount > 0 || activeDue {
+		if isAuth && (dueCount > 0 || activeDue) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch)
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1017,7 +1049,21 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
 	}
+	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if IsAuthenticated(r.Context()) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	w.Header().Set("WWW-Authenticate", `Basic realm="gwiki"`)
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -1031,6 +1077,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		SearchQuery:   query,
 		SearchResults: results,
 	}
+	s.attachViewData(r, &data)
 	if r.Header.Get("HX-Request") == "true" {
 		s.views.RenderTemplate(w, "search_results", data)
 		return
@@ -1052,6 +1099,11 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := parseDateParam(r.URL.Query().Get("d"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	if !IsAuthenticated(r.Context()) {
+		activeTodo = false
+		activeDue = false
+		activeTags = noteTags
+	}
 	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, noteTags, activeTodo, activeDue, activeDate, activeSearch)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1068,12 +1120,16 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		SearchQuery:      activeSearch,
 		SearchQueryParam: buildSearchQuery(activeSearch),
 	}
+	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "home_notes", data)
 }
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
 		return
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
@@ -1122,7 +1178,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/tasks", todoCount, dueCount, activeDate, activeSearch)
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/tasks", todoCount, dueCount, activeDate, activeSearch, true)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1145,12 +1201,16 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
 	}
+	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }
 
 func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -1307,7 +1367,7 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, offset, false, err
 		}
-		if err == nil {
+		if err == nil && IsAuthenticated(ctx) {
 			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
 		}
 		labelTime := note.MTime
@@ -1329,6 +1389,9 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	if r.Method == http.MethodGet {
 		uploadToken := strings.TrimSpace(r.URL.Query().Get("upload_token"))
 		if uploadToken == "" {
@@ -1346,6 +1409,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
 		}
+		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
 		return
 	}
@@ -1355,7 +1419,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseForm(); err != nil {
 		uploadToken := r.Form.Get("upload_token")
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       r.Form.Get("content"),
@@ -1371,8 +1435,9 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	uploadToken := r.Form.Get("upload_token")
+	visibility := strings.TrimSpace(r.Form.Get("visibility"))
 	if content == "" {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       "",
@@ -1397,7 +1462,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 
 	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, title)
 	if err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
@@ -1410,12 +1475,28 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}, http.StatusInternalServerError)
 		return
 	}
+	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
+		}, http.StatusBadRequest)
+		return
+	} else {
+		mergedContent = updated
+	}
 
 	slug := slugify(title)
 	notePath := filepath.ToSlash(filepath.Join(time.Now().Format("2006-01"), fs.EnsureMDExt(slug)))
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
@@ -1429,7 +1510,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := os.Stat(fullPath); err == nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
@@ -1443,7 +1524,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil && !os.IsNotExist(err) {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
@@ -1458,7 +1539,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
@@ -1472,7 +1553,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := fs.WriteFileAtomic(fullPath, []byte(mergedContent), 0o644); err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
@@ -1486,7 +1567,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.promoteTempAttachments(uploadToken, mergedContent); err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
@@ -1637,6 +1718,11 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
+	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
+	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
+		http.NotFound(w, r)
+		return
+	}
 	htmlStr, err := s.renderNoteBody(r.Context(), normalizedContent)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1647,23 +1733,33 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err == nil {
+	if err == nil && IsAuthenticated(r.Context()) {
 		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := parseDateParam(r.URL.Query().Get("d"))
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	isAuth := IsAuthenticated(r.Context())
+	if !isAuth {
+		activeTodo = false
+		activeDue = false
+		activeTags = noteTags
+	}
 	tags, err := s.idx.ListTags(r.Context(), 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	todoCount := 0
+	dueCount := 0
+	if isAuth {
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate)
@@ -1674,14 +1770,14 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		for _, tag := range filteredTags {
 			allowed[tag.Name] = struct{}{}
 		}
-		if todoCount > 0 || activeTodo {
+		if isAuth && (todoCount > 0 || activeTodo) {
 			allowed["TODO"] = struct{}{}
 		}
-		if dueCount > 0 || activeDue {
+		if isAuth && (dueCount > 0 || activeDue) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch)
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1689,7 +1785,6 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	tagQuery := buildTagsQuery(activeTags)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch)
-	noteMeta := index.FrontmatterAttributes(string(content))
 	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title, noteMeta.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1729,6 +1824,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		CalendarMonth:    calendar,
 		Backlinks:        backlinkViews,
 	}
+	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }
 
@@ -1757,6 +1853,9 @@ func (s *Server) resolveNotePath(ctx context.Context, noteRef string) (string, e
 func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
 		return
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
@@ -1821,12 +1920,16 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		Attachments:      attachments,
 		AttachmentBase:   attachmentBase,
 	}
+	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }
 
 func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePath string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
 		return
 	}
 	ctx := r.Context()
@@ -1868,6 +1971,9 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, notePath string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
 		return
 	}
 	if err := r.ParseMultipartForm(16 << 20); err != nil {
@@ -1944,6 +2050,9 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireAuth(w, r) {
+		return
+	}
 	if err := r.ParseMultipartForm(16 << 20); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -2017,6 +2126,9 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireAuth(w, r) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -2052,6 +2164,9 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, notePath string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -2122,6 +2237,21 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !IsAuthenticated(r.Context()) {
+		parts := strings.Split(clean, string(filepath.Separator))
+		if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := s.idx.PathByUID(r.Context(), parts[0]); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -2191,9 +2321,12 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireAuth(w, r) {
+		return
+	}
 	ctx := r.Context()
 	if err := r.ParseForm(); err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:           "Edit note",
 			ContentTemplate: "edit",
 			NotePath:        notePath,
@@ -2205,8 +2338,9 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
+	visibility := strings.TrimSpace(r.Form.Get("visibility"))
 	if content == "" {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
 			NotePath:         notePath,
@@ -2230,7 +2364,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	mergedContent = normalizeLineEndings(mergedContent)
 	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
 	if err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
 			NotePath:         notePath,
@@ -2242,10 +2376,25 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusInternalServerError)
 		return
 	}
+	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+		}, http.StatusBadRequest)
+		return
+	} else {
+		mergedContent = updated
+	}
 
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:           "Edit note",
 			ContentTemplate: "edit",
 			NotePath:        notePath,
@@ -2258,7 +2407,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	existingContent, err := os.ReadFile(fullPath)
 	if err != nil && !os.IsNotExist(err) {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
 			NotePath:         notePath,
@@ -2277,13 +2426,14 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
 	if titleChanged && decision == "" {
 		newPath := filepath.ToSlash(filepath.Join(filepath.Dir(notePath), fs.EnsureMDExt(slugify(derivedTitle))))
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
 			NotePath:         notePath,
 			NoteTitle:        derivedTitle,
 			RawContent:       content,
 			FrontmatterBlock: index.FrontmatterBlock(mergedContent),
+			NoteMeta:         index.FrontmatterAttributes(mergedContent),
 			RenamePrompt:     true,
 			RenameFromPath:   notePath,
 			RenameToPath:     newPath,
@@ -2300,7 +2450,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		targetPath = filepath.ToSlash(filepath.Join(filepath.Dir(notePath), fs.EnsureMDExt(slugify(derivedTitle))))
 		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
 		if err != nil {
-			s.renderEditError(w, ViewData{
+			s.renderEditError(w, r, ViewData{
 				Title:            "Edit note",
 				ContentTemplate:  "edit",
 				NotePath:         notePath,
@@ -2314,7 +2464,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 		if targetPath != notePath {
 			if _, err := os.Stat(targetFullPath); err == nil {
-				s.renderEditError(w, ViewData{
+				s.renderEditError(w, r, ViewData{
 					Title:            "Edit note",
 					ContentTemplate:  "edit",
 					NotePath:         notePath,
@@ -2327,7 +2477,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				return
 			}
 			if err != nil && !os.IsNotExist(err) {
-				s.renderEditError(w, ViewData{
+				s.renderEditError(w, r, ViewData{
 					Title:            "Edit note",
 					ContentTemplate:  "edit",
 					NotePath:         notePath,
@@ -2343,7 +2493,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 
 	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
 			NotePath:         targetPath,
@@ -2356,7 +2506,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
-		s.renderEditError(w, ViewData{
+		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
 			NotePath:         targetPath,
@@ -2370,7 +2520,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	if targetPath != notePath {
 		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
-			s.renderEditError(w, ViewData{
+			s.renderEditError(w, r, ViewData{
 				Title:            "Edit note",
 				ContentTemplate:  "edit",
 				NotePath:         targetPath,
@@ -2392,14 +2542,18 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	http.Redirect(w, r, "/notes/"+targetPath, http.StatusSeeOther)
 }
 
-func (s *Server) renderEditError(w http.ResponseWriter, data ViewData, status int) {
+func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {
 	w.WriteHeader(status)
+	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {

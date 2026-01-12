@@ -1,13 +1,13 @@
 package web
 
 import (
-	"context"
 	"crypto/subtle"
 	"errors"
 	"net/http"
 
 	"gwiki/internal/auth"
 	"gwiki/internal/config"
+	"gwiki/internal/index"
 )
 
 type authEntry struct {
@@ -49,12 +49,17 @@ func newAuth(cfg config.Config) (*Auth, error) {
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
-		if !ok || !a.verify(user, pass) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="gwiki"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if ok {
+			if !a.verify(user, pass) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="gwiki"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true})
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		ctx := context.WithValue(r.Context(), userKey, User{Name: user})
+		ctx := index.WithPublicVisibility(r.Context())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
