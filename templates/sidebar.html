@@ -127,20 +127,35 @@
     <span>Folders</span>
     <span class="text-slate-600">.</span>
   </div>
-  <div class="mt-3 space-y-1 text-xs">
-    {{range .Folders}}
-      {{if .URL}}
-        <a
-          class="block rounded-md px-2 py-1 transition {{if .Active}}bg-sky-500/20 text-sky-200{{else}}text-slate-300 hover:bg-[#1a1f26]{{end}}"
-          href="{{.URL}}"
-          >{{.Name}}</a
-        >
-      {{else}}
-        <span class="block rounded-md px-2 py-1 text-slate-500">{{.Name}}</span>
-      {{end}}
-    {{else}}
-      <span class="text-slate-500">No folders yet.</span>
-    {{end}}
+  <div class="mt-3 text-xs">
+    {{template "folder_tree" .FolderTree}}
   </div>
 </div>
+{{end}}
+
+{{define "folder_tree"}}
+{{if .}}
+<ul class="list-disc space-y-1 pl-4 text-slate-300">
+  {{template "folder_tree_nodes" .}}
+</ul>
+{{else}}
+<span class="text-slate-500">No folders yet.</span>
+{{end}}
+{{end}}
+
+{{define "folder_tree_nodes"}}
+{{range .}}
+<li>
+  {{if .URL}}
+    <a class="{{if .Active}}text-sky-200{{end}}" href="{{.URL}}">{{.Name}}</a>
+  {{else}}
+    <span>{{.Name}}</span>
+  {{end}}
+  {{if .Children}}
+    <ul class="list-disc space-y-1 pl-4">
+      {{template "folder_tree_nodes" .Children}}
+    </ul>
+  {{end}}
+</li>
+{{end}}
 {{end}}

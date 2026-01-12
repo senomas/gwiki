@@ -45,7 +45,7 @@ type ViewData struct {
 	SearchQueryParam string
 	Attachments      []string
 	AttachmentBase   string
-	Folders          []FolderLink
+	FolderTree       []FolderNode
 	ActiveFolder     string
 	FolderQuery      string
 }
@@ -71,6 +71,14 @@ type FolderLink struct {
 	URL    string
 	Active bool
 	Depth  int
+}
+
+type FolderNode struct {
+	Name     string
+	Path     string
+	URL      string
+	Active   bool
+	Children []FolderNode
 }
 
 type NoteCard struct {

@@ -418,38 +418,95 @@ func buildFolderURL(basePath string, folder string, rootOnly bool, activeTags []
 	return basePath + "?" + strings.Join(params, "&")
 }
 
-func buildFolderLinks(folders []string, hasRoot bool, activeFolder string, activeRoot bool, basePath string, activeTags []string, activeDate string, activeSearch string) []FolderLink {
-	links := make([]FolderLink, 0, len(folders)+2)
+type folderNode struct {
+	Name     string
+	Path     string
+	URL      string
+	Active   bool
+	Children []*folderNode
+}
+
+func buildFolderTree(folders []string, hasRoot bool, activeFolder string, activeRoot bool, basePath string, activeTags []string, activeDate string, activeSearch string) []FolderNode {
+	if !hasRoot && len(folders) == 0 {
+		return nil
+	}
 	allURL := buildFolderURL(basePath, "", false, activeTags, activeDate, activeSearch)
-	links = append(links, FolderLink{
-		Name:   "All",
-		Path:   "",
-		URL:    allURL,
-		Active: !activeRoot && strings.TrimSpace(activeFolder) == "",
-		Depth:  0,
-	})
-	if hasRoot {
-		links = append(links, FolderLink{
-			Name:   "Root",
-			Path:   "root",
-			URL:    buildFolderURL(basePath, "", true, activeTags, activeDate, activeSearch),
-			Active: activeRoot,
-			Depth:  0,
-		})
+	rootURL := buildFolderURL(basePath, "", true, activeTags, activeDate, activeSearch)
+	if activeRoot {
+		rootURL = allURL
 	}
+	root := &folderNode{
+		Name:   "Root",
+		Path:   "root",
+		URL:    rootURL,
+		Active: activeRoot,
+	}
+
+	nodes := map[string]*folderNode{}
 	for _, folder := range folders {
-		depth := strings.Count(folder, "/")
-		prefix := strings.Repeat("-- ", depth)
-		label := prefix + path.Base(folder)
-		links = append(links, FolderLink{
-			Name:   label,
-			Path:   folder,
-			URL:    buildFolderURL(basePath, folder, false, activeTags, activeDate, activeSearch),
-			Active: !activeRoot && strings.EqualFold(activeFolder, folder),
-			Depth:  depth,
-		})
+		nodes[folder] = &folderNode{
+			Name: path.Base(folder),
+			Path: folder,
+		}
 	}
-	return links
+
+	for _, folder := range folders {
+		parent := path.Dir(folder)
+		if parent == "." {
+			parent = ""
+		}
+		if parent == "" {
+			root.Children = append(root.Children, nodes[folder])
+			continue
+		}
+		parentNode, ok := nodes[parent]
+		if !ok {
+			parentNode = &folderNode{Name: path.Base(parent), Path: parent}
+			nodes[parent] = parentNode
+			root.Children = append(root.Children, parentNode)
+		}
+		parentNode.Children = append(parentNode.Children, nodes[folder])
+	}
+
+	var assign func(node *folderNode)
+	assign = func(node *folderNode) {
+		if node.Path != "root" && node.Path != "" {
+			node.URL = buildFolderURL(basePath, node.Path, false, activeTags, activeDate, activeSearch)
+			if !activeRoot && strings.EqualFold(activeFolder, node.Path) {
+				node.Active = true
+				node.URL = allURL
+			}
+		}
+		for _, child := range node.Children {
+			assign(child)
+		}
+	}
+	assign(root)
+
+	var materialize func(node *folderNode) FolderNode
+	materialize = func(node *folderNode) FolderNode {
+		out := FolderNode{
+			Name:   node.Name,
+			Path:   node.Path,
+			URL:    node.URL,
+			Active: node.Active,
+		}
+		if len(node.Children) > 0 {
+			out.Children = make([]FolderNode, 0, len(node.Children))
+			for _, child := range node.Children {
+				out.Children = append(out.Children, materialize(child))
+			}
+		}
+		return out
+	}
+	if len(root.Children) == 0 {
+		return nil
+	}
+	out := make([]FolderNode, 0, len(root.Children))
+	for _, child := range root.Children {
+		out = append(out, materialize(child))
+	}
+	return out
 }
 
 func buildDueTagLink(activeList []string, activeSet map[string]struct{}, allowed map[string]struct{}, basePath string, count int, activeDate string, activeSearch string, activeFolder string, activeRoot bool) TagLink {
@@ -1143,7 +1200,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderLinks := buildFolderLinks(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
 	data := ViewData{
 		Title:            "Home",
 		ContentTemplate:  "home",
@@ -1154,7 +1211,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		TagLinks:         tagLinks,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
-		Folders:          folderLinks,
+		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		ActiveDate:       activeDate,
@@ -1377,7 +1434,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderLinks := buildFolderLinks(folders, hasRoot, activeFolder, activeRoot, "/tasks", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/tasks", activeTags, activeDate, activeSearch)
 	data := ViewData{
 		Title:            "Tasks",
 		ContentTemplate:  "tasks",
@@ -1386,7 +1443,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		TagLinks:         tagLinks,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
-		Folders:          folderLinks,
+		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		ActiveDate:       activeDate,
@@ -2086,7 +2143,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderLinks := buildFolderLinks(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
 	data := ViewData{
 		Title:            meta.Title,
 		ContentTemplate:  "view",
@@ -2098,7 +2155,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		TagLinks:         tagLinks,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
-		Folders:          folderLinks,
+		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		ActiveDate:       activeDate,
