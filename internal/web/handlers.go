@@ -444,7 +444,15 @@ type folderNode struct {
 }
 
 func buildFolderTree(folders []string, hasRoot bool, activeFolder string, activeRoot bool, basePath string, activeTags []string, activeDate string, activeSearch string) []FolderNode {
-	if !hasRoot && len(folders) == 0 {
+	journalFolder := regexp.MustCompile(`^\d{4}-\d{2}$`)
+	filtered := make([]string, 0, len(folders))
+	for _, folder := range folders {
+		if journalFolder.MatchString(folder) {
+			continue
+		}
+		filtered = append(filtered, folder)
+	}
+	if !hasRoot && len(filtered) == 0 {
 		return nil
 	}
 	allURL := buildFolderURL(basePath, "", false, activeTags, activeDate, activeSearch)
@@ -460,14 +468,14 @@ func buildFolderTree(folders []string, hasRoot bool, activeFolder string, active
 	}
 
 	nodes := map[string]*folderNode{}
-	for _, folder := range folders {
+	for _, folder := range filtered {
 		nodes[folder] = &folderNode{
 			Name: path.Base(folder),
 			Path: folder,
 		}
 	}
 
-	for _, folder := range folders {
+	for _, folder := range filtered {
 		parent := path.Dir(folder)
 		if parent == "." {
 			parent = ""
