@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gwiki/internal/config"
@@ -14,6 +16,14 @@ import (
 )
 
 func main() {
+	level := parseLogLevel(os.Getenv("WIKI_LOG_LEVEL"))
+	logWriter, logCloser := selectLogWriter()
+	if logCloser != nil {
+		defer logCloser.Close()
+	}
+	handler := slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
+
 	cfg := config.Load()
 	if cfg.RepoPath == "" {
 		slog.Error("WIKI_REPO_PATH is required")
@@ -58,4 +68,31 @@ func main() {
 		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}
+}
+
+func parseLogLevel(raw string) slog.Leveler {
+	level := new(slog.LevelVar)
+	level.Set(slog.LevelInfo)
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "info":
+		level.Set(slog.LevelInfo)
+	case "warn", "warning":
+		level.Set(slog.LevelWarn)
+	case "error":
+		level.Set(slog.LevelError)
+	}
+	return level
+}
+
+func selectLogWriter() (io.Writer, io.Closer) {
+	path := strings.TrimSpace(os.Getenv("LOG_FILE"))
+	if path == "" {
+		return os.Stdout, nil
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		slog.Error("open log file", "path", path, "err", err)
+		return os.Stdout, nil
+	}
+	return file, file
 }
