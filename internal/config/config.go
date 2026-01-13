@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	RepoPath          string
+	DataPath          string
 	ListenAddr        string
 	AuthUser          string
 	AuthPass          string
@@ -22,13 +23,17 @@ func Load() Config {
 	initEnvFile()
 	cfg := Config{
 		RepoPath:   os.Getenv("WIKI_REPO_PATH"),
+		DataPath:   os.Getenv("WIKI_DATA_PATH"),
 		ListenAddr: envOr("WIKI_LISTEN_ADDR", "127.0.0.1:8080"),
 		AuthUser:   os.Getenv("WIKI_AUTH_USER"),
 		AuthPass:   os.Getenv("WIKI_AUTH_PASS"),
 		AuthFile:   os.Getenv("WIKI_AUTH_FILE"),
 	}
-	if cfg.AuthFile == "" && cfg.RepoPath != "" {
-		cfg.AuthFile = filepath.Join(cfg.RepoPath, ".wiki", "auth.txt")
+	if cfg.DataPath == "" && cfg.RepoPath != "" {
+		cfg.DataPath = filepath.Join(cfg.RepoPath, ".wiki")
+	}
+	if cfg.AuthFile == "" && cfg.DataPath != "" {
+		cfg.AuthFile = filepath.Join(cfg.DataPath, "auth.txt")
 	}
 
 	cfg.GitDebounce = parseDurationOr("WIKI_GIT_DEBOUNCE", 3*time.Minute)

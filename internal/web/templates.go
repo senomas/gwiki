@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,12 +16,10 @@ type Templates struct {
 }
 
 func MustParseTemplates() *Templates {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
+	glob := resolveTemplateGlob()
+	if glob == "" {
 		panic("unable to resolve template path")
 	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	glob := filepath.Join(root, "templates", "*.html")
 
 	t := template.New("").Funcs(template.FuncMap{
 		"dict": func(values ...any) (map[string]any, error) {
@@ -60,6 +59,36 @@ func MustParseTemplates() *Templates {
 	})
 	t = template.Must(t.ParseGlob(glob))
 	return &Templates{all: t}
+}
+
+func resolveTemplateGlob() string {
+	tryGlob := func(root string) string {
+		if root == "" {
+			return ""
+		}
+		glob := filepath.Join(root, "templates", "*.html")
+		if matches, _ := filepath.Glob(glob); len(matches) > 0 {
+			return glob
+		}
+		return ""
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if glob := tryGlob(cwd); glob != "" {
+			return glob
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		if glob := tryGlob(filepath.Dir(exe)); glob != "" {
+			return glob
+		}
+	}
+	if _, file, _, ok := runtime.Caller(0); ok {
+		root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+		if glob := tryGlob(root); glob != "" {
+			return glob
+		}
+	}
+	return ""
 }
 
 func (t *Templates) RenderPage(w http.ResponseWriter, data ViewData) {

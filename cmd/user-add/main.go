@@ -84,6 +84,7 @@ func authFilePath() (string, error) {
 		return v, nil
 	}
 	repo := os.Getenv("WIKI_REPO_PATH")
+	data := os.Getenv("WIKI_DATA_PATH")
 	if repo == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -91,7 +92,10 @@ func authFilePath() (string, error) {
 		}
 		repo = cwd
 	}
-	return filepath.Join(repo, ".wiki", "auth.txt"), nil
+	if data == "" {
+		data = filepath.Join(repo, ".wiki")
+	}
+	return filepath.Join(data, "auth.txt"), nil
 }
 
 func promptPassword(prompt string) (string, error) {

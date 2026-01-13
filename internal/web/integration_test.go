@@ -21,11 +21,12 @@ func TestIntegrationFlow(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, "notes"), 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repo, ".wiki"), 0o755); err != nil {
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir .wiki: %v", err)
 	}
 
-	idx, err := index.Open(filepath.Join(repo, ".wiki", "index.sqlite"))
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
 	if err != nil {
 		t.Fatalf("open index: %v", err)
 	}
@@ -37,7 +38,7 @@ func TestIntegrationFlow(t *testing.T) {
 		t.Fatalf("init index: %v", err)
 	}
 
-	cfg := config.Config{RepoPath: repo, ListenAddr: "127.0.0.1:0"}
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
 	srv, err := NewServer(cfg, idx)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

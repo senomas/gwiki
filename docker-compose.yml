@@ -1,7 +1,11 @@
 services:
   gwiki:
-    build: .
+    image: docker.senomas.com/gwiki:latest
     ports:
       - "8080:8080"
     volumes:
-      - "${WIKI_REPO_PATH_HOST:-.}:/data"
+      - "${WIKI_REPO_PATH_HOST:-.}:/notes"
+      - "${WIKI_DATA_PATH_HOST:-./.wiki}:/data"
+    environment:
+      - WIKI_REPO_PATH=/notes
+      - WIKI_DATA_PATH=/data

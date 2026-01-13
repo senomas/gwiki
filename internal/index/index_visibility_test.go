@@ -13,7 +13,8 @@ func TestPublicVisibilityFilter(t *testing.T) {
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(repo, ".wiki"), 0o755); err != nil {
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir .wiki: %v", err)
 	}
 
@@ -40,7 +41,7 @@ Secret bananas with #privatetag.
 		t.Fatalf("write private note: %v", err)
 	}
 
-	idx, err := Open(filepath.Join(repo, ".wiki", "index.sqlite"))
+	idx, err := Open(filepath.Join(dataDir, "index.sqlite"))
 	if err != nil {
 		t.Fatalf("open index: %v", err)
 	}

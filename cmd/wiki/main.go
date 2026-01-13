@@ -19,9 +19,12 @@ func main() {
 		slog.Error("WIKI_REPO_PATH is required")
 		os.Exit(1)
 	}
+	if cfg.DataPath == "" {
+		slog.Error("WIKI_DATA_PATH is required")
+		os.Exit(1)
+	}
 
-	wikiDir := filepath.Join(cfg.RepoPath, ".wiki")
-	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.DataPath, 0o755); err != nil {
 		slog.Error("create .wiki dir", "err", err)
 		os.Exit(1)
 	}
@@ -31,7 +34,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	idx, err := index.Open(filepath.Join(wikiDir, "index.sqlite"))
+	idx, err := index.Open(filepath.Join(cfg.DataPath, "index.sqlite"))
 	if err != nil {
 		slog.Error("open index", "err", err)
 		os.Exit(1)
