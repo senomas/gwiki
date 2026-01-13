@@ -1719,11 +1719,115 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	mergedContent = normalizeLineEndings(mergedContent)
 	title := index.DeriveTitleFromBody(content)
+	now := time.Now()
+	journalMode := false
 	if title == "" {
-		title = time.Now().Format("2006-01-02 15-04")
+		journalMode = true
+		journalDate := now.Format("2 Jan 2006")
+		journalTime := now.Format("15:04")
+		journalEntry := "## " + journalTime + "\n\n" + strings.TrimSpace(content) + "\n"
+		notePath := filepath.ToSlash(filepath.Join(now.Format("2006-01"), now.Format("02")+".md"))
+		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+		if err != nil {
+			s.renderEditError(w, r, ViewData{
+				Title:            "New note",
+				ContentTemplate:  "edit",
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				SaveAction:       "/notes/new",
+				UploadToken:      uploadToken,
+				Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+				ErrorMessage:     err.Error(),
+				ErrorReturnURL:   "/notes/new",
+			}, http.StatusBadRequest)
+			return
+		}
+		if existing, err := os.ReadFile(fullPath); err == nil {
+			existingContent := strings.TrimRight(normalizeLineEndings(string(existing)), "\n")
+			updatedContent := existingContent + "\n\n" + journalEntry
+			derivedTitle := index.DeriveTitleFromBody(updatedContent)
+			if derivedTitle == "" {
+				derivedTitle = journalDate
+			}
+			updatedContent, err = index.EnsureFrontmatterWithTitle(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle)
+			if err != nil {
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusInternalServerError)
+				return
+			}
+			unlock := s.locker.Lock(notePath)
+			if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
+				unlock()
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusInternalServerError)
+				return
+			}
+			unlock()
+			if err := s.promoteTempAttachments(uploadToken, updatedContent); err != nil {
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusInternalServerError)
+				return
+			}
+			if info, err := os.Stat(fullPath); err == nil {
+				_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
+			}
+			http.Redirect(w, r, "/notes/"+notePath, http.StatusSeeOther)
+			return
+		} else if err != nil && !os.IsNotExist(err) {
+			s.renderEditError(w, r, ViewData{
+				Title:            "New note",
+				ContentTemplate:  "edit",
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				SaveAction:       "/notes/new",
+				UploadToken:      uploadToken,
+				Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+				ErrorMessage:     err.Error(),
+				ErrorReturnURL:   "/notes/new",
+			}, http.StatusInternalServerError)
+			return
+		}
+
+		content = "# " + journalDate + "\n\n" + journalEntry
+		mergedContent = content
+		if frontmatter != "" {
+			mergedContent = frontmatter + "\n" + content
+		}
+		mergedContent = normalizeLineEndings(mergedContent)
+		title = journalDate
+		folderInput = now.Format("2006-01")
+	} else {
+		mergedContent = normalizeLineEndings(mergedContent)
 	}
 
-	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, title)
+	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, now, s.cfg.UpdatedHistoryMax, title)
 	if err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
@@ -1821,10 +1925,15 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		mergedContent = updated
 	}
 
-	slug := slugify(title)
-	notePath := fs.EnsureMDExt(slug)
-	if folder != "" {
-		notePath = filepath.ToSlash(filepath.Join(folder, notePath))
+	var notePath string
+	if journalMode {
+		notePath = filepath.ToSlash(filepath.Join(folder, now.Format("02")+".md"))
+	} else {
+		slug := slugify(title)
+		notePath = fs.EnsureMDExt(slug)
+		if folder != "" {
+			notePath = filepath.ToSlash(filepath.Join(folder, notePath))
+		}
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
