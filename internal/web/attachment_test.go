@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"gwiki/internal/auth"
 	"gwiki/internal/config"
 	"gwiki/internal/index"
 )
@@ -155,4 +156,143 @@ func TestRenderVideoAttachmentEmbed(t *testing.T) {
 	if !strings.Contains(html, "Demo video") {
 		t.Fatalf("expected title, got %s", html)
 	}
+}
+
+func TestAttachmentAndAssetAccessControl(t *testing.T) {
+	repo := t.TempDir()
+	notesDir := filepath.Join(repo, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	authHash, err := auth.HashPassword("secret")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	authFile := filepath.Join(dataDir, "auth.txt")
+	if err := os.WriteFile(authFile, []byte("alice:"+authHash+"\n"), 0o600); err != nil {
+		t.Fatalf("write auth file: %v", err)
+	}
+
+	publicID := "public-note"
+	privateID := "private-note"
+	publicContent := "---\n" +
+		"id: " + publicID + "\n" +
+		"title: Public Note\n" +
+		"visibility: public\n" +
+		"---\n\n" +
+		"Public\n"
+	privateContent := "---\n" +
+		"id: " + privateID + "\n" +
+		"title: Private Note\n" +
+		"visibility: private\n" +
+		"---\n\n" +
+		"Private\n"
+
+	publicPath := filepath.Join(notesDir, "public.md")
+	privatePath := filepath.Join(notesDir, "private.md")
+	if err := os.WriteFile(publicPath, []byte(publicContent), 0o644); err != nil {
+		t.Fatalf("write public note: %v", err)
+	}
+	if err := os.WriteFile(privatePath, []byte(privateContent), 0o644); err != nil {
+		t.Fatalf("write private note: %v", err)
+	}
+
+	publicAttachment := filepath.Join(notesDir, "attachments", publicID, "public.txt")
+	privateAttachment := filepath.Join(notesDir, "attachments", privateID, "private.txt")
+	if err := os.MkdirAll(filepath.Dir(publicAttachment), 0o755); err != nil {
+		t.Fatalf("mkdir public attachment dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(privateAttachment), 0o755); err != nil {
+		t.Fatalf("mkdir private attachment dir: %v", err)
+	}
+	if err := os.WriteFile(publicAttachment, []byte("public-attachment"), 0o644); err != nil {
+		t.Fatalf("write public attachment: %v", err)
+	}
+	if err := os.WriteFile(privateAttachment, []byte("private-attachment"), 0o644); err != nil {
+		t.Fatalf("write private attachment: %v", err)
+	}
+
+	publicAsset := filepath.Join(dataDir, "assets", publicID, "thumb.jpg")
+	privateAsset := filepath.Join(dataDir, "assets", privateID, "thumb.jpg")
+	if err := os.MkdirAll(filepath.Dir(publicAsset), 0o755); err != nil {
+		t.Fatalf("mkdir public asset dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(privateAsset), 0o755); err != nil {
+		t.Fatalf("mkdir private asset dir: %v", err)
+	}
+	if err := os.WriteFile(publicAsset, []byte("public-asset"), 0o644); err != nil {
+		t.Fatalf("write public asset: %v", err)
+	}
+	if err := os.WriteFile(privateAsset, []byte("private-asset"), 0o644); err != nil {
+		t.Fatalf("write private asset: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+	if info, err := os.Stat(publicPath); err == nil {
+		if err := idx.IndexNote(ctx, "public.md", []byte(publicContent), info.ModTime(), info.Size()); err != nil {
+			t.Fatalf("index public note: %v", err)
+		}
+	} else {
+		t.Fatalf("stat public note: %v", err)
+	}
+	if info, err := os.Stat(privatePath); err == nil {
+		if err := idx.IndexNote(ctx, "private.md", []byte(privateContent), info.ModTime(), info.Size()); err != nil {
+			t.Fatalf("index private note: %v", err)
+		}
+	} else {
+		t.Fatalf("stat private note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0", AuthFile: authFile}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	assertStatus := func(path string, want int, withAuth bool) {
+		req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		if withAuth {
+			req.SetBasicAuth("alice", "secret")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Fatalf("expected %d for %s (auth=%v), got %d", want, path, withAuth, resp.StatusCode)
+		}
+	}
+
+	assertStatus("/attachments/"+publicID+"/public.txt", http.StatusOK, false)
+	assertStatus("/attachments/"+privateID+"/private.txt", http.StatusNotFound, false)
+	assertStatus("/attachments/missing-id/missing.txt", http.StatusNotFound, false)
+	assertStatus("/assets/"+publicID+"/thumb.jpg", http.StatusOK, false)
+	assertStatus("/assets/"+privateID+"/thumb.jpg", http.StatusNotFound, false)
+	assertStatus("/assets/missing-id/thumb.jpg", http.StatusNotFound, false)
+
+	assertStatus("/attachments/"+privateID+"/private.txt", http.StatusOK, true)
+	assertStatus("/assets/"+privateID+"/thumb.jpg", http.StatusOK, true)
+	assertStatus("/attachments/missing-id/missing.txt", http.StatusNotFound, true)
+	assertStatus("/assets/missing-id/thumb.jpg", http.StatusNotFound, true)
 }

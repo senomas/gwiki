@@ -4239,20 +4239,10 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !IsAuthenticated(r.Context()) {
-		parts := strings.Split(clean, string(filepath.Separator))
-		if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
-			http.NotFound(w, r)
-			return
-		}
-		if _, err := s.idx.PathByUID(r.Context(), parts[0]); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				http.NotFound(w, r)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	noteID, ok := firstPathSegment(clean)
+	if !ok || !s.noteIDAccessible(r.Context(), noteID) {
+		http.NotFound(w, r)
+		return
 	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -4295,20 +4285,10 @@ func (s *Server) handleAssetFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !IsAuthenticated(r.Context()) {
-		parts := strings.Split(clean, string(filepath.Separator))
-		if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
-			http.NotFound(w, r)
-			return
-		}
-		if _, err := s.idx.PathByUID(r.Context(), parts[0]); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				http.NotFound(w, r)
-				return
-			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	noteID, ok := firstPathSegment(clean)
+	if !ok || !s.noteIDAccessible(r.Context(), noteID) {
+		http.NotFound(w, r)
+		return
 	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -4324,6 +4304,31 @@ func (s *Server) handleAssetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, fullPath)
+}
+
+func firstPathSegment(clean string) (string, bool) {
+	parts := strings.Split(clean, string(filepath.Separator))
+	if len(parts) < 2 {
+		return "", false
+	}
+	noteID := strings.TrimSpace(parts[0])
+	if noteID == "" {
+		return "", false
+	}
+	return noteID, true
+}
+
+func (s *Server) noteIDAccessible(ctx context.Context, noteID string) bool {
+	if noteID == "" {
+		return false
+	}
+	if !IsAuthenticated(ctx) {
+		ctx = index.WithPublicVisibility(ctx)
+	}
+	if _, err := s.idx.PathByUID(ctx, noteID); err != nil {
+		return false
+	}
+	return true
 }
 
 func (s *Server) ensureVideoThumbnail(noteID, relPath string) (string, bool) {
