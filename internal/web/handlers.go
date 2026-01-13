@@ -418,6 +418,23 @@ func buildFolderURL(basePath string, folder string, rootOnly bool, activeTags []
 	return basePath + "?" + strings.Join(params, "&")
 }
 
+func buildFilterQuery(activeTags []string, activeDate string, activeSearch string, activeFolder string, activeRoot bool) string {
+	params := make([]string, 0, 4)
+	if tagQuery := buildTagsQuery(activeTags); tagQuery != "" {
+		params = append(params, "t="+tagQuery)
+	}
+	if folderQuery := buildFolderQuery(activeFolder, activeRoot); folderQuery != "" {
+		params = append(params, "f="+url.QueryEscape(folderQuery))
+	}
+	if activeDate != "" {
+		params = append(params, "d="+url.QueryEscape(activeDate))
+	}
+	if activeSearch != "" {
+		params = append(params, "s="+url.QueryEscape(activeSearch))
+	}
+	return strings.Join(params, "&")
+}
+
 type folderNode struct {
 	Name     string
 	Path     string
@@ -1189,6 +1206,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tagQuery := buildTagsQuery(activeTags)
+	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, noteTags, activeTodo, activeDue, activeDate, activeSearch, activeFolder, activeRoot)
 	if err != nil {
@@ -1214,6 +1232,8 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      filterQuery,
+		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -1357,6 +1377,8 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		ActiveTags:       activeTags,
 		TagQuery:         buildTagsQuery(activeTags),
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot),
+		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -1428,6 +1450,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tagQuery := buildTagsQuery(activeTags)
+	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/tasks", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
@@ -1446,6 +1469,8 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      filterQuery,
+		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -2226,6 +2251,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 	tagQuery := buildTagsQuery(activeTags)
+	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title, noteMeta.ID)
 	if err != nil {
@@ -2267,6 +2293,8 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      filterQuery,
+		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,

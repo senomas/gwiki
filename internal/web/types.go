@@ -48,6 +48,9 @@ type ViewData struct {
 	FolderTree       []FolderNode
 	ActiveFolder     string
 	FolderQuery      string
+	FilterQuery      string
+	HomeURL          string
+	NoteURL          string
 }
 
 type BacklinkView struct {

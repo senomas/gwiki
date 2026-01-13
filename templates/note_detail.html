@@ -2,7 +2,11 @@
 <div class="space-y-3">
   {{if .NotePath}}
     <h1 class="text-2xl font-semibold text-slate-100">
-      <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.NotePath}}">{{.NoteTitle}}</a>
+      {{if .NoteURL}}
+        <a class="text-sky-300 hover:text-sky-200" href="{{.NoteURL}}">{{.NoteTitle}}</a>
+      {{else}}
+        <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.NotePath}}">{{.NoteTitle}}</a>
+      {{end}}
     </h1>
   {{else}}
     <h1 class="text-2xl font-semibold text-slate-100">{{.NoteTitle}}</h1>

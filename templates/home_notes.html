@@ -5,7 +5,9 @@
   <div class="mt-4">
     <div class="flex items-start justify-between gap-4">
       <div class="flex-1">
-        {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "RenderedHTML" .RenderedHTML "NotePath" .Path)}}
+        {{ $noteURL := printf "/notes/%s" .Path }}
+        {{ if $.FilterQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.FilterQuery }}{{ end }}
+        {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "RenderedHTML" .RenderedHTML "NotePath" .Path "NoteURL" $noteURL)}}
       </div>
       {{if and $.AuthEnabled $.IsAuthenticated}}
       <div>
