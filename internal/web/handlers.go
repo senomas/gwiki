@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -50,6 +51,7 @@ var mdRenderer = goldmark.New(
 	)),
 	goldmark.WithExtensions(&linkTargetBlank{}),
 	goldmark.WithExtensions(&mapsEmbedExtension{}),
+	goldmark.WithExtensions(&youtubeEmbedExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
 )
 
@@ -714,12 +716,36 @@ var embedCacheStore *index.Index
 
 var mapsEmbedInFlight = newTTLCache(512)
 
+var (
+	youtubeEmbedKind       = ast.NewNodeKind("YouTubeEmbed")
+	youtubeEmbedHTTPClient = &http.Client{Timeout: 3 * time.Second}
+	youtubeEmbedCacheKind  = "youtube"
+	youtubeEmbedContextKey = parser.NewContextKey()
+)
+
+const (
+	youtubeEmbedSuccessTTL  = 7 * 24 * time.Hour
+	youtubeEmbedFailureTTL  = 30 * time.Minute
+	youtubeEmbedPendingTTL  = 20 * time.Second
+	youtubeEmbedSyncTimeout = 1200 * time.Millisecond
+)
+
+var youtubeEmbedInFlight = newTTLCache(512)
+
 type mapsEmbedStatus int
 
 const (
 	mapsEmbedStatusPending mapsEmbedStatus = iota
 	mapsEmbedStatusFound
 	mapsEmbedStatusFailed
+)
+
+type youtubeEmbedStatus int
+
+const (
+	youtubeEmbedStatusPending youtubeEmbedStatus = iota
+	youtubeEmbedStatusFound
+	youtubeEmbedStatusFailed
 )
 
 type mapsEmbed struct {
@@ -749,6 +775,38 @@ func (e *mapsEmbedExtension) Extend(m goldmark.Markdown) {
 	))
 	m.Renderer().AddOptions(renderer.WithNodeRenderers(
 		util.Prioritized(newMapsEmbedHTMLRenderer(), 500),
+	))
+}
+
+type youtubeEmbed struct {
+	ast.BaseBlock
+	Title           string
+	ThumbnailURL    string
+	OriginalURL     string
+	FallbackMessage string
+}
+
+func (n *youtubeEmbed) Kind() ast.NodeKind {
+	return youtubeEmbedKind
+}
+
+func (n *youtubeEmbed) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"Title":    n.Title,
+		"Thumb":    n.ThumbnailURL,
+		"Original": n.OriginalURL,
+		"Fallback": n.FallbackMessage,
+	}, nil)
+}
+
+type youtubeEmbedExtension struct{}
+
+func (e *youtubeEmbedExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&youtubeEmbedTransformer{}, 115),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newYouTubeEmbedHTMLRenderer(), 510),
 	))
 }
 
@@ -855,6 +913,109 @@ func (t *mapsEmbedTransformer) Transform(node *ast.Document, reader text.Reader,
 	})
 }
 
+type youtubeEmbedTransformer struct{}
+
+func (t *youtubeEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ctx := youtubeEmbedContext(pc)
+	source := reader.Source()
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var rawURL string
+		switch link := n.(type) {
+		case *ast.Link:
+			rawURL = string(link.Destination)
+		case *ast.AutoLink:
+			if link.AutoLinkType != ast.AutoLinkURL {
+				return ast.WalkContinue, nil
+			}
+			rawURL = string(link.URL(source))
+		default:
+			return ast.WalkContinue, nil
+		}
+		rawURL = strings.TrimSpace(rawURL)
+		if !isYouTubeURL(rawURL) {
+			return ast.WalkContinue, nil
+		}
+
+		status, title, thumb, errMsg := lookupYouTubeEmbed(ctx, rawURL)
+		switch status {
+		case youtubeEmbedStatusFound:
+			embed := &youtubeEmbed{Title: title, ThumbnailURL: thumb, OriginalURL: rawURL}
+			parent := n.Parent()
+			if parent == nil {
+				return ast.WalkContinue, nil
+			}
+			if para, ok := parent.(*ast.Paragraph); ok {
+				grand := para.Parent()
+				if grand == nil {
+					return ast.WalkContinue, nil
+				}
+				if para.FirstChild() == n && para.LastChild() == n {
+					grand.ReplaceChild(grand, para, embed)
+					return ast.WalkContinue, nil
+				}
+				grand.InsertAfter(grand, para, embed)
+				return ast.WalkContinue, nil
+			}
+
+			grand := parent.Parent()
+			if grand != nil {
+				grand.InsertAfter(grand, parent, embed)
+			}
+			return ast.WalkContinue, nil
+		case youtubeEmbedStatusFailed:
+			embed := &youtubeEmbed{
+				OriginalURL:     rawURL,
+				FallbackMessage: errMsg,
+			}
+			parent := n.Parent()
+			if parent == nil {
+				return ast.WalkContinue, nil
+			}
+			if para, ok := parent.(*ast.Paragraph); ok {
+				grand := para.Parent()
+				if grand == nil {
+					return ast.WalkContinue, nil
+				}
+				grand.InsertAfter(grand, para, embed)
+				return ast.WalkContinue, nil
+			}
+
+			grand := parent.Parent()
+			if grand != nil {
+				grand.InsertAfter(grand, parent, embed)
+			}
+			return ast.WalkContinue, nil
+		default:
+			embed := &youtubeEmbed{
+				OriginalURL:     rawURL,
+				FallbackMessage: "YouTube preview loading. Reload to display the card.",
+			}
+			parent := n.Parent()
+			if parent == nil {
+				return ast.WalkContinue, nil
+			}
+			if para, ok := parent.(*ast.Paragraph); ok {
+				grand := para.Parent()
+				if grand == nil {
+					return ast.WalkContinue, nil
+				}
+				grand.InsertAfter(grand, para, embed)
+				return ast.WalkContinue, nil
+			}
+
+			grand := parent.Parent()
+			if grand != nil {
+				grand.InsertAfter(grand, parent, embed)
+			}
+			return ast.WalkContinue, nil
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
 type mapsEmbedHTMLRenderer struct{}
 
 func newMapsEmbedHTMLRenderer() renderer.NodeRenderer {
@@ -897,6 +1058,58 @@ func (r *mapsEmbedHTMLRenderer) renderMapsEmbed(
 	return ast.WalkContinue, nil
 }
 
+type youtubeEmbedHTMLRenderer struct{}
+
+func newYouTubeEmbedHTMLRenderer() renderer.NodeRenderer {
+	return &youtubeEmbedHTMLRenderer{}
+}
+
+func (r *youtubeEmbedHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(youtubeEmbedKind, r.renderYouTubeEmbed)
+}
+
+func (r *youtubeEmbedHTMLRenderer) renderYouTubeEmbed(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*youtubeEmbed)
+	if n.ThumbnailURL != "" && n.OriginalURL != "" {
+		thumb := html.EscapeString(n.ThumbnailURL)
+		title := html.EscapeString(n.Title)
+		url := html.EscapeString(n.OriginalURL)
+		_, _ = w.WriteString(`<a class="youtube-card" href="`)
+		_, _ = w.WriteString(url)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">`)
+		_, _ = w.WriteString(`<div class="youtube-card__thumb"><img src="`)
+		_, _ = w.WriteString(thumb)
+		_, _ = w.WriteString(`" alt="`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`"></div>`)
+		_, _ = w.WriteString(`<div class="youtube-card__meta">`)
+		_, _ = w.WriteString(`<div class="youtube-card__title">`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`</div>`)
+		_, _ = w.WriteString(`<div class="youtube-card__host">youtube.com</div>`)
+		_, _ = w.WriteString(`</div></a>`)
+		return ast.WalkContinue, nil
+	}
+	if n.FallbackMessage != "" && n.OriginalURL != "" {
+		escapedURL := html.EscapeString(n.OriginalURL)
+		escapedMsg := html.EscapeString(n.FallbackMessage)
+		_, _ = w.WriteString(`<div class="youtube-card youtube-card--fallback">`)
+		_, _ = w.WriteString(`<span>`)
+		_, _ = w.WriteString(escapedMsg)
+		_, _ = w.WriteString(`</span> `)
+		_, _ = w.WriteString(`<a href="`)
+		_, _ = w.WriteString(escapedURL)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">Open on YouTube</a>`)
+		_, _ = w.WriteString(`</div>`)
+	}
+	return ast.WalkContinue, nil
+}
+
 func isMapsAppShortLink(url string) bool {
 	lower := strings.ToLower(strings.TrimSpace(url))
 	return strings.HasPrefix(lower, mapsAppShortLinkPrefix) ||
@@ -913,6 +1126,173 @@ func mapsEmbedContext(pc parser.Context) context.Context {
 		}
 	}
 	return context.TODO()
+}
+
+func youtubeEmbedContext(pc parser.Context) context.Context {
+	if pc == nil {
+		return context.TODO()
+	}
+	if value := pc.Get(youtubeEmbedContextKey); value != nil {
+		if ctx, ok := value.(context.Context); ok && ctx != nil {
+			return ctx
+		}
+	}
+	return context.TODO()
+}
+
+func isYouTubeURL(raw string) bool {
+	_, ok := youtubeVideoID(raw)
+	return ok
+}
+
+func youtubeVideoID(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+	host := strings.ToLower(parsed.Host)
+	host = strings.TrimPrefix(host, "www.")
+	if host == "youtu.be" {
+		id := strings.Trim(parsed.Path, "/")
+		if id == "" {
+			return "", false
+		}
+		return id, true
+	}
+	if host == "youtube.com" || host == "m.youtube.com" {
+		if strings.HasPrefix(parsed.Path, "/watch") {
+			if id := parsed.Query().Get("v"); id != "" {
+				return id, true
+			}
+		}
+	}
+	return "", false
+}
+
+func lookupYouTubeEmbed(ctx context.Context, rawURL string) (youtubeEmbedStatus, string, string, string) {
+	if embedCacheStore != nil {
+		entry, ok, err := embedCacheStore.GetEmbedCache(ctx, rawURL, youtubeEmbedCacheKind)
+		if err == nil && ok {
+			if entry.Status == index.EmbedCacheStatusFound {
+				return youtubeEmbedStatusFound, entry.ErrorMsg, entry.EmbedURL, ""
+			}
+			if entry.Status == index.EmbedCacheStatusFailed {
+				message := entry.ErrorMsg
+				if message == "" {
+					message = "YouTube preview unavailable."
+				}
+				return youtubeEmbedStatusFailed, "", "", message
+			}
+		}
+	}
+
+	if youtubeEmbedIsInFlight(rawURL) {
+		return youtubeEmbedStatusPending, "", "", ""
+	}
+	youtubeEmbedMarkInFlight(rawURL)
+
+	if title, thumb, ok := resolveYouTubeEmbedNow(rawURL, youtubeEmbedSyncTimeout); ok {
+		youtubeEmbedStoreFound(ctx, rawURL, title, thumb)
+		youtubeEmbedClearInFlight(rawURL)
+		return youtubeEmbedStatusFound, title, thumb, ""
+	}
+
+	go resolveYouTubeEmbedAsync(context.WithoutCancel(ctx), rawURL)
+	return youtubeEmbedStatusPending, "", "", ""
+}
+
+func resolveYouTubeEmbedNow(rawURL string, timeout time.Duration) (string, string, bool) {
+	client := &http.Client{Timeout: timeout}
+	return resolveYouTubeEmbedWithClient(rawURL, client)
+}
+
+func resolveYouTubeEmbedAsync(ctx context.Context, rawURL string) {
+	title, thumb, ok := resolveYouTubeEmbedWithClient(rawURL, youtubeEmbedHTTPClient)
+	if !ok {
+		youtubeEmbedStoreFailure(ctx, rawURL, "YouTube preview unavailable.")
+		youtubeEmbedClearInFlight(rawURL)
+		return
+	}
+
+	youtubeEmbedStoreFound(ctx, rawURL, title, thumb)
+	youtubeEmbedClearInFlight(rawURL)
+}
+
+type youtubeOEmbed struct {
+	Title        string `json:"title"`
+	ThumbnailURL string `json:"thumbnail_url"`
+}
+
+func resolveYouTubeEmbedWithClient(rawURL string, client *http.Client) (string, string, bool) {
+	oembedURL := "https://www.youtube.com/oembed?format=json&url=" + url.QueryEscape(rawURL)
+	req, err := http.NewRequest(http.MethodGet, oembedURL, nil)
+	if err != nil {
+		return "", "", false
+	}
+	req.Header.Set("User-Agent", "gwiki")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", false
+	}
+	var payload youtubeOEmbed
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", "", false
+	}
+	title := strings.TrimSpace(payload.Title)
+	thumb := strings.TrimSpace(payload.ThumbnailURL)
+	if title == "" || thumb == "" {
+		return "", "", false
+	}
+	return title, thumb, true
+}
+
+func youtubeEmbedIsInFlight(rawURL string) bool {
+	return youtubeEmbedInFlight.IsActive(rawURL, time.Now())
+}
+
+func youtubeEmbedMarkInFlight(rawURL string) {
+	youtubeEmbedInFlight.Upsert(rawURL, time.Now().Add(youtubeEmbedPendingTTL))
+}
+
+func youtubeEmbedClearInFlight(rawURL string) {
+	youtubeEmbedInFlight.Delete(rawURL)
+}
+
+func youtubeEmbedStoreFound(ctx context.Context, rawURL string, title string, thumb string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      youtubeEmbedCacheKind,
+		EmbedURL:  thumb,
+		Status:    index.EmbedCacheStatusFound,
+		ErrorMsg:  title,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(youtubeEmbedSuccessTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
+}
+
+func youtubeEmbedStoreFailure(ctx context.Context, rawURL string, message string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      youtubeEmbedCacheKind,
+		Status:    index.EmbedCacheStatusFailed,
+		ErrorMsg:  message,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(youtubeEmbedFailureTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
 }
 
 func lookupMapsEmbed(ctx context.Context, shortURL string) (mapsEmbedStatus, string, string) {
@@ -3193,6 +3573,7 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	var b strings.Builder
 	parseContext := parser.NewContext()
 	parseContext.Set(mapsEmbedContextKey, ctx)
+	parseContext.Set(youtubeEmbedContextKey, ctx)
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
@@ -3206,6 +3587,7 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	var b strings.Builder
 	parseContext := parser.NewContext()
 	parseContext.Set(mapsEmbedContextKey, ctx)
+	parseContext.Set(youtubeEmbedContextKey, ctx)
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
