@@ -1,0 +1,9 @@
+{{define "tag_suggest"}}
+{{if .TagSuggestions}}
+<div class="flex flex-wrap gap-2 rounded-xl border border-slate-800/70 bg-[#0f1216] px-3 py-2 text-xs text-slate-200 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)]">
+  {{range .TagSuggestions}}
+    <button class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-xs text-slate-200 hover:border-slate-500" type="button" data-tag="{{.}}">#{{.}}</button>
+  {{end}}
+</div>
+{{end}}
+{{end}}

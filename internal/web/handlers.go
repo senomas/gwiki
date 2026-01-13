@@ -38,6 +38,7 @@ import (
 
 var (
 	linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
+	journalFolderRE  = regexp.MustCompile(`^\d{4}-\d{2}$`)
 	wikiLinkRe       = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	taskCheckboxRe   = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
 	taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
@@ -435,6 +436,14 @@ func buildFilterQuery(activeTags []string, activeDate string, activeSearch strin
 	return strings.Join(params, "&")
 }
 
+func (s *Server) folderOptions(ctx context.Context) []string {
+	folders, _, err := s.idx.ListFolders(ctx)
+	if err != nil {
+		return nil
+	}
+	return folders
+}
+
 type folderNode struct {
 	Name     string
 	Path     string
@@ -444,10 +453,9 @@ type folderNode struct {
 }
 
 func buildFolderTree(folders []string, hasRoot bool, activeFolder string, activeRoot bool, basePath string, activeTags []string, activeDate string, activeSearch string) []FolderNode {
-	journalFolder := regexp.MustCompile(`^\d{4}-\d{2}$`)
 	filtered := make([]string, 0, len(folders))
 	for _, folder := range folders {
-		if journalFolder.MatchString(folder) {
+		if journalFolderRE.MatchString(folder) {
 			continue
 		}
 		filtered = append(filtered, folder)
@@ -1356,6 +1364,46 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderPage(w, data)
 }
 
+func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		s.views.RenderTemplate(w, "tag_suggest", ViewData{})
+		return
+	}
+	tags, err := s.idx.ListTags(r.Context(), 200, "", false)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	queryLower := strings.ToLower(query)
+	suggestions := make([]string, 0, 8)
+	seen := map[string]struct{}{}
+	for _, tag := range tags {
+		if strings.EqualFold(tag.Name, "todo") || strings.EqualFold(tag.Name, "due") {
+			continue
+		}
+		if !strings.HasPrefix(strings.ToLower(tag.Name), queryLower) {
+			continue
+		}
+		if _, ok := seen[tag.Name]; ok {
+			continue
+		}
+		seen[tag.Name] = struct{}{}
+		suggestions = append(suggestions, tag.Name)
+		if len(suggestions) >= 8 {
+			break
+		}
+	}
+	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions})
+}
+
 func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
@@ -1699,6 +1747,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       "",
 			FrontmatterBlock: "",
 			NoteMeta:         index.FrontmatterAttrs{Priority: "10"},
+			FolderOptions:    s.folderOptions(r.Context()),
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
@@ -2404,6 +2453,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		RawContent:       index.StripFrontmatter(string(content)),
 		FrontmatterBlock: index.FrontmatterBlock(string(content)),
 		NoteMeta:         metaAttrs,
+		FolderOptions:    s.folderOptions(r.Context()),
 		Attachments:      attachments,
 		AttachmentBase:   attachmentBase,
 	}
@@ -3101,6 +3151,9 @@ func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data Vi
 	w.WriteHeader(status)
 	if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
 		data.NoteMeta = index.FrontmatterAttributes(data.FrontmatterBlock)
+	}
+	if data.ContentTemplate == "edit" && data.FolderOptions == nil {
+		data.FolderOptions = s.folderOptions(r.Context())
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)

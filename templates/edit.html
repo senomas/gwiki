@@ -53,7 +53,10 @@
       <form class="mt-6 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post">
         <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
-        <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="content">{{.RawContent}}</textarea>
+        <div class="relative">
+          <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" id="note-content" name="content">{{.RawContent}}</textarea>
+          <div id="tag-suggest" class="absolute z-10 hidden" aria-live="polite"></div>
+        </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Visibility</label>
           <select class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="visibility">
@@ -63,7 +66,14 @@
         </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Folder</label>
-          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" value="{{.NoteMeta.Folder}}">
+          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" list="folder-options" value="{{.NoteMeta.Folder}}">
+          {{if .FolderOptions}}
+          <datalist id="folder-options">
+            {{range .FolderOptions}}
+              <option value="{{.}}"></option>
+            {{end}}
+          </datalist>
+          {{end}}
         </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Priority</label>
@@ -129,6 +139,151 @@
           console.warn("Clipboard copy failed", err);
         }
       });
+    });
+  })();
+</script>
+<script>
+  (function () {
+    var textarea = document.getElementById("note-content");
+    var suggest = document.getElementById("tag-suggest");
+    if (!textarea || !suggest || !window.htmx) {
+      return;
+    }
+    var lastQuery = "";
+    function currentTagQuery(value, caret) {
+      var hash = value.lastIndexOf("#", caret - 1);
+      if (hash === -1) {
+        return null;
+      }
+      if (hash > 0 && !/\s/.test(value.charAt(hash - 1))) {
+        return null;
+      }
+      var term = value.slice(hash + 1, caret);
+      if (term.indexOf(" ") !== -1 || term.indexOf("\n") !== -1) {
+        return null;
+      }
+      if (term.length < 1) {
+        return null;
+      }
+      return { term: term, start: hash, end: caret };
+    }
+    function buildMirror(textarea) {
+      var div = document.createElement("div");
+      var style = window.getComputedStyle(textarea);
+      var properties = [
+        "boxSizing",
+        "borderTopWidth",
+        "borderRightWidth",
+        "borderBottomWidth",
+        "borderLeftWidth",
+        "paddingTop",
+        "paddingRight",
+        "paddingBottom",
+        "paddingLeft",
+        "fontStyle",
+        "fontVariant",
+        "fontWeight",
+        "fontStretch",
+        "fontSize",
+        "lineHeight",
+        "fontFamily",
+        "textAlign",
+        "textTransform",
+        "letterSpacing",
+        "wordSpacing",
+        "textIndent",
+        "tabSize",
+      ];
+      div.style.position = "absolute";
+      div.style.visibility = "hidden";
+      div.style.pointerEvents = "none";
+      div.style.whiteSpace = "pre-wrap";
+      div.style.wordWrap = "break-word";
+      div.style.overflow = "hidden";
+      properties.forEach(function (prop) {
+        div.style[prop] = style[prop];
+      });
+      return div;
+    }
+    var mirror = buildMirror(textarea);
+    document.body.appendChild(mirror);
+    function getCaretCoordinates(caret) {
+      mirror.style.width = textarea.offsetWidth + "px";
+      mirror.style.height = textarea.offsetHeight + "px";
+      mirror.textContent = textarea.value.substring(0, caret);
+      var span = document.createElement("span");
+      var nextChar = textarea.value.charAt(caret);
+      span.textContent = nextChar ? nextChar : ".";
+      mirror.appendChild(span);
+      mirror.scrollTop = textarea.scrollTop;
+      mirror.scrollLeft = textarea.scrollLeft;
+      var left = span.offsetLeft - mirror.scrollLeft;
+      var top = span.offsetTop - mirror.scrollTop;
+      var height = span.offsetHeight;
+      mirror.removeChild(span);
+      return { left: left, top: top, height: height };
+    }
+    function positionSuggest() {
+      var caret = textarea.selectionStart || 0;
+      var coords = getCaretCoordinates(caret);
+      var parentRect = textarea.parentElement.getBoundingClientRect();
+      var rect = textarea.getBoundingClientRect();
+      suggest.style.left = rect.left - parentRect.left + coords.left + "px";
+      suggest.style.top = rect.top - parentRect.top + coords.top + coords.height + 6 + "px";
+    }
+    function updateSuggest() {
+      var value = textarea.value;
+      var caret = textarea.selectionStart || 0;
+      var current = currentTagQuery(value, caret);
+      if (!current) {
+        lastQuery = "";
+        suggest.innerHTML = "";
+        suggest.classList.add("hidden");
+        suggest.removeAttribute("data-tag-start");
+        suggest.removeAttribute("data-tag-end");
+        return;
+      }
+      if (current.term === lastQuery) {
+        return;
+      }
+      lastQuery = current.term;
+      suggest.dataset.tagStart = String(current.start);
+      suggest.dataset.tagEnd = String(current.end);
+      positionSuggest();
+      htmx.ajax("GET", "/tags/suggest?q=" + encodeURIComponent(current.term), "#tag-suggest");
+    }
+    textarea.addEventListener("input", updateSuggest);
+    textarea.addEventListener("click", updateSuggest);
+    textarea.addEventListener("keyup", updateSuggest);
+    suggest.addEventListener("click", function (event) {
+      var target = event.target.closest("[data-tag]");
+      if (!target) {
+        return;
+      }
+      var tag = target.getAttribute("data-tag");
+      var start = Number(suggest.dataset.tagStart || "0");
+      var end = Number(suggest.dataset.tagEnd || "0");
+      var insert = tag;
+      var nextChar = textarea.value.charAt(end);
+      if (nextChar && !/\s/.test(nextChar)) {
+        insert += " ";
+      }
+      textarea.setRangeText(insert, start + 1, end, "end");
+      textarea.focus();
+      lastQuery = "";
+      suggest.innerHTML = "";
+      suggest.classList.add("hidden");
+    });
+    document.body.addEventListener("htmx:afterSwap", function (event) {
+      if (event.target !== suggest) {
+        return;
+      }
+      if (suggest.innerHTML.trim() === "") {
+        suggest.classList.add("hidden");
+        return;
+      }
+      suggest.classList.remove("hidden");
+      positionSuggest();
     });
   })();
 </script>

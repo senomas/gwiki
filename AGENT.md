@@ -28,6 +28,8 @@ Non-goals (v1)
    - Do not commit internal indexes/caches (ignore `.wiki/`).
 4. **Security-by-default**
    - Single-user auth is required if exposed outside localhost.
+5. **Testing discipline**
+   - After completing any planned work, run the full test suite (e.g., `go test ./...`) before reporting.
 
 ---
 

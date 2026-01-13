@@ -51,6 +51,8 @@ type ViewData struct {
 	FilterQuery      string
 	HomeURL          string
 	NoteURL          string
+	FolderOptions    []string
+	TagSuggestions   []string
 }
 
 type BacklinkView struct {
