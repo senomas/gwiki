@@ -85,6 +85,22 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("upsert maps cache: %v", err)
 	}
 
+	tiktokURL := "https://www.tiktok.com/@example/video/123456"
+	if !isTikTokURL(tiktokURL) {
+		t.Fatalf("expected tiktok url to be recognized")
+	}
+	if err := idx.UpsertEmbedCache(ctx, index.EmbedCacheEntry{
+		URL:       tiktokURL,
+		Kind:      tiktokEmbedCacheKind,
+		EmbedURL:  "https://example.com/tiktok-thumb.jpg",
+		Status:    index.EmbedCacheStatusFound,
+		ErrorMsg:  "Example TikTok",
+		UpdatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("upsert tiktok cache: %v", err)
+	}
+
 	html, err := srv.renderMarkdown(ctx, []byte(youtubeURL))
 	if err != nil {
 		t.Fatalf("render youtube: %v", err)
@@ -107,13 +123,16 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("expected maps embed to replace paragraph, got %s", html)
 	}
 
-	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + mapsURL + "\n"
+	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + tiktokURL + "\n\n" + mapsURL + "\n"
 	html, err = srv.renderMarkdown(ctx, []byte(multi))
 	if err != nil {
 		t.Fatalf("render multi: %v", err)
 	}
 	if count := strings.Count(html, `class="youtube-card"`); count != 2 {
 		t.Fatalf("expected two youtube cards, got %d in %s", count, html)
+	}
+	if count := strings.Count(html, `class="tiktok-card"`); count != 1 {
+		t.Fatalf("expected one tiktok card, got %d in %s", count, html)
 	}
 	if count := strings.Count(html, "<iframe"); count != 1 {
 		t.Fatalf("expected one map iframe, got %d in %s", count, html)

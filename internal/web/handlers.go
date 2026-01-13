@@ -52,6 +52,7 @@ var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(&linkTargetBlank{}),
 	goldmark.WithExtensions(&mapsEmbedExtension{}),
 	goldmark.WithExtensions(&youtubeEmbedExtension{}),
+	goldmark.WithExtensions(&tiktokEmbedExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
 )
 
@@ -732,6 +733,22 @@ const (
 
 var youtubeEmbedInFlight = newTTLCache(512)
 
+var (
+	tiktokEmbedKind       = ast.NewNodeKind("TikTokEmbed")
+	tiktokEmbedHTTPClient = &http.Client{Timeout: 3 * time.Second}
+	tiktokEmbedCacheKind  = "tiktok"
+	tiktokEmbedContextKey = parser.NewContextKey()
+)
+
+const (
+	tiktokEmbedSuccessTTL  = 7 * 24 * time.Hour
+	tiktokEmbedFailureTTL  = 30 * time.Minute
+	tiktokEmbedPendingTTL  = 20 * time.Second
+	tiktokEmbedSyncTimeout = 1200 * time.Millisecond
+)
+
+var tiktokEmbedInFlight = newTTLCache(512)
+
 type mapsEmbedStatus int
 
 const (
@@ -746,6 +763,14 @@ const (
 	youtubeEmbedStatusPending youtubeEmbedStatus = iota
 	youtubeEmbedStatusFound
 	youtubeEmbedStatusFailed
+)
+
+type tiktokEmbedStatus int
+
+const (
+	tiktokEmbedStatusPending tiktokEmbedStatus = iota
+	tiktokEmbedStatusFound
+	tiktokEmbedStatusFailed
 )
 
 type mapsEmbed struct {
@@ -807,6 +832,38 @@ func (e *youtubeEmbedExtension) Extend(m goldmark.Markdown) {
 	))
 	m.Renderer().AddOptions(renderer.WithNodeRenderers(
 		util.Prioritized(newYouTubeEmbedHTMLRenderer(), 510),
+	))
+}
+
+type tiktokEmbed struct {
+	ast.BaseBlock
+	Title           string
+	ThumbnailURL    string
+	OriginalURL     string
+	FallbackMessage string
+}
+
+func (n *tiktokEmbed) Kind() ast.NodeKind {
+	return tiktokEmbedKind
+}
+
+func (n *tiktokEmbed) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"Title":    n.Title,
+		"Thumb":    n.ThumbnailURL,
+		"Original": n.OriginalURL,
+		"Fallback": n.FallbackMessage,
+	}, nil)
+}
+
+type tiktokEmbedExtension struct{}
+
+func (e *tiktokEmbedExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&tiktokEmbedTransformer{}, 120),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newTikTokEmbedHTMLRenderer(), 520),
 	))
 }
 
@@ -969,6 +1026,53 @@ func (t *youtubeEmbedTransformer) Transform(node *ast.Document, reader text.Read
 	}
 }
 
+type tiktokEmbedTransformer struct{}
+
+func (t *tiktokEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ctx := tiktokEmbedContext(pc)
+	source := reader.Source()
+	var paragraphs []*ast.Paragraph
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if para, ok := n.(*ast.Paragraph); ok {
+			paragraphs = append(paragraphs, para)
+		}
+		return ast.WalkContinue, nil
+	})
+
+	for _, para := range paragraphs {
+		if _, ok := para.Parent().(*ast.Document); !ok {
+			continue
+		}
+		urlText, ok := paragraphOnlyURL(para, source)
+		if !ok || !isTikTokURL(urlText) {
+			continue
+		}
+		status, title, thumb, errMsg := lookupTikTokEmbed(ctx, urlText)
+		embed := &tiktokEmbed{
+			Title:        title,
+			ThumbnailURL: thumb,
+			OriginalURL:  urlText,
+		}
+		switch status {
+		case tiktokEmbedStatusFailed:
+			embed.Title = ""
+			embed.ThumbnailURL = ""
+			embed.FallbackMessage = errMsg
+		case tiktokEmbedStatusPending:
+			embed.Title = ""
+			embed.ThumbnailURL = ""
+			embed.FallbackMessage = "TikTok preview loading. Reload to display the card."
+		}
+		parent := para.Parent()
+		if parent != nil {
+			parent.ReplaceChild(parent, para, embed)
+		}
+	}
+}
+
 func paragraphHasOnlyLink(para *ast.Paragraph, source []byte, rawURL string) bool {
 	rawURL = strings.TrimSpace(strings.Trim(rawURL, "<>"))
 	linkCount := 0
@@ -1091,12 +1195,17 @@ func (r *mapsEmbedHTMLRenderer) renderMapsEmbed(
 	n := node.(*mapsEmbed)
 	if n.URL != "" {
 		escapedURL := html.EscapeString(n.URL)
-		_, _ = w.WriteString(`<div class="map-embed">`)
+		_, _ = w.WriteString(`<div class="map-card">`)
+		_, _ = w.WriteString(`<div class="map-card__meta">`)
+		_, _ = w.WriteString(`<div class="map-card__title">Map preview</div>`)
+		_, _ = w.WriteString(`<div class="map-card__host">google.com/maps</div>`)
+		_, _ = w.WriteString(`</div>`)
+		_, _ = w.WriteString(`<div class="map-card__embed">`)
 		_, _ = w.WriteString(`<iframe src="`)
 		_, _ = w.WriteString(escapedURL)
 		_, _ = w.WriteString(`" loading="lazy" referrerpolicy="no-referrer-when-downgrade"`)
 		_, _ = w.WriteString(` style="border:0;" width="100%" height="360" allowfullscreen></iframe>`)
-		_, _ = w.WriteString(`</div>`)
+		_, _ = w.WriteString(`</div></div>`)
 		return ast.WalkContinue, nil
 	}
 	if n.FallbackMessage != "" && n.OriginalURL != "" {
@@ -1166,6 +1275,58 @@ func (r *youtubeEmbedHTMLRenderer) renderYouTubeEmbed(
 	return ast.WalkContinue, nil
 }
 
+type tiktokEmbedHTMLRenderer struct{}
+
+func newTikTokEmbedHTMLRenderer() renderer.NodeRenderer {
+	return &tiktokEmbedHTMLRenderer{}
+}
+
+func (r *tiktokEmbedHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(tiktokEmbedKind, r.renderTikTokEmbed)
+}
+
+func (r *tiktokEmbedHTMLRenderer) renderTikTokEmbed(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*tiktokEmbed)
+	if n.ThumbnailURL != "" && n.OriginalURL != "" {
+		thumb := html.EscapeString(n.ThumbnailURL)
+		title := html.EscapeString(n.Title)
+		url := html.EscapeString(n.OriginalURL)
+		_, _ = w.WriteString(`<a class="tiktok-card" href="`)
+		_, _ = w.WriteString(url)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">`)
+		_, _ = w.WriteString(`<div class="tiktok-card__thumb"><img src="`)
+		_, _ = w.WriteString(thumb)
+		_, _ = w.WriteString(`" alt="`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`"></div>`)
+		_, _ = w.WriteString(`<div class="tiktok-card__meta">`)
+		_, _ = w.WriteString(`<div class="tiktok-card__title">`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`</div>`)
+		_, _ = w.WriteString(`<div class="tiktok-card__host">tiktok.com</div>`)
+		_, _ = w.WriteString(`</div></a>`)
+		return ast.WalkContinue, nil
+	}
+	if n.FallbackMessage != "" && n.OriginalURL != "" {
+		escapedURL := html.EscapeString(n.OriginalURL)
+		escapedMsg := html.EscapeString(n.FallbackMessage)
+		_, _ = w.WriteString(`<div class="tiktok-card tiktok-card--fallback">`)
+		_, _ = w.WriteString(`<span>`)
+		_, _ = w.WriteString(escapedMsg)
+		_, _ = w.WriteString(`</span> `)
+		_, _ = w.WriteString(`<a href="`)
+		_, _ = w.WriteString(escapedURL)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">Open on TikTok</a>`)
+		_, _ = w.WriteString(`</div>`)
+	}
+	return ast.WalkContinue, nil
+}
+
 func isMapsAppShortLink(url string) bool {
 	lower := strings.ToLower(strings.TrimSpace(url))
 	return strings.HasPrefix(lower, mapsAppShortLinkPrefix) ||
@@ -1196,9 +1357,37 @@ func youtubeEmbedContext(pc parser.Context) context.Context {
 	return context.TODO()
 }
 
+func tiktokEmbedContext(pc parser.Context) context.Context {
+	if pc == nil {
+		return context.TODO()
+	}
+	if value := pc.Get(tiktokEmbedContextKey); value != nil {
+		if ctx, ok := value.(context.Context); ok && ctx != nil {
+			return ctx
+		}
+	}
+	return context.TODO()
+}
+
 func isYouTubeURL(raw string) bool {
 	_, ok := youtubeVideoID(raw)
 	return ok
+}
+
+func isTikTokURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	host = strings.TrimPrefix(host, "www.")
+	if host == "tiktok.com" || host == "m.tiktok.com" {
+		return true
+	}
+	if host == "vt.tiktok.com" || host == "vm.tiktok.com" {
+		return true
+	}
+	return false
 }
 
 func youtubeVideoID(raw string) (string, bool) {
@@ -1223,6 +1412,38 @@ func youtubeVideoID(raw string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func lookupTikTokEmbed(ctx context.Context, rawURL string) (tiktokEmbedStatus, string, string, string) {
+	if embedCacheStore != nil {
+		entry, ok, err := embedCacheStore.GetEmbedCache(ctx, rawURL, tiktokEmbedCacheKind)
+		if err == nil && ok {
+			if entry.Status == index.EmbedCacheStatusFound {
+				return tiktokEmbedStatusFound, entry.ErrorMsg, entry.EmbedURL, ""
+			}
+			if entry.Status == index.EmbedCacheStatusFailed {
+				message := entry.ErrorMsg
+				if message == "" {
+					message = "TikTok preview unavailable."
+				}
+				return tiktokEmbedStatusFailed, "", "", message
+			}
+		}
+	}
+
+	if tiktokEmbedIsInFlight(rawURL) {
+		return tiktokEmbedStatusPending, "", "", ""
+	}
+	tiktokEmbedMarkInFlight(rawURL)
+
+	if title, thumb, ok := resolveTikTokEmbedNow(rawURL, tiktokEmbedSyncTimeout); ok {
+		tiktokEmbedStoreFound(ctx, rawURL, title, thumb)
+		tiktokEmbedClearInFlight(rawURL)
+		return tiktokEmbedStatusFound, title, thumb, ""
+	}
+
+	go resolveTikTokEmbedAsync(context.WithoutCancel(ctx), rawURL)
+	return tiktokEmbedStatusPending, "", "", ""
 }
 
 func lookupYouTubeEmbed(ctx context.Context, rawURL string) (youtubeEmbedStatus, string, string, string) {
@@ -1255,6 +1476,55 @@ func lookupYouTubeEmbed(ctx context.Context, rawURL string) (youtubeEmbedStatus,
 
 	go resolveYouTubeEmbedAsync(context.WithoutCancel(ctx), rawURL)
 	return youtubeEmbedStatusPending, "", "", ""
+}
+
+func resolveTikTokEmbedNow(rawURL string, timeout time.Duration) (string, string, bool) {
+	client := &http.Client{Timeout: timeout}
+	return resolveTikTokEmbedWithClient(rawURL, client)
+}
+
+func resolveTikTokEmbedAsync(ctx context.Context, rawURL string) {
+	title, thumb, ok := resolveTikTokEmbedWithClient(rawURL, tiktokEmbedHTTPClient)
+	if !ok {
+		tiktokEmbedStoreFailure(ctx, rawURL, "TikTok preview unavailable.")
+		tiktokEmbedClearInFlight(rawURL)
+		return
+	}
+
+	tiktokEmbedStoreFound(ctx, rawURL, title, thumb)
+	tiktokEmbedClearInFlight(rawURL)
+}
+
+type tiktokOEmbed struct {
+	Title        string `json:"title"`
+	ThumbnailURL string `json:"thumbnail_url"`
+}
+
+func resolveTikTokEmbedWithClient(rawURL string, client *http.Client) (string, string, bool) {
+	oembedURL := "https://www.tiktok.com/oembed?url=" + url.QueryEscape(rawURL)
+	req, err := http.NewRequest(http.MethodGet, oembedURL, nil)
+	if err != nil {
+		return "", "", false
+	}
+	req.Header.Set("User-Agent", "gwiki")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", false
+	}
+	var payload tiktokOEmbed
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", "", false
+	}
+	title := strings.TrimSpace(payload.Title)
+	thumb := strings.TrimSpace(payload.ThumbnailURL)
+	if title == "" || thumb == "" {
+		return "", "", false
+	}
+	return title, thumb, true
 }
 
 func resolveYouTubeEmbedNow(rawURL string, timeout time.Duration) (string, string, bool) {
@@ -1304,6 +1574,51 @@ func resolveYouTubeEmbedWithClient(rawURL string, client *http.Client) (string, 
 		return "", "", false
 	}
 	return title, thumb, true
+}
+
+func tiktokEmbedIsInFlight(rawURL string) bool {
+	return tiktokEmbedInFlight.IsActive(rawURL, time.Now())
+}
+
+func tiktokEmbedMarkInFlight(rawURL string) {
+	tiktokEmbedInFlight.Upsert(rawURL, time.Now().Add(tiktokEmbedPendingTTL))
+}
+
+func tiktokEmbedClearInFlight(rawURL string) {
+	tiktokEmbedInFlight.Delete(rawURL)
+}
+
+func tiktokEmbedStoreFound(ctx context.Context, rawURL string, title string, thumb string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      tiktokEmbedCacheKind,
+		EmbedURL:  thumb,
+		Status:    index.EmbedCacheStatusFound,
+		ErrorMsg:  title,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(tiktokEmbedSuccessTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
+}
+
+func tiktokEmbedStoreFailure(ctx context.Context, rawURL string, message string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      tiktokEmbedCacheKind,
+		Status:    index.EmbedCacheStatusFailed,
+		ErrorMsg:  message,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(tiktokEmbedFailureTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
 }
 
 func youtubeEmbedIsInFlight(rawURL string) bool {
@@ -3630,6 +3945,7 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	parseContext := parser.NewContext()
 	parseContext.Set(mapsEmbedContextKey, ctx)
 	parseContext.Set(youtubeEmbedContextKey, ctx)
+	parseContext.Set(tiktokEmbedContextKey, ctx)
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
@@ -3644,6 +3960,7 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	parseContext := parser.NewContext()
 	parseContext.Set(mapsEmbedContextKey, ctx)
 	parseContext.Set(youtubeEmbedContextKey, ctx)
+	parseContext.Set(tiktokEmbedContextKey, ctx)
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
