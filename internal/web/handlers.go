@@ -11,9 +11,11 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -53,6 +55,8 @@ var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(&mapsEmbedExtension{}),
 	goldmark.WithExtensions(&youtubeEmbedExtension{}),
 	goldmark.WithExtensions(&tiktokEmbedExtension{}),
+	goldmark.WithExtensions(&instagramEmbedExtension{}),
+	goldmark.WithExtensions(&attachmentVideoEmbedExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
 )
 
@@ -163,6 +167,25 @@ func listAttachmentNames(dir string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func (s *Server) attachmentsRoot() string {
+	return filepath.Join(s.cfg.RepoPath, "notes", "attachments")
+}
+
+func (s *Server) tempAttachmentsDir(token string) string {
+	return filepath.Join(s.attachmentsRoot(), ".tmp", token)
+}
+
+func (s *Server) noteAttachmentsDir(noteID string) string {
+	return filepath.Join(s.attachmentsRoot(), noteID)
+}
+
+func (s *Server) assetsRoot() string {
+	if s.cfg.DataPath == "" {
+		return ""
+	}
+	return filepath.Join(s.cfg.DataPath, "assets")
 }
 
 func parseTagsParam(raw string) []string {
@@ -749,6 +772,27 @@ const (
 
 var tiktokEmbedInFlight = newTTLCache(512)
 
+var (
+	instagramEmbedKind       = ast.NewNodeKind("InstagramEmbed")
+	instagramEmbedHTTPClient = &http.Client{Timeout: 3 * time.Second}
+	instagramEmbedCacheKind  = "instagram"
+	instagramEmbedContextKey = parser.NewContextKey()
+)
+
+const (
+	instagramEmbedSuccessTTL  = 7 * 24 * time.Hour
+	instagramEmbedFailureTTL  = 30 * time.Minute
+	instagramEmbedPendingTTL  = 20 * time.Second
+	instagramEmbedSyncTimeout = 1200 * time.Millisecond
+)
+
+var instagramEmbedInFlight = newTTLCache(512)
+
+var (
+	attachmentVideoEmbedKind       = ast.NewNodeKind("AttachmentVideoEmbed")
+	attachmentVideoEmbedContextKey = parser.NewContextKey()
+)
+
 type mapsEmbedStatus int
 
 const (
@@ -772,6 +816,35 @@ const (
 	tiktokEmbedStatusFound
 	tiktokEmbedStatusFailed
 )
+
+type instagramEmbedStatus int
+
+const (
+	instagramEmbedStatusPending instagramEmbedStatus = iota
+	instagramEmbedStatusFound
+	instagramEmbedStatusFailed
+)
+
+type attachmentVideoEmbed struct {
+	ast.BaseBlock
+	Title           string
+	ThumbnailURL    string
+	OriginalURL     string
+	FallbackMessage string
+}
+
+func (n *attachmentVideoEmbed) Kind() ast.NodeKind {
+	return attachmentVideoEmbedKind
+}
+
+func (n *attachmentVideoEmbed) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"Title":    n.Title,
+		"Thumb":    n.ThumbnailURL,
+		"Original": n.OriginalURL,
+		"Fallback": n.FallbackMessage,
+	}, nil)
+}
 
 type mapsEmbed struct {
 	ast.BaseBlock
@@ -864,6 +937,49 @@ func (e *tiktokEmbedExtension) Extend(m goldmark.Markdown) {
 	))
 	m.Renderer().AddOptions(renderer.WithNodeRenderers(
 		util.Prioritized(newTikTokEmbedHTMLRenderer(), 520),
+	))
+}
+
+type instagramEmbed struct {
+	ast.BaseBlock
+	Title           string
+	ThumbnailURL    string
+	OriginalURL     string
+	FallbackMessage string
+}
+
+func (n *instagramEmbed) Kind() ast.NodeKind {
+	return instagramEmbedKind
+}
+
+func (n *instagramEmbed) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"Title":    n.Title,
+		"Thumb":    n.ThumbnailURL,
+		"Original": n.OriginalURL,
+		"Fallback": n.FallbackMessage,
+	}, nil)
+}
+
+type instagramEmbedExtension struct{}
+
+func (e *instagramEmbedExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&instagramEmbedTransformer{}, 125),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newInstagramEmbedHTMLRenderer(), 530),
+	))
+}
+
+type attachmentVideoEmbedExtension struct{}
+
+func (e *attachmentVideoEmbedExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&attachmentVideoEmbedTransformer{}, 130),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newAttachmentVideoEmbedHTMLRenderer(), 540),
 	))
 }
 
@@ -1073,6 +1189,105 @@ func (t *tiktokEmbedTransformer) Transform(node *ast.Document, reader text.Reade
 	}
 }
 
+type instagramEmbedTransformer struct{}
+
+func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ctx := instagramEmbedContext(pc)
+	source := reader.Source()
+	var paragraphs []*ast.Paragraph
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if para, ok := n.(*ast.Paragraph); ok {
+			paragraphs = append(paragraphs, para)
+		}
+		return ast.WalkContinue, nil
+	})
+
+	for _, para := range paragraphs {
+		if _, ok := para.Parent().(*ast.Document); !ok {
+			continue
+		}
+		urlText, ok := paragraphOnlyURL(para, source)
+		if !ok || !isInstagramReelURL(urlText) {
+			continue
+		}
+		status, title, thumb, errMsg := lookupInstagramEmbed(ctx, urlText)
+		embed := &instagramEmbed{
+			Title:        title,
+			ThumbnailURL: thumb,
+			OriginalURL:  urlText,
+		}
+		switch status {
+		case instagramEmbedStatusFailed:
+			embed.Title = ""
+			embed.ThumbnailURL = ""
+			embed.FallbackMessage = errMsg
+		case instagramEmbedStatusPending:
+			embed.Title = ""
+			embed.ThumbnailURL = ""
+			embed.FallbackMessage = "Instagram preview loading. Reload to display the card."
+		}
+		parent := para.Parent()
+		if parent != nil {
+			parent.ReplaceChild(parent, para, embed)
+		}
+	}
+}
+
+type attachmentVideoEmbedTransformer struct{}
+
+func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	_, srv := attachmentVideoEmbedContext(pc)
+	if srv == nil {
+		return
+	}
+	source := reader.Source()
+	var paragraphs []*ast.Paragraph
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if para, ok := n.(*ast.Paragraph); ok {
+			paragraphs = append(paragraphs, para)
+		}
+		return ast.WalkContinue, nil
+	})
+
+	for _, para := range paragraphs {
+		if _, ok := para.Parent().(*ast.Document); !ok {
+			continue
+		}
+		urlText, label, ok := paragraphOnlyLink(para, source)
+		if !ok {
+			continue
+		}
+		noteID, relPath, ok := attachmentVideoFromURL(urlText)
+		if !ok {
+			continue
+		}
+		thumbURL, ok := srv.ensureVideoThumbnail(noteID, relPath)
+		title := strings.TrimSpace(label)
+		if title == "" {
+			title = path.Base(relPath)
+		}
+		embed := &attachmentVideoEmbed{
+			Title:        title,
+			ThumbnailURL: thumbURL,
+			OriginalURL:  urlText,
+		}
+		if !ok {
+			embed.ThumbnailURL = ""
+			embed.FallbackMessage = "Video preview unavailable."
+		}
+		parent := para.Parent()
+		if parent != nil {
+			parent.ReplaceChild(parent, para, embed)
+		}
+	}
+}
+
 func paragraphHasOnlyLink(para *ast.Paragraph, source []byte, rawURL string) bool {
 	rawURL = strings.TrimSpace(strings.Trim(rawURL, "<>"))
 	linkCount := 0
@@ -1174,6 +1389,63 @@ func paragraphOnlyURL(para *ast.Paragraph, source []byte) (string, bool) {
 		return "", false
 	}
 	return strings.Trim(value, "<>"), true
+}
+
+func paragraphOnlyLink(para *ast.Paragraph, source []byte) (string, string, bool) {
+	var (
+		foundLink ast.Node
+		urlText   string
+	)
+	for child := para.FirstChild(); child != nil; child = child.NextSibling() {
+		switch node := child.(type) {
+		case *ast.Link:
+			if foundLink != nil {
+				return "", "", false
+			}
+			foundLink = node
+			urlText = strings.TrimSpace(string(node.Destination))
+		case *ast.AutoLink:
+			if node.AutoLinkType != ast.AutoLinkURL {
+				return "", "", false
+			}
+			if foundLink != nil {
+				return "", "", false
+			}
+			foundLink = node
+			urlText = strings.TrimSpace(string(node.URL(source)))
+		case *ast.Text:
+			if strings.TrimSpace(string(node.Segment.Value(source))) == "" {
+				continue
+			}
+			return "", "", false
+		default:
+			return "", "", false
+		}
+	}
+	if foundLink == nil || urlText == "" {
+		return "", "", false
+	}
+	label := ""
+	if linkNode, ok := foundLink.(*ast.Link); ok {
+		label = extractTextFromNode(linkNode, source)
+	} else {
+		label = urlText
+	}
+	return strings.Trim(urlText, "<>"), label, true
+}
+
+func extractTextFromNode(node ast.Node, source []byte) string {
+	var b strings.Builder
+	_ = ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if textNode, ok := n.(*ast.Text); ok {
+			b.Write(textNode.Segment.Value(source))
+		}
+		return ast.WalkContinue, nil
+	})
+	return strings.TrimSpace(b.String())
 }
 
 type mapsEmbedHTMLRenderer struct{}
@@ -1327,6 +1599,110 @@ func (r *tiktokEmbedHTMLRenderer) renderTikTokEmbed(
 	return ast.WalkContinue, nil
 }
 
+type instagramEmbedHTMLRenderer struct{}
+
+func newInstagramEmbedHTMLRenderer() renderer.NodeRenderer {
+	return &instagramEmbedHTMLRenderer{}
+}
+
+func (r *instagramEmbedHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(instagramEmbedKind, r.renderInstagramEmbed)
+}
+
+func (r *instagramEmbedHTMLRenderer) renderInstagramEmbed(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*instagramEmbed)
+	if n.ThumbnailURL != "" && n.OriginalURL != "" {
+		thumb := html.EscapeString(n.ThumbnailURL)
+		title := html.EscapeString(n.Title)
+		url := html.EscapeString(n.OriginalURL)
+		_, _ = w.WriteString(`<a class="instagram-card" href="`)
+		_, _ = w.WriteString(url)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">`)
+		_, _ = w.WriteString(`<div class="instagram-card__thumb"><img src="`)
+		_, _ = w.WriteString(thumb)
+		_, _ = w.WriteString(`" alt="`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`"></div>`)
+		_, _ = w.WriteString(`<div class="instagram-card__meta">`)
+		_, _ = w.WriteString(`<div class="instagram-card__title">`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`</div>`)
+		_, _ = w.WriteString(`<div class="instagram-card__host">instagram.com</div>`)
+		_, _ = w.WriteString(`</div></a>`)
+		return ast.WalkContinue, nil
+	}
+	if n.FallbackMessage != "" && n.OriginalURL != "" {
+		escapedURL := html.EscapeString(n.OriginalURL)
+		escapedMsg := html.EscapeString(n.FallbackMessage)
+		_, _ = w.WriteString(`<div class="instagram-card instagram-card--fallback">`)
+		_, _ = w.WriteString(`<span>`)
+		_, _ = w.WriteString(escapedMsg)
+		_, _ = w.WriteString(`</span> `)
+		_, _ = w.WriteString(`<a href="`)
+		_, _ = w.WriteString(escapedURL)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">Open on Instagram</a>`)
+		_, _ = w.WriteString(`</div>`)
+	}
+	return ast.WalkContinue, nil
+}
+
+type attachmentVideoEmbedHTMLRenderer struct{}
+
+func newAttachmentVideoEmbedHTMLRenderer() renderer.NodeRenderer {
+	return &attachmentVideoEmbedHTMLRenderer{}
+}
+
+func (r *attachmentVideoEmbedHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(attachmentVideoEmbedKind, r.renderAttachmentVideoEmbed)
+}
+
+func (r *attachmentVideoEmbedHTMLRenderer) renderAttachmentVideoEmbed(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*attachmentVideoEmbed)
+	if n.ThumbnailURL != "" && n.OriginalURL != "" {
+		thumb := html.EscapeString(n.ThumbnailURL)
+		title := html.EscapeString(n.Title)
+		url := html.EscapeString(n.OriginalURL)
+		_, _ = w.WriteString(`<a class="video-card" href="`)
+		_, _ = w.WriteString(url)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">`)
+		_, _ = w.WriteString(`<div class="video-card__thumb"><img src="`)
+		_, _ = w.WriteString(thumb)
+		_, _ = w.WriteString(`" alt="`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`"></div>`)
+		_, _ = w.WriteString(`<div class="video-card__meta">`)
+		_, _ = w.WriteString(`<div class="video-card__title">`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`</div>`)
+		_, _ = w.WriteString(`<div class="video-card__host">mp4</div>`)
+		_, _ = w.WriteString(`</div></a>`)
+		return ast.WalkContinue, nil
+	}
+	if n.FallbackMessage != "" && n.OriginalURL != "" {
+		escapedURL := html.EscapeString(n.OriginalURL)
+		escapedMsg := html.EscapeString(n.FallbackMessage)
+		_, _ = w.WriteString(`<div class="video-card video-card--fallback">`)
+		_, _ = w.WriteString(`<span>`)
+		_, _ = w.WriteString(escapedMsg)
+		_, _ = w.WriteString(`</span> `)
+		_, _ = w.WriteString(`<a href="`)
+		_, _ = w.WriteString(escapedURL)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">Open video</a>`)
+		_, _ = w.WriteString(`</div>`)
+	}
+	return ast.WalkContinue, nil
+}
+
 func isMapsAppShortLink(url string) bool {
 	lower := strings.ToLower(strings.TrimSpace(url))
 	return strings.HasPrefix(lower, mapsAppShortLinkPrefix) ||
@@ -1369,6 +1745,38 @@ func tiktokEmbedContext(pc parser.Context) context.Context {
 	return context.TODO()
 }
 
+func instagramEmbedContext(pc parser.Context) context.Context {
+	if pc == nil {
+		return context.TODO()
+	}
+	if value := pc.Get(instagramEmbedContextKey); value != nil {
+		if ctx, ok := value.(context.Context); ok && ctx != nil {
+			return ctx
+		}
+	}
+	return context.TODO()
+}
+
+type attachmentVideoEmbedContextValue struct {
+	ctx    context.Context
+	server *Server
+}
+
+func attachmentVideoEmbedContext(pc parser.Context) (context.Context, *Server) {
+	if pc == nil {
+		return context.TODO(), nil
+	}
+	if value := pc.Get(attachmentVideoEmbedContextKey); value != nil {
+		if ctxValue, ok := value.(attachmentVideoEmbedContextValue); ok {
+			if ctxValue.ctx == nil {
+				ctxValue.ctx = context.TODO()
+			}
+			return ctxValue.ctx, ctxValue.server
+		}
+	}
+	return context.TODO(), nil
+}
+
 func isYouTubeURL(raw string) bool {
 	_, ok := youtubeVideoID(raw)
 	return ok
@@ -1388,6 +1796,52 @@ func isTikTokURL(raw string) bool {
 		return true
 	}
 	return false
+}
+
+func isInstagramReelURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	host = strings.TrimPrefix(host, "www.")
+	if host != "instagram.com" && host != "m.instagram.com" {
+		return false
+	}
+	pathValue := strings.TrimPrefix(strings.ToLower(parsed.Path), "/")
+	return strings.HasPrefix(pathValue, "reel/") || strings.HasPrefix(pathValue, "reels/")
+}
+
+func attachmentVideoFromURL(raw string) (string, string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", "", false
+	}
+	pathValue := parsed.Path
+	if pathValue == "" {
+		return "", "", false
+	}
+	clean := path.Clean(pathValue)
+	if !strings.HasPrefix(clean, "/attachments/") {
+		return "", "", false
+	}
+	rel := strings.TrimPrefix(clean, "/attachments/")
+	parts := strings.Split(rel, "/")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	noteID := strings.TrimSpace(parts[0])
+	if noteID == "" {
+		return "", "", false
+	}
+	relPath := path.Clean(strings.Join(parts[1:], "/"))
+	if relPath == "." || strings.HasPrefix(relPath, "..") || strings.Contains(relPath, "\\") {
+		return "", "", false
+	}
+	if strings.ToLower(path.Ext(relPath)) != ".mp4" {
+		return "", "", false
+	}
+	return noteID, relPath, true
 }
 
 func youtubeVideoID(raw string) (string, bool) {
@@ -1444,6 +1898,38 @@ func lookupTikTokEmbed(ctx context.Context, rawURL string) (tiktokEmbedStatus, s
 
 	go resolveTikTokEmbedAsync(context.WithoutCancel(ctx), rawURL)
 	return tiktokEmbedStatusPending, "", "", ""
+}
+
+func lookupInstagramEmbed(ctx context.Context, rawURL string) (instagramEmbedStatus, string, string, string) {
+	if embedCacheStore != nil {
+		entry, ok, err := embedCacheStore.GetEmbedCache(ctx, rawURL, instagramEmbedCacheKind)
+		if err == nil && ok {
+			if entry.Status == index.EmbedCacheStatusFound {
+				return instagramEmbedStatusFound, entry.ErrorMsg, entry.EmbedURL, ""
+			}
+			if entry.Status == index.EmbedCacheStatusFailed {
+				message := entry.ErrorMsg
+				if message == "" {
+					message = "Instagram preview unavailable."
+				}
+				return instagramEmbedStatusFailed, "", "", message
+			}
+		}
+	}
+
+	if instagramEmbedIsInFlight(rawURL) {
+		return instagramEmbedStatusPending, "", "", ""
+	}
+	instagramEmbedMarkInFlight(rawURL)
+
+	if title, thumb, ok := resolveInstagramEmbedNow(rawURL, instagramEmbedSyncTimeout); ok {
+		instagramEmbedStoreFound(ctx, rawURL, title, thumb)
+		instagramEmbedClearInFlight(rawURL)
+		return instagramEmbedStatusFound, title, thumb, ""
+	}
+
+	go resolveInstagramEmbedAsync(context.WithoutCancel(ctx), rawURL)
+	return instagramEmbedStatusPending, "", "", ""
 }
 
 func lookupYouTubeEmbed(ctx context.Context, rawURL string) (youtubeEmbedStatus, string, string, string) {
@@ -1523,6 +2009,65 @@ func resolveTikTokEmbedWithClient(rawURL string, client *http.Client) (string, s
 	thumb := strings.TrimSpace(payload.ThumbnailURL)
 	if title == "" || thumb == "" {
 		return "", "", false
+	}
+	return title, thumb, true
+}
+
+func resolveInstagramEmbedNow(rawURL string, timeout time.Duration) (string, string, bool) {
+	client := &http.Client{Timeout: timeout}
+	return resolveInstagramEmbedWithClient(rawURL, client)
+}
+
+func resolveInstagramEmbedAsync(ctx context.Context, rawURL string) {
+	title, thumb, ok := resolveInstagramEmbedWithClient(rawURL, instagramEmbedHTTPClient)
+	if !ok {
+		instagramEmbedStoreFailure(ctx, rawURL, "Instagram preview unavailable.")
+		instagramEmbedClearInFlight(rawURL)
+		return
+	}
+
+	instagramEmbedStoreFound(ctx, rawURL, title, thumb)
+	instagramEmbedClearInFlight(rawURL)
+}
+
+type instagramOEmbed struct {
+	Title        string `json:"title"`
+	ThumbnailURL string `json:"thumbnail_url"`
+}
+
+func resolveInstagramEmbedWithClient(rawURL string, client *http.Client) (string, string, bool) {
+	accessToken := strings.TrimSpace(os.Getenv("WIKI_INSTAGRAM_OEMBED_TOKEN"))
+	var oembedURL string
+	if accessToken != "" {
+		oembedURL = "https://graph.facebook.com/v19.0/instagram_oembed?url=" +
+			url.QueryEscape(rawURL) + "&access_token=" + url.QueryEscape(accessToken)
+	} else {
+		oembedURL = "https://www.instagram.com/oembed?url=" + url.QueryEscape(rawURL)
+	}
+	req, err := http.NewRequest(http.MethodGet, oembedURL, nil)
+	if err != nil {
+		return "", "", false
+	}
+	req.Header.Set("User-Agent", "gwiki")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", false
+	}
+	var payload instagramOEmbed
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", "", false
+	}
+	title := strings.TrimSpace(payload.Title)
+	thumb := strings.TrimSpace(payload.ThumbnailURL)
+	if thumb == "" {
+		return "", "", false
+	}
+	if title == "" {
+		title = "Instagram Reel"
 	}
 	return title, thumb, true
 }
@@ -1617,6 +2162,51 @@ func tiktokEmbedStoreFailure(ctx context.Context, rawURL string, message string)
 		ErrorMsg:  message,
 		UpdatedAt: now,
 		ExpiresAt: now.Add(tiktokEmbedFailureTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
+}
+
+func instagramEmbedIsInFlight(rawURL string) bool {
+	return instagramEmbedInFlight.IsActive(rawURL, time.Now())
+}
+
+func instagramEmbedMarkInFlight(rawURL string) {
+	instagramEmbedInFlight.Upsert(rawURL, time.Now().Add(instagramEmbedPendingTTL))
+}
+
+func instagramEmbedClearInFlight(rawURL string) {
+	instagramEmbedInFlight.Delete(rawURL)
+}
+
+func instagramEmbedStoreFound(ctx context.Context, rawURL string, title string, thumb string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      instagramEmbedCacheKind,
+		EmbedURL:  thumb,
+		Status:    index.EmbedCacheStatusFound,
+		ErrorMsg:  title,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(instagramEmbedSuccessTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
+}
+
+func instagramEmbedStoreFailure(ctx context.Context, rawURL string, message string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      instagramEmbedCacheKind,
+		Status:    index.EmbedCacheStatusFailed,
+		ErrorMsg:  message,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(instagramEmbedFailureTTL),
 	}
 	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
 }
@@ -2449,19 +3039,7 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 		if err != nil {
 			return nil, offset, false, err
 		}
-		htmlStr, err := s.renderNoteBody(ctx, content)
-		if err != nil {
-			return nil, offset, false, err
-		}
 		normalized := normalizeLineEndings(string(content))
-		meta := index.ParseContent(normalized)
-		fileID, err := s.idx.FileIDByPath(ctx, note.Path)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, offset, false, err
-		}
-		if err == nil && IsAuthenticated(ctx) {
-			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
-		}
 		labelTime := note.MTime
 		if historyTime, ok := index.LatestHistoryTime(normalized); ok {
 			labelTime = historyTime
@@ -2471,10 +3049,10 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, o
 			metaAttrs.Updated = labelTime.Local()
 		}
 		cards = append(cards, NoteCard{
-			Path:         note.Path,
-			Title:        note.Title,
-			RenderedHTML: template.HTML(htmlStr),
-			Meta:         metaAttrs,
+			Path:     note.Path,
+			Title:    note.Title,
+			FileName: filepath.Base(note.Path),
+			Meta:     metaAttrs,
 		})
 	}
 	return cards, offset + len(notes), hasMore, nil
@@ -2501,7 +3079,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FolderOptions:    s.folderOptions(r.Context()),
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 		}
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
@@ -2520,7 +3098,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: r.Form.Get("frontmatter"),
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -2540,7 +3118,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     "content required",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -2569,7 +3147,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				FrontmatterBlock: frontmatter,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+				Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -2591,7 +3169,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					FrontmatterBlock: frontmatter,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+					Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -2607,7 +3185,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					FrontmatterBlock: frontmatter,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+					Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -2622,7 +3200,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					FrontmatterBlock: frontmatter,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+					Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -2641,7 +3219,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				FrontmatterBlock: frontmatter,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+				Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusInternalServerError)
@@ -2669,7 +3247,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -2684,7 +3262,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     "invalid folder",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -2701,7 +3279,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				FrontmatterBlock: frontmatter,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+				Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 				ErrorMessage:     "invalid priority",
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -2717,7 +3295,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -2733,7 +3311,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -2749,7 +3327,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -2777,7 +3355,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -2791,7 +3369,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     "note already exists",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusConflict)
@@ -2805,7 +3383,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -2820,7 +3398,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -2834,7 +3412,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -2848,7 +3426,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			FrontmatterBlock: frontmatter,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -3027,14 +3605,12 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		}
 		updated, err := index.EnsureFrontmatterWithTitle(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return ViewData{}, http.StatusInternalServerError, err
 		}
 		unlock := s.locker.Lock(notePath)
 		if err := fs.WriteFileAtomic(fullPath, []byte(updated), 0o644); err != nil {
 			unlock()
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return ViewData{}, http.StatusInternalServerError, err
 		}
 		unlock()
 		content = []byte(updated)
@@ -3044,8 +3620,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	}
 	if info, err := os.Stat(fullPath); err == nil {
 		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return ViewData{}, http.StatusInternalServerError, err
 		}
 	}
 
@@ -3053,21 +3628,22 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	meta := index.ParseContent(string(normalizedContent))
 	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
 	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
-		http.NotFound(w, r)
-		return
+		return ViewData{}, http.StatusNotFound, errors.New("not found")
 	}
-	htmlStr, err := s.renderNoteBody(r.Context(), normalizedContent)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err == nil && IsAuthenticated(r.Context()) {
-		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
+	htmlStr := ""
+	if renderBody {
+		rendered, err := s.renderNoteBody(r.Context(), normalizedContent)
+		if err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+		fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+		if err == nil && IsAuthenticated(r.Context()) {
+			rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks)
+		}
+		htmlStr = rendered
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -3082,8 +3658,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	}
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return ViewData{}, http.StatusInternalServerError, err
 	}
 	allowed := map[string]struct{}{}
 	todoCount := 0
@@ -3091,15 +3666,13 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	if isAuth {
 		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return ViewData{}, http.StatusInternalServerError, err
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return ViewData{}, http.StatusInternalServerError, err
 		}
 		for _, tag := range filteredTags {
 			allowed[tag.Name] = struct{}{}
@@ -3114,23 +3687,20 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return ViewData{}, http.StatusInternalServerError, err
 	}
 	tagQuery := buildTagsQuery(activeTags)
 	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title, noteMeta.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return ViewData{}, http.StatusInternalServerError, err
 	}
 	backlinkViews := make([]BacklinkView, 0, len(backlinks))
 	for _, link := range backlinks {
 		lineHTML, err := s.renderLineMarkdown(r.Context(), link.Line)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return ViewData{}, http.StatusInternalServerError, err
 		}
 		backlinkViews = append(backlinkViews, BacklinkView{
 			FromPath:  link.FromPath,
@@ -3142,8 +3712,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return ViewData{}, http.StatusInternalServerError, err
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
 	data := ViewData{
@@ -3171,8 +3740,93 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		CalendarMonth:    calendar,
 		Backlinks:        backlinkViews,
 	}
-	s.attachViewData(r, &data)
-	s.views.RenderPage(w, data)
+	return data, http.StatusOK, nil
+}
+
+func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, int, error) {
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		return ViewData{}, http.StatusBadRequest, err
+	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ViewData{}, http.StatusNotFound, err
+		}
+		return ViewData{}, http.StatusInternalServerError, err
+	}
+	if !index.HasFrontmatter(string(content)) {
+		derivedTitle := index.DeriveTitleFromBody(string(content))
+		if derivedTitle == "" {
+			derivedTitle = time.Now().Format("2006-01-02 15-04")
+		}
+		updated, err := index.EnsureFrontmatterWithTitle(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		if err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+		unlock := s.locker.Lock(notePath)
+		if err := fs.WriteFileAtomic(fullPath, []byte(updated), 0o644); err != nil {
+			unlock()
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+		unlock()
+		content = []byte(updated)
+		if info, err := os.Stat(fullPath); err == nil {
+			_ = s.idx.IndexNote(r.Context(), notePath, content, info.ModTime(), info.Size())
+		}
+	}
+	info, err := os.Stat(fullPath)
+	if err == nil {
+		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+	}
+
+	normalizedContent := []byte(normalizeLineEndings(string(content)))
+	meta := index.ParseContent(string(normalizedContent))
+	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
+	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
+		return ViewData{}, http.StatusNotFound, errors.New("not found")
+	}
+	htmlStr, err := s.renderNoteBody(r.Context(), normalizedContent)
+	if err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
+	}
+	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return ViewData{}, http.StatusInternalServerError, err
+	}
+	if err == nil && IsAuthenticated(r.Context()) {
+		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
+	}
+	if info != nil {
+		labelTime := info.ModTime()
+		if historyTime, ok := index.LatestHistoryTime(string(normalizedContent)); ok {
+			labelTime = historyTime
+		}
+		if noteMeta.Updated.IsZero() {
+			noteMeta.Updated = labelTime.Local()
+		}
+	}
+
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	activeDate := parseDateParam(r.URL.Query().Get("d"))
+	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	noteURL := "/notes/" + notePath
+	if filterQuery != "" {
+		noteURL = noteURL + "?" + filterQuery
+	}
+
+	data := ViewData{
+		NotePath:     notePath,
+		NoteTitle:    meta.Title,
+		NoteMeta:     noteMeta,
+		RenderedHTML: template.HTML(htmlStr),
+		NoteURL:      noteURL,
+	}
+	return data, http.StatusOK, nil
 }
 
 func (s *Server) resolveNotePath(ctx context.Context, noteRef string) (string, error) {
@@ -3253,7 +3907,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	metaAttrs := index.FrontmatterAttributes(string(content))
 	attachmentBase := ""
 	if metaAttrs.ID != "" {
-		attachments = listAttachmentNames(filepath.Join(s.cfg.RepoPath, "attachments", metaAttrs.ID))
+		attachments = listAttachmentNames(s.noteAttachmentsDir(metaAttrs.ID))
 		attachmentBase = "/" + filepath.ToSlash(filepath.Join("attachments", metaAttrs.ID))
 	}
 	data := ViewData{
@@ -3295,7 +3949,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	if err == nil {
 		meta := index.FrontmatterAttributes(string(content))
 		if meta.ID != "" {
-			attachmentPath = filepath.Join(s.cfg.RepoPath, "attachments", meta.ID)
+			attachmentPath = s.noteAttachmentsDir(meta.ID)
 		}
 	}
 	unlock := s.locker.Lock(notePath)
@@ -3361,7 +4015,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	attachmentsDir := filepath.Join(s.cfg.RepoPath, "attachments", meta.ID)
+	attachmentsDir := s.noteAttachmentsDir(meta.ID)
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3432,7 +4086,7 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	attachmentsDir := filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", token)
+	attachmentsDir := s.tempAttachmentsDir(token)
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3501,7 +4155,7 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	targetPath := filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", token, name)
+	targetPath := filepath.Join(s.tempAttachmentsDir(token), name)
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3552,7 +4206,7 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	targetPath := filepath.Join(s.cfg.RepoPath, "attachments", meta.ID, name)
+	targetPath := filepath.Join(s.noteAttachmentsDir(meta.ID), name)
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3579,7 +4233,7 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	attachmentsRoot := filepath.Clean(filepath.Join(s.cfg.RepoPath, "attachments"))
+	attachmentsRoot := filepath.Clean(s.attachmentsRoot())
 	fullPath := filepath.Clean(filepath.Join(attachmentsRoot, clean))
 	if !strings.HasPrefix(fullPath, attachmentsRoot+string(filepath.Separator)) && fullPath != attachmentsRoot {
 		http.NotFound(w, r)
@@ -3616,6 +4270,124 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fullPath)
 }
 
+func (s *Server) handleAssetFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rel := strings.TrimPrefix(r.URL.Path, "/assets/")
+	if rel == "" {
+		http.NotFound(w, r)
+		return
+	}
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		http.NotFound(w, r)
+		return
+	}
+	assetsRoot := filepath.Clean(s.assetsRoot())
+	if assetsRoot == "" {
+		http.NotFound(w, r)
+		return
+	}
+	fullPath := filepath.Clean(filepath.Join(assetsRoot, clean))
+	if !strings.HasPrefix(fullPath, assetsRoot+string(filepath.Separator)) && fullPath != assetsRoot {
+		http.NotFound(w, r)
+		return
+	}
+	if !IsAuthenticated(r.Context()) {
+		parts := strings.Split(clean, string(filepath.Separator))
+		if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := s.idx.PathByUID(r.Context(), parts[0]); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, fullPath)
+}
+
+func (s *Server) ensureVideoThumbnail(noteID, relPath string) (string, bool) {
+	if noteID == "" || relPath == "" {
+		return "", false
+	}
+	assetsRoot := s.assetsRoot()
+	if assetsRoot == "" {
+		return "", false
+	}
+	videoPath := filepath.Join(s.noteAttachmentsDir(noteID), filepath.FromSlash(relPath))
+	videoInfo, err := os.Stat(videoPath)
+	if err != nil || videoInfo.IsDir() {
+		return "", false
+	}
+	baseName := strings.TrimSuffix(path.Base(relPath), path.Ext(relPath))
+	if baseName == "" {
+		return "", false
+	}
+	thumbDir := filepath.Join(assetsRoot, noteID)
+	thumbName := baseName + ".jpg"
+	thumbPath := filepath.Join(thumbDir, thumbName)
+	thumbInfo, err := os.Stat(thumbPath)
+	needsUpdate := err != nil
+	if err == nil && thumbInfo.ModTime().Before(videoInfo.ModTime()) {
+		needsUpdate = true
+	}
+	if needsUpdate {
+		if err := os.MkdirAll(thumbDir, 0o755); err != nil {
+			slog.Warn("video thumbnail mkdir failed", "err", err)
+			return "", false
+		}
+		if err := generateVideoThumbnail(videoPath, thumbPath); err != nil {
+			slog.Warn("video thumbnail generation failed", "err", err)
+			return "", false
+		}
+	}
+	return "/assets/" + noteID + "/" + thumbName, true
+}
+
+func generateVideoThumbnail(videoPath, thumbPath string) error {
+	tmpFile, err := os.CreateTemp(filepath.Dir(thumbPath), ".thumb-*.jpg")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	cmd := exec.Command("ffmpeg", "-y", "-ss", "00:00:01", "-i", videoPath, "-frames:v", "1", "-q:v", "2", tmpPath)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, thumbPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 func (s *Server) promoteTempAttachments(token, content string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -3628,7 +4400,7 @@ func (s *Server) promoteTempAttachments(token, content string) error {
 	if meta.ID == "" {
 		return errors.New("note id missing")
 	}
-	tempDir := filepath.Join(s.cfg.RepoPath, "attachments", ".tmp", token)
+	tempDir := s.tempAttachmentsDir(token)
 	entries, err := os.ReadDir(tempDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -3640,7 +4412,7 @@ func (s *Server) promoteTempAttachments(token, content string) error {
 		return os.RemoveAll(tempDir)
 	}
 
-	attachmentsDir := filepath.Join(s.cfg.RepoPath, "attachments", meta.ID)
+	attachmentsDir := s.noteAttachmentsDir(meta.ID)
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		return err
 	}
@@ -4006,6 +4778,8 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	parseContext.Set(mapsEmbedContextKey, ctx)
 	parseContext.Set(youtubeEmbedContextKey, ctx)
 	parseContext.Set(tiktokEmbedContextKey, ctx)
+	parseContext.Set(instagramEmbedContextKey, ctx)
+	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
@@ -4021,6 +4795,8 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	parseContext.Set(mapsEmbedContextKey, ctx)
 	parseContext.Set(youtubeEmbedContextKey, ctx)
 	parseContext.Set(tiktokEmbedContextKey, ctx)
+	parseContext.Set(instagramEmbedContextKey, ctx)
+	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}

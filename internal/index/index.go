@@ -270,6 +270,13 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 			return err
 		}
 		if d.IsDir() {
+			rel, relErr := filepath.Rel(notesRoot, path)
+			if relErr == nil {
+				rel = filepath.ToSlash(rel)
+				if rel == "attachments" || strings.HasPrefix(rel, "attachments/") {
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
 		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
@@ -305,6 +312,13 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) error {
 			return walkErr
 		}
 		if d.IsDir() {
+			rel, relErr := filepath.Rel(notesRoot, path)
+			if relErr == nil {
+				rel = filepath.ToSlash(rel)
+				if rel == "attachments" || strings.HasPrefix(rel, "attachments/") {
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
 		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {

@@ -38,8 +38,8 @@ Non-goals (v1)
 ```
 
 wiki/
-notes/                # canonical markdown notes (YYYY-MM/ subfolders for new notes)
-assets/               # attachments
+notes/                # canonical markdown notes
+notes/attachments/    # per-note attachments (notes/attachments/{note-id}/...)
 templates/            # html/template files
 .wiki/                # internal data (default WIKI_DATA_PATH if not set)
 index.sqlite        # derived DB (ignored by git)
@@ -49,7 +49,7 @@ cache/              # optional render cache (ignored by git)
 ```
 
 - Notes live under `notes/`. Treat all note identifiers as **repo-relative paths under notes**.
-- Attachments live under `assets/` and must follow the same path safety rules as notes.
+- Attachments live under `notes/attachments/` and must follow the same path safety rules as notes.
 - Internal data (index, auth, drafts) lives under `WIKI_DATA_PATH` (defaults to `.wiki/` under the repo path).
 - Ignore `.wiki/` in `.gitignore` (or your `WIKI_DATA_PATH` location).
 
