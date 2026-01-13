@@ -39,7 +39,7 @@ wiki/
 notes/                # canonical markdown notes (YYYY-MM/ subfolders for new notes)
 assets/               # attachments
 templates/            # html/template files
-.wiki/
+.wiki/                # internal data (default WIKI_DATA_PATH if not set)
 index.sqlite        # derived DB (ignored by git)
 drafts/             # autosave drafts (ignored by git)
 cache/              # optional render cache (ignored by git)
@@ -48,7 +48,8 @@ cache/              # optional render cache (ignored by git)
 
 - Notes live under `notes/`. Treat all note identifiers as **repo-relative paths under notes**.
 - Attachments live under `assets/` and must follow the same path safety rules as notes.
-- Ignore `.wiki/` in `.gitignore`.
+- Internal data (index, auth, drafts) lives under `WIKI_DATA_PATH` (defaults to `.wiki/` under the repo path).
+- Ignore `.wiki/` in `.gitignore` (or your `WIKI_DATA_PATH` location).
 
 ---
 
@@ -189,7 +190,7 @@ When saving a note:
 
 Draft autosave (optional v1.1)
 
-- Autosave to `.wiki/drafts/{note-id}.md` (not committed)
+- Autosave to `${WIKI_DATA_PATH}/drafts/{note-id}.md` (not committed)
 - On edit page load, if a newer draft exists, offer restore.
 
 ---
@@ -235,6 +236,7 @@ If not strictly localhost-only:
 
 ```
 WIKI_REPO_PATH=/path/to/wiki
+WIKI_DATA_PATH=/path/to/wiki/.wiki
 WIKI_LISTEN_ADDR=127.0.0.1:8080
 WIKI_AUTH_USER=admin
 WIKI_AUTH_PASS=changeme
@@ -292,7 +294,7 @@ Guidelines
 2. Save endpoint with atomic writes.
 3. SQLite index with FTS search.
 4. Delayed git commit (debounce) after saves.
-5. `.gitignore` excludes `.wiki/` and drafts/cache.
+5. `.gitignore` excludes `.wiki/` and drafts/cache (or your `WIKI_DATA_PATH` location).
 6. A simple config file/env vars:
    - repo path, listen addr, auth creds, git debounce durations.
 

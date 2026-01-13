@@ -18,18 +18,19 @@ docker build -t gwiki .
 Run with a mounted repo:
 
 ```bash
-docker run --rm -p 8080:8080 -v /path/to/your/wiki/repo:/data gwiki
+docker run --rm -p 8080:8080 -v /path/to/your/wiki/repo:/notes -v /path/to/your/wiki/.wiki:/data -e WIKI_REPO_PATH=/notes -e WIKI_DATA_PATH=/data gwiki
 ```
 
-The server creates `.wiki/` and `notes/` inside the repo if missing and listens on
-`0.0.0.0:8080` in the container (published to `localhost:8080` by default).
+The server uses `WIKI_REPO_PATH` for notes (`notes/`) and `WIKI_DATA_PATH` for
+internal data (SQLite index, auth file). It listens on `0.0.0.0:8080` in the
+container (published to `localhost:8080` by default).
 
 ### Docker Compose
 
-Set the host path and start:
+Set the host paths and start:
 
 ```bash
-WIKI_REPO_PATH_HOST=/path/to/your/wiki/repo docker compose up --build
+WIKI_REPO_PATH_HOST=/path/to/your/wiki/repo WIKI_DATA_PATH_HOST=/path/to/your/wiki/.wiki docker compose up --build
 ```
 
 Defaults to the current directory if `WIKI_REPO_PATH_HOST` is not set:
@@ -42,25 +43,27 @@ docker compose up --build
 
 ```bash
 make docker-build
-WIKI_REPO_PATH=/path/to/your/wiki/repo make docker-run
+WIKI_REPO_PATH=/path/to/your/wiki/repo WIKI_DATA_PATH=/path/to/your/wiki/.wiki make docker-run
 make run
 WIKI_REPO_PATH=/path/to/your/wiki/repo make run
 ```
 
 ## Run (Local)
 
-Set the repo path and start the server:
+Set the repo and data paths and start the server:
 
 ```bash
-WIKI_REPO_PATH=/path/to/your/wiki/repo go run ./cmd/wiki
+WIKI_REPO_PATH=/path/to/your/wiki/repo WIKI_DATA_PATH=/path/to/your/wiki/.wiki go run ./cmd/wiki
 ```
 
-The server creates `.wiki/` and `notes/` inside the repo if missing and listens on
-`127.0.0.1:8080` by default.
+The server creates `notes/` under `WIKI_REPO_PATH` and stores internal data under
+`WIKI_DATA_PATH` if missing and listens on `127.0.0.1:8080` by default.
 
 ### Optional environment variables
 
 - `WIKI_LISTEN_ADDR` (default: `127.0.0.1:8080`)
+- `WIKI_REPO_PATH` (notes root; `notes/` lives here)
+- `WIKI_DATA_PATH` (internal data root; `index.sqlite` and auth file live here)
 - `WIKI_AUTH_USER`
 - `WIKI_AUTH_PASS`
 - `WIKI_AUTH_FILE` (per-line `user:$argon2id$...` hashes)
@@ -85,7 +88,7 @@ go run ./cmd/user-add <username>
 ```
 
 The command writes to `WIKI_AUTH_FILE` when set, otherwise to
-`$WIKI_REPO_PATH/.wiki/auth.txt`.
+`$WIKI_DATA_PATH/auth.txt` (or `$WIKI_REPO_PATH/.wiki/auth.txt` if `WIKI_DATA_PATH` is unset).
 
 ## Note format
 
