@@ -15,6 +15,7 @@ type ViewData struct {
 	CurrentUser      User
 	NotePath         string
 	NoteTitle        string
+	NoteFileName     string
 	RawContent       string
 	FrontmatterBlock string
 	SaveAction       string
@@ -89,6 +90,7 @@ type FolderNode struct {
 type NoteCard struct {
 	Path         string
 	Title        string
+	FileName     string
 	RenderedHTML template.HTML
 	Meta         index.FrontmatterAttrs
 }

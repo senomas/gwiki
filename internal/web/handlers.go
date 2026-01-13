@@ -2937,6 +2937,26 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		s.handlePreview(w, r, resolved)
 		return
 	}
+	if strings.HasSuffix(pathPart, "/card") {
+		base := strings.TrimSuffix(pathPart, "/card")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleNoteCardFragment(w, r, resolved)
+		return
+	}
+	if strings.HasSuffix(pathPart, "/detail") {
+		base := strings.TrimSuffix(pathPart, "/detail")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleNoteDetailFragment(w, r, resolved)
+		return
+	}
 
 	resolved, err := s.resolveNotePath(r.Context(), pathPart)
 	if err != nil {
@@ -2947,19 +2967,58 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath string) {
+	data, status, err := s.buildNoteViewData(r, notePath, false)
+	if err != nil {
+		if status == http.StatusNotFound {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request, notePath string) {
+	data, status, err := s.buildNoteViewData(r, notePath, true)
+	if err != nil {
+		if status == http.StatusNotFound {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "note_detail", data)
+}
+
+func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, notePath string) {
+	data, status, err := s.buildNoteCardData(r, notePath)
+	if err != nil {
+		if status == http.StatusNotFound {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "note_detail", data)
+}
+
+func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody bool) (ViewData, int, error) {
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return ViewData{}, http.StatusBadRequest, err
 	}
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			http.NotFound(w, r)
-			return
+			return ViewData{}, http.StatusNotFound, err
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return ViewData{}, http.StatusInternalServerError, err
 	}
 	if !index.HasFrontmatter(string(content)) {
 		derivedTitle := index.DeriveTitleFromBody(string(content))
@@ -3092,6 +3151,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		ContentTemplate:  "view",
 		NotePath:         notePath,
 		NoteTitle:        meta.Title,
+		NoteFileName:     filepath.Base(notePath),
 		NoteMeta:         noteMeta,
 		RenderedHTML:     template.HTML(htmlStr),
 		Tags:             tags,

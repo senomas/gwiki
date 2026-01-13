@@ -53,3 +53,30 @@
   </div>
 </div>
 {{end}}
+
+{{define "note_detail_skeleton"}}
+<div class="space-y-3">
+  {{if .NotePath}}
+    <h1 class="text-2xl font-semibold text-slate-100">
+      {{if .NoteURL}}
+        <a class="text-sky-300 hover:text-sky-200" href="{{.NoteURL}}">
+          {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
+        </a>
+      {{else}}
+      <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.NotePath}}">
+        {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
+      </a>
+      {{end}}
+    </h1>
+  {{else}}
+    <h1 class="text-2xl font-semibold text-slate-100">{{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}</h1>
+  {{end}}
+  <div class="note-skeleton-meta note-skeleton-line note-skeleton-line--short"></div>
+  <div class="note-body space-y-3 text-sm leading-relaxed text-slate-200">
+    <div class="note-skeleton-line"></div>
+    <div class="note-skeleton-line note-skeleton-line--short"></div>
+    <div class="note-skeleton-line"></div>
+    <div class="note-skeleton-line note-skeleton-line--long"></div>
+  </div>
+</div>
+{{end}}

@@ -18,7 +18,13 @@
         </div>
       </div>
       <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
-        {{template "note_detail" .}}
+        <div
+          hx-get="/notes/{{.NotePath}}/detail"
+          hx-trigger="revealed"
+          hx-swap="outerHTML"
+        >
+          {{template "note_detail_skeleton" .}}
+        </div>
       </article>
       {{if .Backlinks}}
         <section class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 text-sm text-slate-200">

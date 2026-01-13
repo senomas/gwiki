@@ -7,7 +7,15 @@
       <div class="flex-1">
         {{ $noteURL := printf "/notes/%s" .Path }}
         {{ if $.FilterQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.FilterQuery }}{{ end }}
-        {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "RenderedHTML" .RenderedHTML "NotePath" .Path "NoteURL" $noteURL)}}
+        {{ $cardURL := printf "/notes/%s/card" .Path }}
+        {{ if $.FilterQuery }}{{ $cardURL = printf "/notes/%s/card?%s" .Path $.FilterQuery }}{{ end }}
+        <div
+          hx-get="{{ $cardURL }}"
+          hx-trigger="revealed"
+          hx-swap="outerHTML"
+        >
+          {{template "note_detail_skeleton" (dict "NoteTitle" .Title "NoteMeta" .Meta "NotePath" .Path "NoteURL" $noteURL "NoteFileName" .FileName)}}
+        </div>
       </div>
       {{if and $.AuthEnabled $.IsAuthenticated}}
       <div>

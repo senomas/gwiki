@@ -276,6 +276,28 @@
       text-decoration: underline;
       text-underline-offset: 3px;
     }
+    .note-skeleton-line {
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(30, 41, 59, 0.35), rgba(59, 130, 246, 0.2), rgba(30, 41, 59, 0.35));
+      background-size: 220% 100%;
+      animation: note-skeleton-shimmer 1.4s ease-in-out infinite;
+    }
+    .note-skeleton-line--short {
+      width: 45%;
+    }
+    .note-skeleton-line--long {
+      width: 85%;
+    }
+    .note-skeleton-meta {
+      height: 10px;
+      margin-top: 0.2rem;
+      opacity: 0.8;
+    }
+    @keyframes note-skeleton-shimmer {
+      0% { background-position: 0% 0; }
+      100% { background-position: -200% 0; }
+    }
   </style>
 </head>
 <body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit") (eq .ContentTemplate "login")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
