@@ -1219,7 +1219,7 @@ func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Re
 			continue
 		}
 		urlText, ok := paragraphOnlyURL(para, source)
-		if !ok || !isInstagramReelURL(urlText) {
+		if !ok || !isInstagramURL(urlText) {
 			continue
 		}
 		status, title, thumb, errMsg := lookupInstagramEmbed(ctx, urlText)
@@ -1807,7 +1807,7 @@ func isTikTokURL(raw string) bool {
 	return false
 }
 
-func isInstagramReelURL(raw string) bool {
+func isInstagramURL(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" {
 		return false
@@ -1817,8 +1817,8 @@ func isInstagramReelURL(raw string) bool {
 	if host != "instagram.com" && host != "m.instagram.com" {
 		return false
 	}
-	pathValue := strings.TrimPrefix(strings.ToLower(parsed.Path), "/")
-	return strings.HasPrefix(pathValue, "reel/") || strings.HasPrefix(pathValue, "reels/")
+	pathValue := strings.TrimSpace(strings.Trim(parsed.Path, "/"))
+	return pathValue != ""
 }
 
 func attachmentVideoFromURL(raw string) (string, string, bool) {

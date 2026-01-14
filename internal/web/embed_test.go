@@ -102,8 +102,12 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 	}
 
 	instagramURL := "https://www.instagram.com/reel/abc123/"
-	if !isInstagramReelURL(instagramURL) {
+	instagramProfileURL := "https://www.instagram.com/jjs_kitchensolo/"
+	if !isInstagramURL(instagramURL) {
 		t.Fatalf("expected instagram reel url to be recognized")
+	}
+	if !isInstagramURL(instagramProfileURL) {
+		t.Fatalf("expected instagram profile url to be recognized")
 	}
 	if err := idx.UpsertEmbedCache(ctx, index.EmbedCacheEntry{
 		URL:       instagramURL,
@@ -115,6 +119,17 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		ExpiresAt: now.Add(time.Hour),
 	}); err != nil {
 		t.Fatalf("upsert instagram cache: %v", err)
+	}
+	if err := idx.UpsertEmbedCache(ctx, index.EmbedCacheEntry{
+		URL:       instagramProfileURL,
+		Kind:      instagramEmbedCacheKind,
+		EmbedURL:  "https://example.com/instagram-profile-thumb.jpg",
+		Status:    index.EmbedCacheStatusFound,
+		ErrorMsg:  "Example Profile",
+		UpdatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("upsert instagram profile cache: %v", err)
 	}
 
 	html, err := srv.renderMarkdown(ctx, []byte(youtubeURL))
@@ -139,7 +154,7 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("expected maps embed to replace paragraph, got %s", html)
 	}
 
-	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + tiktokURL + "\n\n" + instagramURL + "\n\n" + mapsURL + "\n"
+	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + tiktokURL + "\n\n" + instagramURL + "\n\n" + instagramProfileURL + "\n\n" + mapsURL + "\n"
 	html, err = srv.renderMarkdown(ctx, []byte(multi))
 	if err != nil {
 		t.Fatalf("render multi: %v", err)
@@ -150,8 +165,8 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 	if count := strings.Count(html, `class="tiktok-card"`); count != 1 {
 		t.Fatalf("expected one tiktok card, got %d in %s", count, html)
 	}
-	if count := strings.Count(html, `class="instagram-card"`); count != 1 {
-		t.Fatalf("expected one instagram card, got %d in %s", count, html)
+	if count := strings.Count(html, `class="instagram-card"`); count != 2 {
+		t.Fatalf("expected two instagram cards, got %d in %s", count, html)
 	}
 	if count := strings.Count(html, "<iframe"); count != 1 {
 		t.Fatalf("expected one map iframe, got %d in %s", count, html)
