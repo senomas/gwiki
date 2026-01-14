@@ -43,6 +43,7 @@ import (
 var (
 	linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
 	journalFolderRE  = regexp.MustCompile(`^\d{4}-\d{2}$`)
+	journalNoteRE    = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
 	wikiLinkRe       = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	taskCheckboxRe   = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
 	taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
@@ -212,6 +213,10 @@ func normalizeFolderPath(input string) (string, error) {
 		return "", fs.ErrUnsafePath
 	}
 	return clean, nil
+}
+
+func isJournalNotePath(notePath string) bool {
+	return journalNoteRE.MatchString(strings.TrimPrefix(notePath, "/"))
 }
 
 func listAttachmentNames(dir string) []string {
@@ -4764,6 +4769,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if derivedTitle == "" {
 		derivedTitle = time.Now().Format("2006-01-02 15-04")
 	}
+	preserveUpdated := isJournalNotePath(notePath)
 	folder, err := normalizeFolderPath(folderInput)
 	if err != nil {
 		s.renderEditError(w, r, ViewData{
@@ -4846,7 +4852,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	mergedContent = normalizeLineEndings(mergedContent)
 	if !hadFrontmatter {
-		mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		if preserveUpdated {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		} else {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		}
 		if err != nil {
 			s.renderEditError(w, r, ViewData{
 				Title:            "Edit note",
@@ -4945,7 +4955,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 
 	if hadFrontmatter {
-		mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		if preserveUpdated {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		} else {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		}
 		if err != nil {
 			s.renderEditError(w, r, ViewData{
 				Title:            "Edit note",

@@ -17,6 +17,14 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 }
 
 func EnsureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated int, title, user string) (string, error) {
+	return ensureFrontmatterWithTitleAndUser(content, now, maxUpdated, title, user, true)
+}
+
+func EnsureFrontmatterWithTitleAndUserNoUpdated(content string, now time.Time, maxUpdated int, title, user string) (string, error) {
+	return ensureFrontmatterWithTitleAndUser(content, now, maxUpdated, title, user, false)
+}
+
+func ensureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated int, title, user string, updateUpdated bool) (string, error) {
 	if strings.TrimSpace(user) == "" {
 		user = dummyHistoryUser
 	}
@@ -27,11 +35,15 @@ func EnsureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 		if title == "" {
 			title = DeriveTitleFromBody(body)
 		}
+		updatedVal := nowStr
+		if !updateUpdated {
+			updatedVal = nowStr
+		}
 		fm := []string{
 			"---",
 			"id: " + id,
 			"created: " + nowStr,
-			"updated: " + nowStr,
+			"updated: " + updatedVal,
 			"priority: 10",
 			"visibility: private",
 			"history:",
@@ -67,6 +79,12 @@ func EnsureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 	if createdVal == "" {
 		createdVal = nowStr
 	}
+	updatedVal := valueOrEmpty(fmLines, lineIdx, "updated")
+	if updateUpdated {
+		updatedVal = nowStr
+	} else if updatedVal == "" {
+		updatedVal = createdVal
+	}
 	priorityVal := valueOrEmpty(fmLines, lineIdx, "priority")
 	if priorityVal == "" {
 		priorityVal = "10"
@@ -81,7 +99,7 @@ func EnsureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 
 	setFrontmatterLine(&fmLines, lineIdx, "id", idVal)
 	setFrontmatterLine(&fmLines, lineIdx, "created", createdVal)
-	setFrontmatterLine(&fmLines, lineIdx, "updated", nowStr)
+	setFrontmatterLine(&fmLines, lineIdx, "updated", updatedVal)
 	setFrontmatterLine(&fmLines, lineIdx, "priority", priorityVal)
 	setFrontmatterLine(&fmLines, lineIdx, "visibility", visibilityVal)
 	removeFrontmatterLine(&fmLines, lineIdx, "title")

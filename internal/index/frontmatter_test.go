@@ -84,6 +84,35 @@ func TestEnsureFrontmatterPreservesIDAndCreated(t *testing.T) {
 	}
 }
 
+func TestEnsureFrontmatterNoUpdated(t *testing.T) {
+	now := time.Date(2024, 4, 5, 6, 7, 8, 0, time.UTC)
+	input := strings.Join([]string{
+		"---",
+		"id: abc-123",
+		"created: 2020-01-01T00:00:00Z",
+		"updated: 2020-01-02T00:00:00Z",
+		"---",
+		"# Title",
+	}, "\n")
+
+	out, err := EnsureFrontmatterWithTitleAndUserNoUpdated(input, now, 5, "Title", "tester")
+	if err != nil {
+		t.Fatalf("EnsureFrontmatterWithTitleAndUserNoUpdated: %v", err)
+	}
+
+	fmLines, _, ok := splitFrontmatterLines(out)
+	if !ok {
+		t.Fatalf("expected frontmatter")
+	}
+	fm := fmLineMap(fmLines)
+	if fm["updated"] != "2020-01-02T00:00:00Z" {
+		t.Fatalf("expected updated to stay the same, got %s", fm["updated"])
+	}
+	if !strings.Contains(strings.Join(fmLines, "\n"), "action: edit") {
+		t.Fatalf("expected history edit entry to be added")
+	}
+}
+
 func TestEnsureFrontmatterHistoryMax(t *testing.T) {
 	now := time.Date(2024, 3, 4, 5, 6, 7, 0, time.UTC)
 	input := strings.Join([]string{
