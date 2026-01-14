@@ -110,6 +110,15 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	}
 }
 
+func historyUser(ctx context.Context) string {
+	if user, ok := CurrentUser(ctx); ok {
+		if name := strings.TrimSpace(user.Name); name != "" {
+			return name
+		}
+	}
+	return "system"
+}
+
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	if s.auth == nil {
 		return true
@@ -2945,7 +2954,7 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		updatedContent = fm + "\n" + updatedBody
 	}
 	updatedContent = normalizeLineEndings(updatedContent)
-	updatedContent, err = index.EnsureFrontmatterWithTitle(updatedContent, time.Now(), s.cfg.UpdatedHistoryMax, "")
+	updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, time.Now(), s.cfg.UpdatedHistoryMax, "", historyUser(r.Context()))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3160,7 +3169,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			if derivedTitle == "" {
 				derivedTitle = journalDate
 			}
-			updatedContent, err = index.EnsureFrontmatterWithTitle(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle)
+			updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 			if err != nil {
 				s.renderEditError(w, r, ViewData{
 					Title:            "New note",
@@ -3238,7 +3247,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		mergedContent = normalizeLineEndings(mergedContent)
 	}
 
-	mergedContent, err := index.EnsureFrontmatterWithTitle(mergedContent, now, s.cfg.UpdatedHistoryMax, title)
+	mergedContent, err := index.EnsureFrontmatterWithTitleAndUser(mergedContent, now, s.cfg.UpdatedHistoryMax, title, historyUser(r.Context()))
 	if err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
@@ -3603,7 +3612,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		if derivedTitle == "" {
 			derivedTitle = time.Now().Format("2006-01-02 15-04")
 		}
-		updated, err := index.EnsureFrontmatterWithTitle(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		updated, err := index.EnsureFrontmatterWithTitleAndUser(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 		if err != nil {
 			return ViewData{}, http.StatusInternalServerError, err
 		}
@@ -3760,7 +3769,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 		if derivedTitle == "" {
 			derivedTitle = time.Now().Format("2006-01-02 15-04")
 		}
-		updated, err := index.EnsureFrontmatterWithTitle(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		updated, err := index.EnsureFrontmatterWithTitleAndUser(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 		if err != nil {
 			return ViewData{}, http.StatusInternalServerError, err
 		}
@@ -3878,7 +3887,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		if derivedTitle == "" {
 			derivedTitle = time.Now().Format("2006-01-02 15-04")
 		}
-		updated, err := index.EnsureFrontmatterWithTitle(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		updated, err := index.EnsureFrontmatterWithTitleAndUser(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -4578,7 +4587,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	mergedContent = normalizeLineEndings(mergedContent)
 	if !hadFrontmatter {
-		mergedContent, err = index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 		if err != nil {
 			s.renderEditError(w, r, ViewData{
 				Title:            "Edit note",
@@ -4677,7 +4686,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 
 	if hadFrontmatter {
-		mergedContent, err = index.EnsureFrontmatterWithTitle(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle)
+		mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 		if err != nil {
 			s.renderEditError(w, r, ViewData{
 				Title:            "Edit note",

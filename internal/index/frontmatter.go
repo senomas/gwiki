@@ -13,6 +13,13 @@ func EnsureFrontmatter(content string, now time.Time, maxUpdated int) (string, e
 }
 
 func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, title string) (string, error) {
+	return EnsureFrontmatterWithTitleAndUser(content, now, maxUpdated, title, dummyHistoryUser)
+}
+
+func EnsureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated int, title, user string) (string, error) {
+	if strings.TrimSpace(user) == "" {
+		user = dummyHistoryUser
+	}
 	nowStr := now.Format(time.RFC3339)
 	fmLines, body, ok := splitFrontmatterLines(content)
 	if !ok {
@@ -28,7 +35,7 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 			"priority: 10",
 			"visibility: private",
 			"history:",
-			"  - user: " + dummyHistoryUser,
+			"  - user: " + user,
 			"    at: " + nowStr,
 			"    action: create",
 			"---",
@@ -83,7 +90,7 @@ func EnsureFrontmatterWithTitle(content string, now time.Time, maxUpdated int, t
 	if createdMissing {
 		action = "create"
 	}
-	upsertHistoryEntry(&fmLines, lineIdx, now, action)
+	upsertHistoryEntry(&fmLines, lineIdx, now, action, user)
 	trimHistoryEntries(&fmLines, lineIdx, maxUpdated)
 
 	fmBlock := "---\n" + strings.Join(fmLines, "\n") + "\n---"
@@ -496,9 +503,12 @@ func countHistoryEntries(lines []string) int {
 	return count
 }
 
-func addHistoryEntry(lines *[]string, idx map[string]int, at, action string) {
+func addHistoryEntry(lines *[]string, idx map[string]int, at, action, user string) {
+	if strings.TrimSpace(user) == "" {
+		user = dummyHistoryUser
+	}
 	item := []string{
-		"  - user: " + dummyHistoryUser,
+		"  - user: " + user,
 		"    at: " + at,
 		"    action: " + action,
 	}
@@ -513,12 +523,12 @@ func addHistoryEntry(lines *[]string, idx map[string]int, at, action string) {
 	idx["history"] = historyPos
 }
 
-func upsertHistoryEntry(lines *[]string, idx map[string]int, now time.Time, action string) {
+func upsertHistoryEntry(lines *[]string, idx map[string]int, now time.Time, action, user string) {
 	const mergeWindow = 15 * time.Minute
 	nowStr := now.Format(time.RFC3339)
 	pos, ok := idx["history"]
 	if !ok || pos < 0 || pos >= len(*lines) {
-		addHistoryEntry(lines, idx, nowStr, action)
+		addHistoryEntry(lines, idx, nowStr, action, user)
 		return
 	}
 
@@ -528,7 +538,7 @@ func upsertHistoryEntry(lines *[]string, idx map[string]int, now time.Time, acti
 		end++
 	}
 	if end <= start {
-		addHistoryEntry(lines, idx, nowStr, action)
+		addHistoryEntry(lines, idx, nowStr, action, user)
 		return
 	}
 
@@ -540,7 +550,7 @@ func upsertHistoryEntry(lines *[]string, idx map[string]int, now time.Time, acti
 		}
 	}
 	if lastStart == -1 {
-		addHistoryEntry(lines, idx, nowStr, action)
+		addHistoryEntry(lines, idx, nowStr, action, user)
 		return
 	}
 
@@ -556,12 +566,12 @@ func upsertHistoryEntry(lines *[]string, idx map[string]int, now time.Time, acti
 		}
 	}
 	if lastAt == "" || lastAction == "" {
-		addHistoryEntry(lines, idx, nowStr, action)
+		addHistoryEntry(lines, idx, nowStr, action, user)
 		return
 	}
 	lastTime, err := time.Parse(time.RFC3339, lastAt)
 	if err != nil || action != lastAction || now.Sub(lastTime) > mergeWindow {
-		addHistoryEntry(lines, idx, nowStr, action)
+		addHistoryEntry(lines, idx, nowStr, action, user)
 		return
 	}
 
@@ -572,7 +582,7 @@ func upsertHistoryEntry(lines *[]string, idx map[string]int, now time.Time, acti
 			return
 		}
 	}
-	addHistoryEntry(lines, idx, nowStr, action)
+	addHistoryEntry(lines, idx, nowStr, action, user)
 }
 
 func trimHistoryEntries(lines *[]string, idx map[string]int, maxEntries int) {
