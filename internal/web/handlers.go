@@ -926,7 +926,7 @@ func (r *collapsibleSectionHTMLRenderer) renderCollapsibleSection(
 	if entering {
 		section := node.(*collapsibleSection)
 		title := html.EscapeString(section.Title)
-		_, _ = w.WriteString(`<details class="note-section">`)
+		_, _ = w.WriteString(`<details class="note-section" open>`)
 		_, _ = w.WriteString(`<summary class="note-section__summary">`)
 		_, _ = w.WriteString(title)
 		_, _ = w.WriteString(`</summary>`)
