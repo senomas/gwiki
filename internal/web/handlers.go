@@ -52,6 +52,7 @@ var mdRenderer = goldmark.New(
 		extension.WithLinkifyURLRegexp(linkifyURLRegexp),
 	)),
 	goldmark.WithExtensions(&linkTargetBlank{}),
+	goldmark.WithExtensions(&collapsibleSectionExtension{}),
 	goldmark.WithExtensions(&mapsEmbedExtension{}),
 	goldmark.WithExtensions(&youtubeEmbedExtension{}),
 	goldmark.WithExtensions(&tiktokEmbedExtension{}),
@@ -749,6 +750,8 @@ var embedCacheStore *index.Index
 
 var mapsEmbedInFlight = newTTLCache(512)
 
+var collapsibleSectionKind = ast.NewNodeKind("CollapsibleSection")
+
 var (
 	youtubeEmbedKind       = ast.NewNodeKind("YouTubeEmbed")
 	youtubeEmbedHTTPClient = &http.Client{Timeout: 3 * time.Second}
@@ -833,6 +836,105 @@ const (
 	instagramEmbedStatusFound
 	instagramEmbedStatusFailed
 )
+
+type collapsibleSection struct {
+	ast.BaseBlock
+	Title string
+}
+
+func (n *collapsibleSection) Kind() ast.NodeKind {
+	return collapsibleSectionKind
+}
+
+func (n *collapsibleSection) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"Title": n.Title,
+	}, nil)
+}
+
+type collapsibleSectionExtension struct{}
+
+func (e *collapsibleSectionExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&collapsibleSectionTransformer{}, 105),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newCollapsibleSectionHTMLRenderer(), 480),
+	))
+}
+
+type collapsibleSectionTransformer struct{}
+
+func (t *collapsibleSectionTransformer) Transform(node *ast.Document, reader text.Reader, _ parser.Context) {
+	source := reader.Source()
+	for current := node.FirstChild(); current != nil; {
+		next := current.NextSibling()
+		heading, ok := current.(*ast.Heading)
+		if !ok || heading.Level != 2 || heading.Parent() != node {
+			current = next
+			continue
+		}
+		title := headingPlainText(heading, source)
+		if strings.TrimSpace(title) == "" {
+			title = "Section"
+		}
+		section := &collapsibleSection{Title: title}
+		node.ReplaceChild(node, current, section)
+		for child := next; child != nil; {
+			childNext := child.NextSibling()
+			if h2, ok := child.(*ast.Heading); ok && h2.Level == 2 && h2.Parent() == node {
+				break
+			}
+			node.RemoveChild(node, child)
+			section.AppendChild(section, child)
+			child = childNext
+		}
+		current = section.NextSibling()
+	}
+}
+
+func headingPlainText(node *ast.Heading, source []byte) string {
+	var b strings.Builder
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch v := n.(type) {
+		case *ast.Text:
+			b.Write(v.Segment.Value(source))
+		case *ast.String:
+			b.Write(v.Text(source))
+		}
+		return ast.WalkContinue, nil
+	})
+	return strings.TrimSpace(b.String())
+}
+
+type collapsibleSectionHTMLRenderer struct{}
+
+func newCollapsibleSectionHTMLRenderer() renderer.NodeRenderer {
+	return &collapsibleSectionHTMLRenderer{}
+}
+
+func (r *collapsibleSectionHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(collapsibleSectionKind, r.renderCollapsibleSection)
+}
+
+func (r *collapsibleSectionHTMLRenderer) renderCollapsibleSection(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if entering {
+		section := node.(*collapsibleSection)
+		title := html.EscapeString(section.Title)
+		_, _ = w.WriteString(`<details class="note-section">`)
+		_, _ = w.WriteString(`<summary class="note-section__summary">`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`</summary>`)
+		return ast.WalkContinue, nil
+	}
+	_, _ = w.WriteString(`</details>`)
+	return ast.WalkContinue, nil
+}
 
 type attachmentVideoEmbed struct {
 	ast.BaseBlock
