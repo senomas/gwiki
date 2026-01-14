@@ -30,6 +30,7 @@ Non-goals (v1)
    - Single-user auth is required if exposed outside localhost.
 5. **Testing discipline**
    - After completing any planned work, run the full test suite (e.g., `go test ./...`) before reporting.
+   - Always run tests before any commit.
 6. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
 

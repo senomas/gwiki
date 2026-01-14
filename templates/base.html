@@ -445,6 +445,25 @@
     </main>
   </div>
 {{end}}
+  <script>
+    (function () {
+      var links = document.querySelectorAll(".js-history-back");
+      var rows = document.querySelectorAll(".js-history-back-row");
+      if (!links.length && !rows.length) {
+        return;
+      }
+      if (window.history.length > 1) {
+        links.forEach(function (link) {
+          link.style.display = "";
+        });
+        return;
+      }
+      rows.forEach(function (row) {
+        row.classList.remove("justify-between");
+        row.classList.add("justify-end");
+      });
+    })();
+  </script>
 </body>
 </html>
 {{end}}
