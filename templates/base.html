@@ -495,17 +495,23 @@
         return collapsed;
       }
 
+      var collapseTimer = null;
       function reportCollapsed(noteBody) {
         var notePath = noteBody.getAttribute("data-note-path");
         var noteID = noteBody.getAttribute("data-note-id");
         if (!notePath || !noteID) {
           return;
         }
-        fetch("/notes/" + notePath + "/collapsed", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({collapsed: collectCollapsed(noteBody)}),
-        });
+        if (collapseTimer) {
+          clearTimeout(collapseTimer);
+        }
+        collapseTimer = setTimeout(function () {
+          fetch("/notes/" + notePath + "/collapsed", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({collapsed: collectCollapsed(noteBody)}),
+          });
+        }, 200);
       }
 
       document.addEventListener("toggle", function (event) {

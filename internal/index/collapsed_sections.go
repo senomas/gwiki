@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const maxCollapsedLineLen = 500
@@ -18,34 +22,66 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 	if noteID == "" {
 		return errors.New("note id required")
 	}
-	tx, err := i.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, "DELETE FROM collapsed_sections WHERE note_id=?", noteID); err != nil {
-		return err
-	}
-	for _, section := range sections {
-		if section.LineNo <= 0 {
-			continue
-		}
-		line := strings.TrimSpace(section.Line)
-		if line == "" {
-			continue
-		}
-		if len(line) > maxCollapsedLineLen {
-			line = line[:maxCollapsedLineLen]
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO collapsed_sections(note_id, line_no, line)
-			VALUES(?, ?, ?)
-		`, noteID, section.LineNo, line); err != nil {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		tx, err := i.db.BeginTx(ctx, nil)
+		if err != nil {
+			if isSQLiteBusy(err) {
+				lastErr = err
+				time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
+				continue
+			}
 			return err
 		}
+
+		if _, err := tx.ExecContext(ctx, "DELETE FROM collapsed_sections WHERE note_id=?", noteID); err != nil {
+			_ = tx.Rollback()
+			if isSQLiteBusy(err) {
+				lastErr = err
+				time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		for _, section := range sections {
+			if section.LineNo <= 0 {
+				continue
+			}
+			line := strings.TrimSpace(section.Line)
+			if line == "" {
+				continue
+			}
+			if len(line) > maxCollapsedLineLen {
+				line = line[:maxCollapsedLineLen]
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO collapsed_sections(note_id, line_no, line)
+				VALUES(?, ?, ?)
+			`, noteID, section.LineNo, line); err != nil {
+				_ = tx.Rollback()
+				if isSQLiteBusy(err) {
+					lastErr = err
+					time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
+					continue
+				}
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			_ = tx.Rollback()
+			if isSQLiteBusy(err) {
+				lastErr = err
+				time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		return nil
 	}
-	return tx.Commit()
+	if lastErr != nil {
+		return lastErr
+	}
+	return nil
 }
 
 func (i *Index) CollapsedSections(ctx context.Context, noteID string) ([]CollapsedSection, error) {
@@ -76,4 +112,14 @@ func (i *Index) CollapsedSections(ctx context.Context, noteID string) ([]Collaps
 		return nil, err
 	}
 	return sections, nil
+}
+
+func isSQLiteBusy(err error) bool {
+	var se *sqlite.Error
+	if errors.As(err, &se) {
+		if se.Code() == sqlite3.SQLITE_BUSY {
+			return true
+		}
+	}
+	return false
 }
