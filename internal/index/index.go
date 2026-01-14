@@ -250,6 +250,7 @@ func (i *Index) setSchemaVersion(ctx context.Context, v int) error {
 func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 	notesRoot := filepath.Join(repoPath, "notes")
 	clear := []string{
+		"DELETE FROM collapsed_sections",
 		"DELETE FROM embed_cache",
 		"DELETE FROM file_histories",
 		"DELETE FROM file_tags",

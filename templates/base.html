@@ -474,6 +474,53 @@
       });
     })();
   </script>
+  <script>
+    (function () {
+      function collectCollapsed(noteBody) {
+        var sections = noteBody.querySelectorAll("details.note-section");
+        var collapsed = [];
+        sections.forEach(function (section) {
+          if (section.open) {
+            return;
+          }
+          var lineNo = parseInt(section.getAttribute("data-line-no"), 10);
+          if (!lineNo) {
+            return;
+          }
+          collapsed.push({
+            line_no: lineNo,
+            line: section.getAttribute("data-line") || "",
+          });
+        });
+        return collapsed;
+      }
+
+      function reportCollapsed(noteBody) {
+        var notePath = noteBody.getAttribute("data-note-path");
+        var noteID = noteBody.getAttribute("data-note-id");
+        if (!notePath || !noteID) {
+          return;
+        }
+        fetch("/notes/" + notePath + "/collapsed", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({collapsed: collectCollapsed(noteBody)}),
+        });
+      }
+
+      document.addEventListener("toggle", function (event) {
+        var target = event.target;
+        if (!target || target.tagName !== "DETAILS" || !target.classList.contains("note-section")) {
+          return;
+        }
+        var noteBody = target.closest(".note-body");
+        if (!noteBody) {
+          return;
+        }
+        reportCollapsed(noteBody);
+      }, true);
+    })();
+  </script>
 </body>
 </html>
 {{end}}

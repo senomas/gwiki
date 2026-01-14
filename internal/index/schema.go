@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 12
+const schemaVersion = 13
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS embed_cache (
 	expires_at INTEGER NOT NULL,
 	PRIMARY KEY(url, kind)
 );
+
+CREATE TABLE IF NOT EXISTS collapsed_sections (
+	note_id TEXT NOT NULL,
+	line_no INTEGER NOT NULL,
+	line TEXT NOT NULL,
+	PRIMARY KEY(note_id, line_no)
+);
+
+CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 	path UNINDEXED,

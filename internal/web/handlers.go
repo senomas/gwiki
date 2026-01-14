@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"database/sql"
@@ -118,6 +119,23 @@ func historyUser(ctx context.Context) string {
 		}
 	}
 	return "system"
+}
+
+type collapsibleSectionRenderState struct {
+	NoteID    string
+	Collapsed map[int]struct{}
+}
+
+type collapsibleSectionStateKey struct{}
+
+func withCollapsibleSectionState(ctx context.Context, state collapsibleSectionRenderState) context.Context {
+	return context.WithValue(ctx, collapsibleSectionStateKey{}, state)
+}
+
+func collapsibleSectionStateFromContext(ctx context.Context) (collapsibleSectionRenderState, bool) {
+	value := ctx.Value(collapsibleSectionStateKey{})
+	state, ok := value.(collapsibleSectionRenderState)
+	return state, ok
 }
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -750,7 +768,10 @@ var embedCacheStore *index.Index
 
 var mapsEmbedInFlight = newTTLCache(512)
 
-var collapsibleSectionKind = ast.NewNodeKind("CollapsibleSection")
+var (
+	collapsibleSectionKind       = ast.NewNodeKind("CollapsibleSection")
+	collapsibleSectionContextKey = parser.NewContextKey()
+)
 
 var (
 	youtubeEmbedKind       = ast.NewNodeKind("YouTubeEmbed")
@@ -839,7 +860,10 @@ const (
 
 type collapsibleSection struct {
 	ast.BaseBlock
-	Title string
+	Title    string
+	LineNo   int
+	LineText string
+	Open     bool
 }
 
 func (n *collapsibleSection) Kind() ast.NodeKind {
@@ -848,7 +872,8 @@ func (n *collapsibleSection) Kind() ast.NodeKind {
 
 func (n *collapsibleSection) Dump(source []byte, level int) {
 	ast.DumpHelper(n, source, level, map[string]string{
-		"Title": n.Title,
+		"Title":  n.Title,
+		"LineNo": strconv.Itoa(n.LineNo),
 	}, nil)
 }
 
@@ -865,8 +890,14 @@ func (e *collapsibleSectionExtension) Extend(m goldmark.Markdown) {
 
 type collapsibleSectionTransformer struct{}
 
-func (t *collapsibleSectionTransformer) Transform(node *ast.Document, reader text.Reader, _ parser.Context) {
+func (t *collapsibleSectionTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
 	source := reader.Source()
+	state := collapsibleSectionRenderState{}
+	if value := pc.Get(collapsibleSectionContextKey); value != nil {
+		if resolved, ok := value.(collapsibleSectionRenderState); ok {
+			state = resolved
+		}
+	}
 	for current := node.FirstChild(); current != nil; {
 		next := current.NextSibling()
 		heading, ok := current.(*ast.Heading)
@@ -878,7 +909,19 @@ func (t *collapsibleSectionTransformer) Transform(node *ast.Document, reader tex
 		if strings.TrimSpace(title) == "" {
 			title = "Section"
 		}
-		section := &collapsibleSection{Title: title}
+		lineNo, lineText := headingLineInfo(heading, source)
+		open := true
+		if lineNo > 0 && state.Collapsed != nil {
+			if _, ok := state.Collapsed[lineNo]; ok {
+				open = false
+			}
+		}
+		section := &collapsibleSection{
+			Title:    title,
+			LineNo:   lineNo,
+			LineText: lineText,
+			Open:     open,
+		}
 		node.ReplaceChild(node, current, section)
 		for child := next; child != nil; {
 			childNext := child.NextSibling()
@@ -910,6 +953,25 @@ func headingPlainText(node *ast.Heading, source []byte) string {
 	return strings.TrimSpace(b.String())
 }
 
+func headingLineInfo(node *ast.Heading, source []byte) (int, string) {
+	lines := node.Lines()
+	if lines == nil || lines.Len() == 0 {
+		return 0, ""
+	}
+	segment := lines.At(0)
+	if segment.Start < 0 || segment.Start > len(source) {
+		return 0, ""
+	}
+	lineStart := bytes.LastIndex(source[:segment.Start], []byte("\n")) + 1
+	lineEnd := len(source)
+	if nextBreak := bytes.Index(source[segment.Start:], []byte("\n")); nextBreak >= 0 {
+		lineEnd = segment.Start + nextBreak
+	}
+	lineNo := bytes.Count(source[:lineStart], []byte("\n")) + 1
+	lineText := strings.TrimSpace(string(source[lineStart:lineEnd]))
+	return lineNo, lineText
+}
+
 type collapsibleSectionHTMLRenderer struct{}
 
 func newCollapsibleSectionHTMLRenderer() renderer.NodeRenderer {
@@ -926,7 +988,21 @@ func (r *collapsibleSectionHTMLRenderer) renderCollapsibleSection(
 	if entering {
 		section := node.(*collapsibleSection)
 		title := html.EscapeString(section.Title)
-		_, _ = w.WriteString(`<details class="note-section" open>`)
+		_, _ = w.WriteString(`<details class="note-section"`)
+		if section.Open {
+			_, _ = w.WriteString(` open`)
+		}
+		if section.LineNo > 0 {
+			_, _ = w.WriteString(` data-line-no="`)
+			_, _ = w.WriteString(strconv.Itoa(section.LineNo))
+			_, _ = w.WriteString(`"`)
+		}
+		if section.LineText != "" {
+			_, _ = w.WriteString(` data-line="`)
+			_, _ = w.WriteString(html.EscapeString(section.LineText))
+			_, _ = w.WriteString(`"`)
+		}
+		_, _ = w.WriteString(`>`)
 		_, _ = w.WriteString(`<summary class="note-section__summary">`)
 		_, _ = w.WriteString(title)
 		_, _ = w.WriteString(`</summary>`)
@@ -3628,6 +3704,16 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteNote(w, r, resolved)
 		return
 	}
+	if strings.HasSuffix(pathPart, "/collapsed") {
+		base := strings.TrimSuffix(pathPart, "/collapsed")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleCollapsedSections(w, r, resolved)
+		return
+	}
 	if strings.HasSuffix(pathPart, "/preview") {
 		base := strings.TrimSuffix(pathPart, "/preview")
 		resolved, err := s.resolveNotePath(r.Context(), base)
@@ -3755,7 +3841,25 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	}
 	htmlStr := ""
 	if renderBody {
-		rendered, err := s.renderNoteBody(r.Context(), normalizedContent)
+		renderCtx := r.Context()
+		if noteMeta.ID != "" {
+			sections, err := s.idx.CollapsedSections(renderCtx, noteMeta.ID)
+			if err != nil {
+				return ViewData{}, http.StatusInternalServerError, err
+			}
+			collapsed := make(map[int]struct{}, len(sections))
+			for _, section := range sections {
+				if section.LineNo <= 0 {
+					continue
+				}
+				collapsed[section.LineNo] = struct{}{}
+			}
+			renderCtx = withCollapsibleSectionState(renderCtx, collapsibleSectionRenderState{
+				NoteID:    noteMeta.ID,
+				Collapsed: collapsed,
+			})
+		}
+		rendered, err := s.renderNoteBody(renderCtx, normalizedContent)
 		if err != nil {
 			return ViewData{}, http.StatusInternalServerError, err
 		}
@@ -4930,6 +5034,64 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	http.Redirect(w, r, targetURL, http.StatusSeeOther)
 }
 
+type collapsedSectionsPayload struct {
+	Collapsed []collapsedSectionPayloadItem `json:"collapsed"`
+}
+
+type collapsedSectionPayloadItem struct {
+	LineNo int    `json:"line_no"`
+	Line   string `json:"line"`
+}
+
+func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request, notePath string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	var payload collapsedSectionsPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	meta := index.FrontmatterAttributes(string(content))
+	if meta.ID == "" {
+		http.Error(w, "note id missing", http.StatusBadRequest)
+		return
+	}
+	sections := make([]index.CollapsedSection, 0, len(payload.Collapsed))
+	for _, item := range payload.Collapsed {
+		if item.LineNo <= 0 {
+			continue
+		}
+		sections = append(sections, index.CollapsedSection{
+			LineNo: item.LineNo,
+			Line:   item.Line,
+		})
+	}
+	if err := s.idx.SetCollapsedSections(r.Context(), meta.ID, sections); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {
 	w.WriteHeader(status)
 	if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
@@ -4980,6 +5142,9 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	parseContext.Set(tiktokEmbedContextKey, ctx)
 	parseContext.Set(instagramEmbedContextKey, ctx)
 	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
+	if state, ok := collapsibleSectionStateFromContext(ctx); ok {
+		parseContext.Set(collapsibleSectionContextKey, state)
+	}
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
