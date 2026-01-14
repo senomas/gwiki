@@ -3218,7 +3218,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			if info, err := os.Stat(fullPath); err == nil {
 				_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 			}
-			http.Redirect(w, r, "/notes/"+notePath, http.StatusSeeOther)
+			targetURL := "/notes/" + notePath
+			if isHTMX(r) {
+				w.Header().Set("HX-Redirect", targetURL)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			http.Redirect(w, r, targetURL, http.StatusSeeOther)
 			return
 		} else if err != nil && !os.IsNotExist(err) {
 			s.renderEditError(w, r, ViewData{
@@ -3446,7 +3452,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		_ = s.idx.IndexNote(r.Context(), notePath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
 
-	http.Redirect(w, r, "/notes/"+notePath, http.StatusSeeOther)
+	targetURL := "/notes/" + notePath
+	if isHTMX(r) {
+		w.Header().Set("HX-Redirect", targetURL)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, targetURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
