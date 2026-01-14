@@ -172,3 +172,77 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("expected one map iframe, got %d in %s", count, html)
 	}
 }
+
+func TestRenderMarkdownCollapsedSections(t *testing.T) {
+	repo := t.TempDir()
+	notesDir := filepath.Join(repo, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	md := strings.Join([]string{
+		"## Alpha",
+		"Alpha body.",
+		"",
+		"## Beta",
+		"Beta body.",
+		"",
+		"Tail.",
+	}, "\n")
+
+	collapsedAlpha := withCollapsibleSectionState(ctx, collapsibleSectionRenderState{
+		NoteID: "note-1",
+		Lines: map[string]struct{}{
+			"## Alpha": {},
+		},
+	})
+	html, err := srv.renderMarkdown(collapsedAlpha, []byte(md))
+	if err != nil {
+		t.Fatalf("render markdown: %v", err)
+	}
+	if strings.Count(html, `class="note-section" open`) != 1 {
+		t.Fatalf("expected one open section, got %s", html)
+	}
+	if !strings.Contains(html, `data-line="## Alpha"`) {
+		t.Fatalf("expected alpha section to be marked, got %s", html)
+	}
+
+	collapsedBeta := withCollapsibleSectionState(ctx, collapsibleSectionRenderState{
+		NoteID: "note-1",
+		Lines: map[string]struct{}{
+			"## Beta": {},
+		},
+	})
+	html, err = srv.renderMarkdown(collapsedBeta, []byte(md))
+	if err != nil {
+		t.Fatalf("render markdown: %v", err)
+	}
+	if strings.Count(html, `class="note-section" open`) != 1 {
+		t.Fatalf("expected one open section after beta collapse, got %s", html)
+	}
+	if !strings.Contains(html, `data-line="## Beta"`) {
+		t.Fatalf("expected beta section to be marked, got %s", html)
+	}
+}

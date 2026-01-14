@@ -124,6 +124,7 @@ func historyUser(ctx context.Context) string {
 type collapsibleSectionRenderState struct {
 	NoteID    string
 	Collapsed map[int]struct{}
+	Lines     map[string]struct{}
 }
 
 type collapsibleSectionStateKey struct{}
@@ -136,6 +137,42 @@ func collapsibleSectionStateFromContext(ctx context.Context) (collapsibleSection
 	value := ctx.Value(collapsibleSectionStateKey{})
 	state, ok := value.(collapsibleSectionRenderState)
 	return state, ok
+}
+
+func (s *Server) collapsedSectionState(ctx context.Context, noteID string) (collapsibleSectionRenderState, bool, error) {
+	if strings.TrimSpace(noteID) == "" {
+		return collapsibleSectionRenderState{}, false, nil
+	}
+	sections, err := s.idx.CollapsedSections(ctx, noteID)
+	if err != nil {
+		return collapsibleSectionRenderState{}, false, err
+	}
+	return collapsedSectionStateFromSections(noteID, sections)
+}
+
+func collapsedSectionStateFromSections(noteID string, sections []index.CollapsedSection) (collapsibleSectionRenderState, bool, error) {
+	if len(sections) == 0 {
+		return collapsibleSectionRenderState{}, false, nil
+	}
+	collapsed := make(map[int]struct{}, len(sections))
+	lines := make(map[string]struct{}, len(sections))
+	for _, section := range sections {
+		if section.LineNo <= 0 {
+			continue
+		}
+		collapsed[section.LineNo] = struct{}{}
+		if line := strings.TrimSpace(section.Line); line != "" {
+			lines[line] = struct{}{}
+		}
+	}
+	if len(collapsed) == 0 && len(lines) == 0 {
+		return collapsibleSectionRenderState{}, false, nil
+	}
+	return collapsibleSectionRenderState{
+		NoteID:    noteID,
+		Collapsed: collapsed,
+		Lines:     lines,
+	}, true, nil
 }
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -910,16 +947,22 @@ func (t *collapsibleSectionTransformer) Transform(node *ast.Document, reader tex
 			title = "Section"
 		}
 		lineNo, lineText := headingLineInfo(heading, source)
+		normalizedLine := strings.TrimSpace(lineText)
 		open := true
 		if lineNo > 0 && state.Collapsed != nil {
 			if _, ok := state.Collapsed[lineNo]; ok {
 				open = false
 			}
 		}
+		if open && normalizedLine != "" && state.Lines != nil {
+			if _, ok := state.Lines[normalizedLine]; ok {
+				open = false
+			}
+		}
 		section := &collapsibleSection{
 			Title:    title,
 			LineNo:   lineNo,
-			LineText: lineText,
+			LineText: normalizedLine,
 			Open:     open,
 		}
 		node.ReplaceChild(node, current, section)
@@ -3842,22 +3885,14 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	htmlStr := ""
 	if renderBody {
 		renderCtx := r.Context()
-		if noteMeta.ID != "" {
-			sections, err := s.idx.CollapsedSections(renderCtx, noteMeta.ID)
-			if err != nil {
-				return ViewData{}, http.StatusInternalServerError, err
-			}
-			collapsed := make(map[int]struct{}, len(sections))
-			for _, section := range sections {
-				if section.LineNo <= 0 {
-					continue
-				}
-				collapsed[section.LineNo] = struct{}{}
-			}
-			renderCtx = withCollapsibleSectionState(renderCtx, collapsibleSectionRenderState{
-				NoteID:    noteMeta.ID,
-				Collapsed: collapsed,
-			})
+		sections, err := s.idx.CollapsedSections(renderCtx, noteMeta.ID)
+		if err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+		if state, ok, err := collapsedSectionStateFromSections(noteMeta.ID, sections); err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		} else if ok {
+			renderCtx = withCollapsibleSectionState(renderCtx, state)
 		}
 		rendered, err := s.renderNoteBody(renderCtx, normalizedContent)
 		if err != nil {
@@ -3965,7 +4000,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		SearchQueryParam: buildSearchQuery(activeSearch),
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
-		Backlinks:        backlinkViews,
+		Backlinks: backlinkViews,
 	}
 	return data, http.StatusOK, nil
 }
@@ -4015,7 +4050,13 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
 		return ViewData{}, http.StatusNotFound, errors.New("not found")
 	}
-	htmlStr, err := s.renderNoteBody(r.Context(), normalizedContent)
+	renderCtx := r.Context()
+	if state, ok, err := s.collapsedSectionState(renderCtx, noteMeta.ID); err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
+	} else if ok {
+		renderCtx = withCollapsibleSectionState(renderCtx, state)
+	}
+	htmlStr, err := s.renderNoteBody(renderCtx, normalizedContent)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
@@ -5044,16 +5085,11 @@ type collapsedSectionPayloadItem struct {
 }
 
 func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request, notePath string) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !s.requireAuth(w, r) {
-		return
-	}
-	var payload collapsedSectionsPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
@@ -5073,6 +5109,28 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 	meta := index.FrontmatterAttributes(string(content))
 	if meta.ID == "" {
 		http.Error(w, "note id missing", http.StatusBadRequest)
+		return
+	}
+	if r.Method == http.MethodGet {
+		sections, err := s.idx.CollapsedSections(r.Context(), meta.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		payload := collapsedSectionsPayload{Collapsed: make([]collapsedSectionPayloadItem, 0, len(sections))}
+		for _, section := range sections {
+			payload.Collapsed = append(payload.Collapsed, collapsedSectionPayloadItem{
+				LineNo: section.LineNo,
+				Line:   section.Line,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	var payload collapsedSectionsPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
 	sections := make([]index.CollapsedSection, 0, len(payload.Collapsed))
@@ -5162,6 +5220,9 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	parseContext.Set(tiktokEmbedContextKey, ctx)
 	parseContext.Set(instagramEmbedContextKey, ctx)
 	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
+	if state, ok := collapsibleSectionStateFromContext(ctx); ok {
+		parseContext.Set(collapsibleSectionContextKey, state)
+	}
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
