@@ -4925,7 +4925,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if folder != "" {
 		desiredPath = filepath.ToSlash(filepath.Join(folder, desiredPath))
 	}
-	if (titleChanged || filepath.ToSlash(notePath) != desiredPath) && decision == "" {
+	if !preserveUpdated && (titleChanged || filepath.ToSlash(notePath) != desiredPath) && decision == "" {
 		newPath := desiredPath
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
@@ -4981,7 +4981,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 
 	targetPath := notePath
 	targetFullPath := fullPath
-	if (titleChanged || filepath.ToSlash(notePath) != desiredPath) && decision == "confirm" {
+	if !preserveUpdated && (titleChanged || filepath.ToSlash(notePath) != desiredPath) && decision == "confirm" {
 		targetPath = desiredPath
 		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
 		if err != nil {
