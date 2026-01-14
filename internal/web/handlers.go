@@ -3510,6 +3510,9 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	priority := "10"
+	if journalMode && priorityInput == "" {
+		priority = "5"
+	}
 	if priorityInput != "" {
 		val, err := strconv.Atoi(priorityInput)
 		if err != nil || val <= 0 {
