@@ -33,15 +33,17 @@
               to <span class="font-semibold text-slate-800">{{.RenameToPath}}</span>?
             </div>
             <div class="mt-4 flex flex-wrap justify-end gap-2">
-              <form action="/notes/{{.NotePath}}/save" method="post">
+              <form action="/notes/{{.NotePath}}/save" method="post" data-edit-save hx-post="/notes/{{.NotePath}}/save" hx-swap="none">
                 <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
                 <textarea class="hidden" name="content">{{.RawContent}}</textarea>
+                <input type="hidden" name="return_url" value="{{.ReturnURL}}">
                 <input type="hidden" name="rename_decision" value="cancel">
                 <button class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="submit">Keep name</button>
               </form>
-              <form action="/notes/{{.NotePath}}/save" method="post">
+              <form action="/notes/{{.NotePath}}/save" method="post" data-edit-save hx-post="/notes/{{.NotePath}}/save" hx-swap="none">
                 <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
                 <textarea class="hidden" name="content">{{.RawContent}}</textarea>
+                <input type="hidden" name="return_url" value="{{.ReturnURL}}">
                 <input type="hidden" name="rename_decision" value="confirm">
                 <button class="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700" type="submit">Rename file</button>
               </form>
@@ -50,8 +52,9 @@
         </div>
       </div>
       {{end}}
-      <form class="mt-6 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post">
+      <form id="note-edit-form" class="mt-6 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post" data-edit-save hx-post="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" hx-swap="none">
         <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
+        <input type="hidden" name="return_url" value="{{.ReturnURL}}">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
         <div class="relative">
           <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" id="note-content" name="content">{{.RawContent}}</textarea>
@@ -80,7 +83,7 @@
           <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="number" name="priority" min="1" step="1" value="{{if .NoteMeta.Priority}}{{.NoteMeta.Priority}}{{else}}10{{end}}">
         </div>
         <div class="flex justify-end gap-2">
-          <a class="rounded-xl border border-slate-700/70 bg-[#121417] px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="javascript:history.back()">Cancel</a>
+          <a class="rounded-xl border border-slate-700/70 bg-[#121417] px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="{{.ReturnURL}}" data-return-link>Cancel</a>
           <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Save</button>
         </div>
       </form>
@@ -118,7 +121,18 @@
       {{end}}
     </article>
   </div>
-</div>
+<script>
+  (function () {
+    var returnLink = document.querySelector("[data-return-link]");
+    if (!returnLink || !returnLink.getAttribute("href")) {
+      return;
+    }
+    returnLink.addEventListener("click", function (event) {
+      event.preventDefault();
+      window.location.replace(returnLink.getAttribute("href"));
+    });
+  })();
+</script>
 <script>
   (function () {
     const buttons = document.querySelectorAll(".attachment-copy");
@@ -139,6 +153,27 @@
           console.warn("Clipboard copy failed", err);
         }
       });
+    });
+  })();
+</script>
+<script>
+  (function () {
+    if (!window.htmx) {
+      return;
+    }
+    document.body.addEventListener("htmx:afterRequest", function (event) {
+      if (!event.detail || !event.detail.xhr) {
+        return;
+      }
+      var redirect = event.detail.xhr.getResponseHeader("HX-Redirect");
+      if (!redirect) {
+        return;
+      }
+      try {
+        window.location.replace(redirect);
+      } catch (err) {
+        window.location.href = redirect;
+      }
     });
   })();
 </script>

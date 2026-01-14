@@ -3910,6 +3910,13 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		attachments = listAttachmentNames(s.noteAttachmentsDir(metaAttrs.ID))
 		attachmentBase = "/" + filepath.ToSlash(filepath.Join("attachments", metaAttrs.ID))
 	}
+	returnURL := sanitizeReturnURL(r, r.URL.Query().Get("return"))
+	if returnURL == "" {
+		returnURL = sanitizeReturnURL(r, r.Referer())
+	}
+	if returnURL == "" {
+		returnURL = "/"
+	}
 	data := ViewData{
 		Title:            "Edit: " + meta.Title,
 		ContentTemplate:  "edit",
@@ -3921,6 +3928,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		FolderOptions:    s.folderOptions(r.Context()),
 		Attachments:      attachments,
 		AttachmentBase:   attachmentBase,
+		ReturnURL:        returnURL,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -4451,6 +4459,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	ctx := r.Context()
 	if err := r.ParseForm(); err != nil {
+		returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
 		s.renderEditError(w, r, ViewData{
 			Title:           "Edit note",
 			ContentTemplate: "edit",
@@ -4458,9 +4467,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			RawContent:      r.Form.Get("content"),
 			ErrorMessage:    err.Error(),
 			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+			ReturnURL:       returnURL,
 		}, http.StatusBadRequest)
 		return
 	}
+	returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	visibility := strings.TrimSpace(r.Form.Get("visibility"))
@@ -4475,6 +4486,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     "content required",
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusBadRequest)
 		return
 	}
@@ -4500,6 +4512,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -4514,6 +4527,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     "invalid folder",
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusBadRequest)
 		return
 	}
@@ -4530,6 +4544,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				FrontmatterBlock: frontmatter,
 				ErrorMessage:     "invalid priority",
 				ErrorReturnURL:   "/notes/" + notePath + "/edit",
+				ReturnURL:        returnURL,
 			}, http.StatusBadRequest)
 			return
 		}
@@ -4545,6 +4560,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusBadRequest)
 		return
 	} else {
@@ -4560,6 +4576,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusBadRequest)
 		return
 	} else {
@@ -4575,6 +4592,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusBadRequest)
 		return
 	} else {
@@ -4591,6 +4609,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			RawContent:      content,
 			ErrorMessage:    err.Error(),
 			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+			ReturnURL:       returnURL,
 		}, http.StatusBadRequest)
 		return
 	}
@@ -4605,6 +4624,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -4630,6 +4650,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			RenamePrompt:     true,
 			RenameFromPath:   notePath,
 			RenameToPath:     newPath,
+			ReturnURL:        returnURL,
 		}, http.StatusOK)
 		return
 	}
@@ -4652,6 +4673,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				FrontmatterBlock: frontmatter,
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/" + notePath + "/edit",
+				ReturnURL:        returnURL,
 			}, http.StatusBadRequest)
 			return
 		}
@@ -4666,6 +4688,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 					FrontmatterBlock: frontmatter,
 					ErrorMessage:     "note already exists",
 					ErrorReturnURL:   "/notes/" + notePath + "/edit",
+					ReturnURL:        returnURL,
 				}, http.StatusConflict)
 				return
 			}
@@ -4679,6 +4702,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 					FrontmatterBlock: frontmatter,
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/" + notePath + "/edit",
+					ReturnURL:        returnURL,
 				}, http.StatusInternalServerError)
 				return
 			}
@@ -4695,6 +4719,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -4708,6 +4733,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+			ReturnURL:        returnURL,
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -4722,6 +4748,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				FrontmatterBlock: frontmatter,
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+				ReturnURL:        returnURL,
 			}, http.StatusInternalServerError)
 			return
 		}
@@ -4732,7 +4759,13 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		_ = s.idx.IndexNote(ctx, targetPath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
 
-	http.Redirect(w, r, "/notes/"+targetPath, http.StatusSeeOther)
+	targetURL := "/notes/" + targetPath
+	if isHTMX(r) {
+		w.Header().Set("HX-Redirect", targetURL)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, targetURL, http.StatusSeeOther)
 }
 
 func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {
@@ -4945,4 +4978,32 @@ func (s *Server) uniqueNotePath(slug string) (string, error) {
 			return "", err
 		}
 	}
+}
+
+func isHTMX(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("HX-Request"), "true")
+}
+
+func sanitizeReturnURL(r *http.Request, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if parsed.IsAbs() {
+		if !strings.EqualFold(parsed.Host, r.Host) {
+			return ""
+		}
+		return parsed.RequestURI()
+	}
+	if strings.HasPrefix(parsed.Path, "/") {
+		if parsed.RawQuery != "" {
+			return parsed.Path + "?" + parsed.RawQuery
+		}
+		return parsed.Path
+	}
+	return ""
 }
