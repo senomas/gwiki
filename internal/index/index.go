@@ -372,6 +372,10 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	uid := strings.TrimSpace(attrs.ID)
 	hash := sha256.Sum256(content)
 	checksum := hex.EncodeToString(hash[:])
+	updatedAt := time.Now().Unix()
+	if !attrs.Updated.IsZero() {
+		updatedAt = attrs.Updated.UTC().Unix()
+	}
 
 	tx, err := i.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -391,7 +395,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO files(path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, notePath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, time.Now().Unix(), meta.Priority)
+		`, notePath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, meta.Priority)
 		if err != nil {
 			return err
 		}
@@ -405,7 +409,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=? WHERE id=?
-		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, time.Now().Unix(), meta.Priority, existingID)
+		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, updatedAt, meta.Priority, existingID)
 		if err != nil {
 			return err
 		}
