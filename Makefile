@@ -1,5 +1,5 @@
-WIKI_REPO_PATH ?= .
-WIKI_DATA_PATH ?= $(WIKI_REPO_PATH)/.wiki
+WIKI_REPO_PATH ?= ../seno-wiki/
+WIKI_DATA_PATH ?= ./.wiki
 
 docker-build:
 	docker build -t gwiki .
