@@ -52,6 +52,7 @@ type ViewData struct {
 	FilterQuery      string
 	HomeURL          string
 	NoteURL          string
+	ReturnURL        string
 	FolderOptions    []string
 	TagSuggestions   []string
 }
