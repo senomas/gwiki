@@ -4805,7 +4805,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			}, http.StatusBadRequest)
 			return
 		}
-		priority = strconv.Itoa(val)
+		if preserveUpdated && val == 10 {
+			priority = "5"
+		} else {
+			priority = strconv.Itoa(val)
+		}
 	}
 
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
