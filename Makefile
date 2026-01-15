@@ -4,8 +4,12 @@ WIKI_DATA_PATH ?= ./.wiki
 docker-build:
 	docker build -t gwiki .
 
+BUILD_TAG := $(shell date +%Y%m%d%H%M%S)
+IMAGE := docker.senomas.com/gwiki
+
 build:
-	docker build -t docker.senomas.com/gwiki .
+	docker build -t $(IMAGE):$(BUILD_TAG) .
+	docker push $(IMAGE):$(BUILD_TAG)
 
 docker-run:
 	docker run --rm -p 8080:8080 -v $(WIKI_REPO_PATH):/notes -v $(WIKI_DATA_PATH):/data -e WIKI_REPO_PATH=/notes -e WIKI_DATA_PATH=/data gwiki
