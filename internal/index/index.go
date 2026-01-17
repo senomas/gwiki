@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -31,14 +32,14 @@ type NoteSummary struct {
 }
 
 type NoteListFilter struct {
-	Tags   []string
-	Date   string
-	Query  string
-	Folder string
-	Root   bool
+	Tags       []string
+	Date       string
+	Query      string
+	Folder     string
+	Root       bool
 	ExcludeUID string
-	Limit  int
-	Offset int
+	Limit      int
+	Offset     int
 }
 
 type SearchResult struct {
@@ -88,6 +89,7 @@ type fileRecord struct {
 }
 
 const secondsPerDay = 86400
+
 var journalPathRE = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
 
 func dateToDay(date string) (int64, error) {
@@ -238,7 +240,12 @@ func (i *Index) Init(ctx context.Context, repoPath string) error {
 		}
 		return i.RebuildFromFS(ctx, repoPath)
 	}
-	return i.RecheckFromFS(ctx, repoPath)
+	scanned, updated, cleaned, err := i.RecheckFromFS(ctx, repoPath)
+	if err != nil {
+		return err
+	}
+	slog.Info("index recheck complete", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+	return nil
 }
 
 func (i *Index) schemaVersion(ctx context.Context) (int, error) {
@@ -315,14 +322,16 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 	})
 }
 
-func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) error {
+func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) (int, int, int, error) {
 	notesRoot := filepath.Join(repoPath, "notes")
 	records, err := i.loadFileRecords(ctx)
 	if err != nil {
-		return err
+		return 0, 0, 0, err
 	}
 
 	seen := make(map[string]bool, len(records))
+	scanned := 0
+	updated := 0
 	err = filepath.WalkDir(notesRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -340,6 +349,7 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) error {
 		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
 			return nil
 		}
+		scanned++
 		rel, err := filepath.Rel(notesRoot, path)
 		if err != nil {
 			return err
@@ -352,33 +362,25 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) error {
 			return err
 		}
 		rec, ok := records[rel]
-		if !ok {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return i.IndexNote(ctx, rel, content, info.ModTime(), info.Size())
-		}
-		if rec.MTimeUnix == info.ModTime().Unix() && rec.Size == info.Size() {
+		if ok && rec.MTimeUnix == info.ModTime().Unix() && rec.Size == info.Size() {
 			return nil
 		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		hash := sha256.Sum256(content)
-		checksum := hex.EncodeToString(hash[:])
-		if checksum == rec.Hash {
-			_, err := i.db.ExecContext(ctx, "UPDATE files SET mtime_unix=?, size=? WHERE id=?", info.ModTime().Unix(), info.Size(), rec.ID)
-			return err
-		}
-		return i.IndexNote(ctx, rel, content, info.ModTime(), info.Size())
+		updated++
+		return i.IndexNoteIfChanged(ctx, rel, content, info.ModTime(), info.Size())
 	})
 	if err != nil {
-		return err
+		return scanned, updated, 0, err
 	}
 
-	return i.removeMissingRecords(ctx, records, seen)
+	cleaned, err := i.removeMissingRecords(ctx, records, seen)
+	if err != nil {
+		return scanned, updated, 0, err
+	}
+	return scanned, updated, cleaned, nil
 }
 
 func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
@@ -2587,7 +2589,7 @@ func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, err
 	return records, rows.Err()
 }
 
-func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fileRecord, seen map[string]bool) error {
+func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fileRecord, seen map[string]bool) (int, error) {
 	type missing struct {
 		id   int
 		path string
@@ -2599,37 +2601,40 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		}
 	}
 	if len(missingRows) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	tx, err := i.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 
 	for _, row := range missingRows {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM file_tags WHERE file_id=?", row.id); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE from_file_id=?", row.id); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE file_id=?", row.id); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM file_histories WHERE file_id=?", row.id); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE path=?", row.path); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE id=?", row.id); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(missingRows), nil
 }
 
 func nullIfEmpty(s string) any {

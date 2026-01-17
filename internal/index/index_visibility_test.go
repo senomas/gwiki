@@ -93,7 +93,7 @@ Secret bananas with #privatetag.
 	if err := os.Remove(filepath.Join(notesDir, "private.md")); err != nil {
 		t.Fatalf("remove private note: %v", err)
 	}
-	if err := idx.RecheckFromFS(ctx, repo); err != nil {
+	if _, _, _, err := idx.RecheckFromFS(ctx, repo); err != nil {
 		t.Fatalf("recheck after delete: %v", err)
 	}
 	notes, err = idx.NoteList(publicCtx, NoteListFilter{Limit: 10})
