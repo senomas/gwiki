@@ -105,6 +105,16 @@ func isJournalPath(notePath string) bool {
 	return journalPathRE.MatchString(notePath)
 }
 
+func journalEndOfDayForPath(notePath string) (time.Time, bool) {
+	notePath = strings.TrimPrefix(notePath, "/")
+	notePath = strings.TrimSuffix(notePath, ".md")
+	parsed, err := time.Parse("2006-01/02", notePath)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, time.Local), true
+}
+
 func applyVisibilityFilter(ctx context.Context, clauses *[]string, args *[]interface{}, table string) {
 	if !publicOnly(ctx) {
 		return
@@ -271,6 +281,10 @@ func (i *Index) setSchemaVersion(ctx context.Context, v int) error {
 
 func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 	notesRoot := filepath.Join(repoPath, "notes")
+	cleaned := 0
+	if err := i.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM files").Scan(&cleaned); err != nil {
+		return err
+	}
 	clear := []string{
 		"DELETE FROM collapsed_sections",
 		"DELETE FROM embed_cache",
@@ -288,7 +302,8 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 		}
 	}
 
-	return filepath.WalkDir(notesRoot, func(path string, d fs.DirEntry, err error) error {
+	scanned := 0
+	err := filepath.WalkDir(notesRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -305,6 +320,7 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
 			return nil
 		}
+		scanned++
 		rel, err := filepath.Rel(notesRoot, path)
 		if err != nil {
 			return err
@@ -320,6 +336,11 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 		}
 		return i.IndexNote(ctx, rel, content, info.ModTime(), info.Size())
 	})
+	if err != nil {
+		return err
+	}
+	slog.Info("index rebuild complete", "scanned", scanned, "updated", scanned, "cleaned", cleaned)
+	return nil
 }
 
 func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) (int, int, int, error) {
@@ -389,13 +410,17 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	uid := strings.TrimSpace(attrs.ID)
 	hash := sha256.Sum256(content)
 	checksum := hex.EncodeToString(hash[:])
-	updatedAt := time.Now().Unix()
-	if !attrs.Updated.IsZero() {
-		updatedAt = attrs.Updated.UTC().Unix()
-	}
 	isJournal := 0
 	if isJournalPath(notePath) {
 		isJournal = 1
+	}
+	updatedAt := mtime.Unix()
+	if !attrs.Updated.IsZero() {
+		updatedAt = attrs.Updated.UTC().Unix()
+	} else if isJournal == 1 {
+		if journalUpdated, ok := journalEndOfDayForPath(notePath); ok {
+			updatedAt = journalUpdated.Unix()
+		}
 	}
 
 	tx, err := i.db.BeginTx(ctx, nil)
