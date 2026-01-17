@@ -415,12 +415,12 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		isJournal = 1
 	}
 	updatedAt := mtime.Unix()
-	if !attrs.Updated.IsZero() {
-		updatedAt = attrs.Updated.UTC().Unix()
-	} else if isJournal == 1 {
+	if isJournal == 1 {
 		if journalUpdated, ok := journalEndOfDayForPath(notePath); ok {
 			updatedAt = journalUpdated.Unix()
 		}
+	} else if !attrs.Updated.IsZero() {
+		updatedAt = attrs.Updated.UTC().Unix()
 	}
 
 	tx, err := i.db.BeginTx(ctx, nil)
