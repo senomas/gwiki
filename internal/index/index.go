@@ -2140,7 +2140,7 @@ func (i *Index) JournalNoteByDate(ctx context.Context, date string) (NoteSummary
 	return note, true, nil
 }
 
-func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, excludeUID string, limit int, offset int) ([]NoteSummary, error) {
+func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, excludeUID string, tags []string, folder string, rootOnly bool, limit int, offset int) ([]NoteSummary, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -2148,25 +2148,70 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 	if err != nil {
 		return nil, err
 	}
-	args := []interface{}{dayUnix}
-	query := `
-		SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid
-		FROM file_histories
-		JOIN files ON files.id = file_histories.file_id
-		WHERE file_histories.action_date = ?`
-	if publicOnly(ctx) {
-		query += " AND files.visibility = ?"
-		args = append(args, "public")
+
+	var (
+		query string
+		args  []interface{}
+	)
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	if len(tags) == 0 {
+		query = `
+			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid
+			FROM file_histories
+			JOIN files ON files.id = file_histories.file_id
+			WHERE file_histories.action_date = ?`
+		args = []interface{}{dayUnix}
+		if publicOnly(ctx) {
+			query += " AND files.visibility = ?"
+			args = append(args, "public")
+		}
+		if strings.TrimSpace(excludeUID) != "" {
+			query += " AND files.uid != ?"
+			args = append(args, excludeUID)
+		}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
+			GROUP BY files.id
+			ORDER BY last_action DESC
+			LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		query = `
+			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid
+			FROM file_histories
+			JOIN files ON files.id = file_histories.file_id
+			JOIN file_tags ON files.id = file_tags.file_id
+			JOIN tags ON tags.id = file_tags.tag_id
+			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
+		args = make([]interface{}, 0, len(tags)+5+len(folderArgs))
+		args = append(args, dayUnix)
+		if publicOnly(ctx) {
+			query += " AND files.visibility = ?"
+			args = append(args, "public")
+		}
+		if strings.TrimSpace(excludeUID) != "" {
+			query += " AND files.uid != ?"
+			args = append(args, excludeUID)
+		}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		query += `
+			GROUP BY files.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY last_action DESC
+			LIMIT ? OFFSET ?`
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, len(tags), limit, offset)
 	}
-	if strings.TrimSpace(excludeUID) != "" {
-		query += " AND files.uid != ?"
-		args = append(args, excludeUID)
-	}
-	query += `
-		GROUP BY files.id
-		ORDER BY last_action DESC
-		LIMIT ? OFFSET ?`
-	args = append(args, limit, offset)
 
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {

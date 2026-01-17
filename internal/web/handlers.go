@@ -2853,20 +2853,6 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	if journalSummary.UID != "" {
 		excludeUID = journalSummary.UID
 	}
-	notes, err := s.idx.NotesWithHistoryOnDate(r.Context(), date, excludeUID, 200, 0)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	noteCards := make([]NoteCard, 0, len(notes))
-	for _, note := range notes {
-		card, err := s.buildNoteCard(r, note.Path)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		noteCards = append(noteCards, card)
-	}
 
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -2911,6 +2897,20 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		if isAuth && (dueCount > 0 || activeDue) {
 			allowed["DUE"] = struct{}{}
 		}
+	}
+	notes, err := s.idx.NotesWithHistoryOnDate(r.Context(), date, excludeUID, noteTags, activeFolder, activeRoot, 200, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	noteCards := make([]NoteCard, 0, len(notes))
+	for _, note := range notes {
+		card, err := s.buildNoteCard(r, note.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		noteCards = append(noteCards, card)
 	}
 	tagLinks := buildTagLinks(activeTags, tags, allowed, dailyBase, todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
