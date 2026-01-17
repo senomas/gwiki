@@ -59,6 +59,8 @@ type ViewData struct {
 	DailyJournal     *NoteCard
 	DailyNotes       []NoteCard
 	JournalSidebar   JournalSidebar
+	JournalYear      JournalYearNode
+	JournalMonth     JournalMonthNode
 }
 
 type BacklinkView struct {
@@ -106,21 +108,21 @@ type JournalDay struct {
 	URL   string
 }
 
-type JournalMonth struct {
-	Label string
-	Date  string
-	URL   string
+type JournalMonthNode struct {
+	Label    string
+	Year     int
+	Month    int
+	Expanded bool
+	Days     []JournalDay
 }
 
-type JournalYear struct {
-	Label string
-	Date  string
-	URL   string
+type JournalYearNode struct {
+	Label    string
+	Year     int
+	Expanded bool
+	Months   []JournalMonthNode
 }
 
 type JournalSidebar struct {
-	CurrentMonthLabel string
-	CurrentMonthDays  []JournalDay
-	OtherMonths       []JournalMonth
-	OtherYears        []JournalYear
+	Years []JournalYearNode
 }
