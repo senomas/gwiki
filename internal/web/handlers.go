@@ -44,6 +44,7 @@ var (
 	linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
 	journalFolderRE  = regexp.MustCompile(`^\d{4}-\d{2}$`)
 	journalNoteRE    = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
+	journalDateH1    = regexp.MustCompile(`^#\s*(\d{4}-\d{2}-\d{2})\s*$`)
 	wikiLinkRe       = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	taskCheckboxRe   = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
 	taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
@@ -3025,14 +3026,14 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	}
 	tagQuery := buildTagsQuery(activeTags)
 	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
-	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, calendarDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	calendar := buildCalendarMonth(parsedDate, updateDays, "/", tagQuery, calendarDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, dailyBase, activeTags, activeDate, activeSearch)
-	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), parsedDate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3633,15 +3634,39 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		mergedContent = frontmatter + "\n" + content
 	}
 	mergedContent = normalizeLineEndings(mergedContent)
-	title := index.DeriveTitleFromBody(content)
 	now := time.Now()
 	journalMode := false
+	journalDay := now
+	lines := strings.Split(content, "\n")
+	firstLine := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		firstLine = i
+		break
+	}
+	if firstLine >= 0 {
+		line := strings.TrimSpace(lines[firstLine])
+		if matches := journalDateH1.FindStringSubmatch(line); len(matches) == 2 {
+			if parsed, err := time.Parse("2006-01-02", matches[1]); err == nil {
+				journalMode = true
+				journalDay = parsed
+				remaining := append([]string{}, lines[:firstLine]...)
+				remaining = append(remaining, lines[firstLine+1:]...)
+				content = strings.TrimLeft(strings.Join(remaining, "\n"), "\n")
+			}
+		}
+	}
+	title := index.DeriveTitleFromBody(content)
 	if title == "" {
 		journalMode = true
-		journalDate := now.Format("2 Jan 2006")
+	}
+	if journalMode {
+		journalDate := journalDay.Format("2 Jan 2006")
 		journalTime := now.Format("15:04")
 		journalEntry := "## " + journalTime + "\n\n" + strings.TrimSpace(content) + "\n"
-		notePath := filepath.ToSlash(filepath.Join(now.Format("2006-01"), now.Format("02")+".md"))
+		notePath := filepath.ToSlash(filepath.Join(journalDay.Format("2006-01"), journalDay.Format("02")+".md"))
 		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 		if err != nil {
 			s.renderEditError(w, r, ViewData{
@@ -3743,7 +3768,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}
 		mergedContent = normalizeLineEndings(mergedContent)
 		title = journalDate
-		folderInput = now.Format("2006-01")
+		folderInput = journalDay.Format("2006-01")
 	} else {
 		mergedContent = normalizeLineEndings(mergedContent)
 	}
@@ -3848,7 +3873,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 
 	var notePath string
 	if journalMode {
-		notePath = filepath.ToSlash(filepath.Join(folder, now.Format("02")+".md"))
+		notePath = filepath.ToSlash(filepath.Join(folder, journalDay.Format("02")+".md"))
 	} else {
 		slug := slugify(title)
 		notePath = fs.EnsureMDExt(slug)

@@ -2051,6 +2051,7 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 		err  error
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	dayCounts := map[string]int{}
 	if publicOnly(ctx) {
 		query := `
 			SELECT file_histories.action_date, COUNT(DISTINCT file_histories.file_id)
@@ -2090,7 +2091,6 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 	}
 	defer rows.Close()
 
-	var days []UpdateDaySummary
 	for rows.Next() {
 		var dayUnix int64
 		var count int
@@ -2098,9 +2098,59 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 			return nil, err
 		}
 		day := time.Unix(dayUnix*secondsPerDay, 0).UTC().Format("2006-01-02")
-		days = append(days, UpdateDaySummary{Day: day, Count: count})
+		dayCounts[day] = count
 	}
-	return days, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	journalQuery := `
+		SELECT updated_at
+		FROM files
+		WHERE is_journal = 1`
+	journalArgs := []interface{}{}
+	if publicOnly(ctx) {
+		journalQuery += " AND visibility = ?"
+		journalArgs = append(journalArgs, "public")
+	}
+	if folderClause != "" {
+		journalQuery += " AND " + folderClause
+		journalArgs = append(journalArgs, folderArgs...)
+	}
+	journalQuery += `
+		ORDER BY updated_at DESC
+		LIMIT ?`
+	journalArgs = append(journalArgs, limit)
+	journalRows, err := i.db.QueryContext(ctx, journalQuery, journalArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer journalRows.Close()
+	for journalRows.Next() {
+		var updatedAt int64
+		if err := journalRows.Scan(&updatedAt); err != nil {
+			return nil, err
+		}
+		day := time.Unix(updatedAt, 0).UTC().Format("2006-01-02")
+		dayCounts[day]++
+	}
+	if err := journalRows.Err(); err != nil {
+		return nil, err
+	}
+
+	dayKeys := make([]string, 0, len(dayCounts))
+	for day := range dayCounts {
+		dayKeys = append(dayKeys, day)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(dayKeys)))
+	if len(dayKeys) > limit {
+		dayKeys = dayKeys[:limit]
+	}
+	days := make([]UpdateDaySummary, 0, len(dayKeys))
+	for _, day := range dayKeys {
+		days = append(days, UpdateDaySummary{Day: day, Count: dayCounts[day]})
+	}
+	return days, nil
 }
 
 func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, folder string, rootOnly bool) (int, error) {
