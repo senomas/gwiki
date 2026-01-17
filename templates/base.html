@@ -35,6 +35,31 @@
       cursor: pointer;
       margin-left: -1rem;
     }
+    .journal-tree__summary {
+      position: relative;
+      padding-left: 1.1rem;
+      list-style: none;
+    }
+    .journal-tree__summary::-webkit-details-marker {
+      display: none;
+    }
+    .journal-tree__summary::marker {
+      content: "";
+    }
+    .journal-tree__summary::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.35rem;
+      border-left: 0.45rem solid currentColor;
+      border-top: 0.3rem solid transparent;
+      border-bottom: 0.3rem solid transparent;
+      transform: rotate(0deg);
+      transition: transform 0.15s ease;
+    }
+    details[open] > .journal-tree__summary::before {
+      transform: rotate(90deg);
+    }
     .note-body h3 {
       font-size: 1.125rem;
     }
