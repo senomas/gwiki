@@ -2791,7 +2791,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	tagQuery := buildTagsQuery(activeTags)
 	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, noteTags, activeTodo, activeDue, activeDate, activeSearch, activeFolder, activeRoot)
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2898,27 +2898,19 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	var notes []index.NoteSummary
-	if activeDue {
-		notes, err = s.idx.NotesWithDueTasksByDate(r.Context(), noteTags, date, date, 200, 0, activeFolder, activeRoot)
-	} else if activeTodo {
-		notes, err = s.idx.NotesWithOpenTasksByDate(r.Context(), noteTags, date, 200, 0, activeFolder, activeRoot)
-	} else {
-		notes, err = s.idx.NotesWithHistoryOnDate(r.Context(), date, excludeUID, noteTags, activeFolder, activeRoot, 200, 0)
-	}
+	notes, err := s.idx.NoteList(r.Context(), index.NoteListFilter{
+		Tags:       activeTags,
+		Date:       date,
+		Query:      activeSearch,
+		Folder:     activeFolder,
+		Root:       activeRoot,
+		ExcludeUID: excludeUID,
+		Limit:      200,
+		Offset:     0,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	if (activeTodo || activeDue) && excludeUID != "" {
-		filtered := notes[:0]
-		for _, note := range notes {
-			if note.UID == excludeUID {
-				continue
-			}
-			filtered = append(filtered, note)
-		}
-		notes = filtered
 	}
 	noteCards := make([]NoteCard, 0, len(notes))
 	for _, note := range notes {
@@ -3124,13 +3116,11 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	_, _, noteTags := splitSpecialTags(activeTags)
 	if !IsAuthenticated(r.Context()) {
-		activeTodo = false
-		activeDue = false
 		activeTags = noteTags
 	}
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, noteTags, activeTodo, activeDue, activeDate, activeSearch, activeFolder, activeRoot)
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3329,63 +3319,16 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(taskCheckboxHTML(fileID, lineNo, newHash, strings.TrimSpace(newMark) != "")))
 }
 
-func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, onlyTodo bool, onlyDue bool, activeDate string, activeSearch string, folder string, rootOnly bool) ([]NoteCard, int, bool, error) {
-	var notes []index.NoteSummary
-	var err error
-	switch {
-	case activeDate != "" && onlyDue && len(tags) > 0:
-		notes, err = s.idx.NotesWithDueTasksByDate(ctx, tags, activeDate, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset, folder, rootOnly)
-	case activeDate != "" && onlyDue:
-		notes, err = s.idx.NotesWithDueTasksByDate(ctx, nil, activeDate, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset, folder, rootOnly)
-	case activeDate != "" && onlyTodo && len(tags) > 0:
-		notes, err = s.idx.NotesWithOpenTasksByDate(ctx, tags, activeDate, homeNotesPageSize+1, offset, folder, rootOnly)
-	case activeDate != "" && onlyTodo:
-		notes, err = s.idx.NotesWithOpenTasksByDate(ctx, nil, activeDate, homeNotesPageSize+1, offset, folder, rootOnly)
-	case activeDate != "" && len(tags) > 0:
-		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
-			Tags:   tags,
-			Date:   activeDate,
-			Query:  activeSearch,
-			Folder: folder,
-			Root:   rootOnly,
-			Limit:  homeNotesPageSize + 1,
-			Offset: offset,
-		})
-	case activeDate != "":
-		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
-			Date:   activeDate,
-			Query:  activeSearch,
-			Folder: folder,
-			Root:   rootOnly,
-			Limit:  homeNotesPageSize + 1,
-			Offset: offset,
-		})
-	case onlyDue && len(tags) > 0:
-		notes, err = s.idx.NotesWithDueTasks(ctx, tags, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset, folder, rootOnly)
-	case onlyDue:
-		notes, err = s.idx.NotesWithDueTasks(ctx, nil, time.Now().Format("2006-01-02"), homeNotesPageSize+1, offset, folder, rootOnly)
-	case onlyTodo && len(tags) > 0:
-		notes, err = s.idx.NotesWithOpenTasks(ctx, tags, homeNotesPageSize+1, offset, folder, rootOnly)
-	case onlyTodo:
-		notes, err = s.idx.NotesWithOpenTasks(ctx, nil, homeNotesPageSize+1, offset, folder, rootOnly)
-	case len(tags) > 0:
-		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
-			Tags:   tags,
-			Query:  activeSearch,
-			Folder: folder,
-			Root:   rootOnly,
-			Limit:  homeNotesPageSize + 1,
-			Offset: offset,
-		})
-	default:
-		notes, err = s.idx.NoteList(ctx, index.NoteListFilter{
-			Query:  activeSearch,
-			Folder: folder,
-			Root:   rootOnly,
-			Limit:  homeNotesPageSize + 1,
-			Offset: offset,
-		})
-	}
+func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, activeDate string, activeSearch string, folder string, rootOnly bool) ([]NoteCard, int, bool, error) {
+	notes, err := s.idx.NoteList(ctx, index.NoteListFilter{
+		Tags:   tags,
+		Date:   activeDate,
+		Query:  activeSearch,
+		Folder: folder,
+		Root:   rootOnly,
+		Limit:  homeNotesPageSize + 1,
+		Offset: offset,
+	})
 	if err != nil {
 		return nil, offset, false, err
 	}

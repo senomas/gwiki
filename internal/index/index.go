@@ -36,6 +36,7 @@ type NoteListFilter struct {
 	Query  string
 	Folder string
 	Root   bool
+	ExcludeUID string
 	Limit  int
 	Offset int
 }
@@ -624,6 +625,27 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		offset = 0
 	}
 	query := strings.TrimSpace(filter.Query)
+	tagList := make([]string, 0, len(filter.Tags))
+	hasTodo := false
+	hasDue := false
+	for _, tag := range filter.Tags {
+		switch {
+		case strings.EqualFold(tag, "todo"):
+			hasTodo = true
+		case strings.EqualFold(tag, "due"):
+			hasDue = true
+		default:
+			tagList = append(tagList, tag)
+		}
+	}
+	dueDate := ""
+	if hasDue {
+		if filter.Date != "" {
+			dueDate = filter.Date
+		} else {
+			dueDate = time.Now().Format("2006-01-02")
+		}
+	}
 	joins := make([]string, 0, 3)
 	clauses := make([]string, 0, 3)
 	args := make([]interface{}, 0, 8)
@@ -644,21 +666,34 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		args = append(args, day)
 		groupBy = true
 	}
-	if len(filter.Tags) > 0 {
-		placeholders := strings.Repeat("?,", len(filter.Tags))
+	if hasTodo || hasDue {
+		joins = append(joins, "JOIN tasks ON files.id = tasks.file_id")
+		clauses = append(clauses, "tasks.checked = 0")
+		if hasDue {
+			clauses = append(clauses, "tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?")
+			args = append(args, dueDate)
+		}
+		groupBy = true
+	}
+	if len(tagList) > 0 {
+		placeholders := strings.Repeat("?,", len(tagList))
 		placeholders = strings.TrimRight(placeholders, ",")
 		joins = append(joins, "JOIN file_tags ON files.id = file_tags.file_id")
 		joins = append(joins, "JOIN tags ON tags.id = file_tags.tag_id")
 		clauses = append(clauses, "tags.name IN ("+placeholders+")")
-		for _, tag := range filter.Tags {
+		for _, tag := range tagList {
 			args = append(args, tag)
 		}
 		groupBy = true
 	}
+	if strings.TrimSpace(filter.ExcludeUID) != "" {
+		clauses = append(clauses, "(files.uid IS NULL OR files.uid != ?)")
+		args = append(args, filter.ExcludeUID)
+	}
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	applyFolderFilter(filter.Folder, filter.Root, &clauses, &args, "files")
 
-	sqlStr := "SELECT files.path, files.title, files.mtime_unix FROM files"
+	sqlStr := "SELECT files.path, files.title, files.mtime_unix, files.uid FROM files"
 	if len(joins) > 0 {
 		sqlStr += " " + strings.Join(joins, " ")
 	}
@@ -668,9 +703,9 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	if groupBy {
 		sqlStr += " GROUP BY files.id"
 	}
-	if len(filter.Tags) > 0 {
+	if len(tagList) > 0 {
 		sqlStr += " HAVING COUNT(DISTINCT tags.name) = ?"
-		args = append(args, len(filter.Tags))
+		args = append(args, len(tagList))
 	}
 	sqlStr += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
@@ -685,7 +720,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
 			return nil, err
 		}
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
