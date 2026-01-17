@@ -113,6 +113,21 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	}
 }
 
+func buildJournalIndex(dates []time.Time) map[int]map[time.Month]map[int]struct{} {
+	index := map[int]map[time.Month]map[int]struct{}{}
+	for _, dt := range dates {
+		year, month, day := dt.Date()
+		if _, ok := index[year]; !ok {
+			index[year] = map[time.Month]map[int]struct{}{}
+		}
+		if _, ok := index[year][month]; !ok {
+			index[year][month] = map[int]struct{}{}
+		}
+		index[year][month][day] = struct{}{}
+	}
+	return index
+}
+
 func (s *Server) buildJournalSidebar(ctx context.Context, now time.Time) (JournalSidebar, error) {
 	dates, err := s.idx.JournalDates(ctx)
 	if err != nil {
@@ -121,116 +136,69 @@ func (s *Server) buildJournalSidebar(ctx context.Context, now time.Time) (Journa
 	if len(dates) == 0 {
 		return JournalSidebar{}, nil
 	}
-	type daySet map[int]struct{}
-	yearMap := map[int]map[time.Month]daySet{}
-	for _, dt := range dates {
-		year, month, day := dt.Date()
-		if _, ok := yearMap[year]; !ok {
-			yearMap[year] = map[time.Month]daySet{}
-		}
-		if _, ok := yearMap[year][month]; !ok {
-			yearMap[year][month] = daySet{}
-		}
-		yearMap[year][month][day] = struct{}{}
-	}
-
+	index := buildJournalIndex(dates)
 	currentYear, currentMonth, _ := now.Date()
-	currentDays := yearMap[currentYear][currentMonth]
-	dayKeys := make([]int, 0, len(currentDays))
-	for day := range currentDays {
-		dayKeys = append(dayKeys, day)
-	}
-	sort.Ints(dayKeys)
-	currentMonthDays := make([]JournalDay, 0, len(dayKeys))
-	for _, day := range dayKeys {
-		dateStr := fmt.Sprintf("%04d-%02d-%02d", currentYear, currentMonth, day)
-		currentMonthDays = append(currentMonthDays, JournalDay{
-			Label: fmt.Sprintf("%02d", day),
-			Date:  dateStr,
-			URL:   "/daily/" + dateStr,
-		})
-	}
-
-	otherMonths := make([]JournalMonth, 0)
-	if months, ok := yearMap[currentYear]; ok {
-		monthKeys := make([]int, 0, len(months))
-		for month := range months {
-			if month == currentMonth {
-				continue
-			}
-			monthKeys = append(monthKeys, int(month))
-		}
-		sort.Sort(sort.Reverse(sort.IntSlice(monthKeys)))
-		for _, monthValue := range monthKeys {
-			month := time.Month(monthValue)
-			days := months[month]
-			if len(days) == 0 {
-				continue
-			}
-			minDay := 32
-			for day := range days {
-				if day < minDay {
-					minDay = day
-				}
-			}
-			dateStr := fmt.Sprintf("%04d-%02d-%02d", currentYear, month, minDay)
-			otherMonths = append(otherMonths, JournalMonth{
-				Label: time.Date(currentYear, month, 1, 0, 0, 0, 0, time.UTC).Format("Jan"),
-				Date:  dateStr,
-				URL:   "/daily/" + dateStr,
-			})
-		}
-	}
-
-	yearKeys := make([]int, 0, len(yearMap))
-	for year := range yearMap {
-		if year == currentYear {
-			continue
-		}
+	yearKeys := make([]int, 0, len(index))
+	for year := range index {
 		yearKeys = append(yearKeys, year)
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(yearKeys)))
-	otherYears := make([]JournalYear, 0, len(yearKeys))
+
+	years := make([]JournalYearNode, 0, len(yearKeys))
 	for _, year := range yearKeys {
-		months := yearMap[year]
-		minMonth := time.December + 1
-		minDay := 32
-		for month, days := range months {
-			if month < minMonth {
-				minMonth = month
-				minDay = 32
-				for day := range days {
-					if day < minDay {
-						minDay = day
-					}
-				}
-				continue
-			}
-			if month == minMonth {
-				for day := range days {
-					if day < minDay {
-						minDay = day
-					}
-				}
-			}
-		}
-		if minMonth > time.December {
-			continue
-		}
-		dateStr := fmt.Sprintf("%04d-%02d-%02d", year, minMonth, minDay)
-		otherYears = append(otherYears, JournalYear{
+		yearNode := JournalYearNode{
+			Year:  year,
 			Label: fmt.Sprintf("%d", year),
-			Date:  dateStr,
-			URL:   "/daily/" + dateStr,
-		})
+		}
+		if year == currentYear {
+			yearNode.Expanded = true
+			monthsMap := index[year]
+			monthKeys := make([]int, 0, len(monthsMap))
+			for month := range monthsMap {
+				monthKeys = append(monthKeys, int(month))
+			}
+			sort.Sort(sort.Reverse(sort.IntSlice(monthKeys)))
+			for _, monthValue := range monthKeys {
+				month := time.Month(monthValue)
+				monthNode := JournalMonthNode{
+					Year:  year,
+					Month: int(month),
+					Label: time.Date(year, month, 1, 0, 0, 0, 0, time.UTC).Format("January"),
+				}
+				if month == currentMonth {
+					monthNode.Expanded = true
+					daysMap := monthsMap[month]
+					dayKeys := make([]int, 0, len(daysMap))
+					for day := range daysMap {
+						dayKeys = append(dayKeys, day)
+					}
+					sort.Ints(dayKeys)
+					for _, day := range dayKeys {
+						dateStr := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+						monthNode.Days = append(monthNode.Days, JournalDay{
+							Label: fmt.Sprintf("%02d", day),
+							Date:  dateStr,
+							URL:   "/daily/" + dateStr,
+						})
+					}
+				}
+				yearNode.Months = append(yearNode.Months, monthNode)
+			}
+		}
+		years = append(years, yearNode)
 	}
 
-	return JournalSidebar{
-		CurrentMonthLabel: time.Date(currentYear, currentMonth, 1, 0, 0, 0, 0, time.UTC).Format("January 2006"),
-		CurrentMonthDays:  currentMonthDays,
-		OtherMonths:       otherMonths,
-		OtherYears:        otherYears,
-	}, nil
+	return JournalSidebar{Years: years}, nil
+}
+
+func buildJournalFilterQuery(r *http.Request) string {
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	_, _, noteTags := splitSpecialTags(activeTags)
+	if !IsAuthenticated(r.Context()) {
+		activeTags = noteTags
+	}
+	return buildFilterQuery(activeTags, "", "", activeFolder, activeRoot)
 }
 
 func historyUser(ctx context.Context) string {
@@ -3070,23 +3038,23 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := ViewData{
-		Title:           "Daily",
-		ContentTemplate: "daily",
-		DailyDate:       displayDate,
-		DailyJournal:    journalCard,
-		DailyNotes:      noteCards,
-		Tags:            tags,
-		TagLinks:        tagLinks,
-		ActiveTags:      activeTags,
-		TagQuery:        tagQuery,
-		FolderTree:      folderTree,
-		ActiveFolder:    activeFolder,
-		FolderQuery:     buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:     filterQuery,
-		HomeURL:         buildTagsURL(dailyBase, activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
-		ActiveDate:      activeDate,
-		DateQuery:       buildDateQuery(activeDate),
-		SearchQuery:     activeSearch,
+		Title:            "Daily",
+		ContentTemplate:  "daily",
+		DailyDate:        displayDate,
+		DailyJournal:     journalCard,
+		DailyNotes:       noteCards,
+		Tags:             tags,
+		TagLinks:         tagLinks,
+		ActiveTags:       activeTags,
+		TagQuery:         tagQuery,
+		FolderTree:       folderTree,
+		ActiveFolder:     activeFolder,
+		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      filterQuery,
+		HomeURL:          buildTagsURL(dailyBase, activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		ActiveDate:       activeDate,
+		DateQuery:        buildDateQuery(activeDate),
+		SearchQuery:      activeSearch,
 		SearchQueryParam: buildSearchQuery(activeSearch),
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
@@ -3237,6 +3205,95 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions})
+}
+
+func (s *Server) handleJournalYear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	yearStr := strings.TrimPrefix(r.URL.Path, "/journal/year/")
+	yearStr = strings.TrimSuffix(yearStr, "/")
+	year, err := strconv.Atoi(yearStr)
+	if err != nil || year <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	dates, err := s.idx.JournalDates(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	index := buildJournalIndex(dates)
+	monthsMap := index[year]
+	monthKeys := make([]int, 0, len(monthsMap))
+	for month := range monthsMap {
+		monthKeys = append(monthKeys, int(month))
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(monthKeys)))
+	months := make([]JournalMonthNode, 0, len(monthKeys))
+	for _, monthValue := range monthKeys {
+		month := time.Month(monthValue)
+		months = append(months, JournalMonthNode{
+			Year:  year,
+			Month: int(month),
+			Label: time.Date(year, month, 1, 0, 0, 0, 0, time.UTC).Format("January"),
+		})
+	}
+	data := ViewData{
+		JournalYear: JournalYearNode{
+			Year:   year,
+			Label:  fmt.Sprintf("%d", year),
+			Months: months,
+		},
+		FilterQuery: buildJournalFilterQuery(r),
+	}
+	s.views.RenderTemplate(w, "journal_year", data)
+}
+
+func (s *Server) handleJournalMonth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	monthStr := strings.TrimPrefix(r.URL.Path, "/journal/month/")
+	monthStr = strings.TrimSuffix(monthStr, "/")
+	parsed, err := time.Parse("2006-01", monthStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	year, month, _ := parsed.Date()
+	dates, err := s.idx.JournalDates(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	index := buildJournalIndex(dates)
+	daysMap := index[year][month]
+	dayKeys := make([]int, 0, len(daysMap))
+	for day := range daysMap {
+		dayKeys = append(dayKeys, day)
+	}
+	sort.Ints(dayKeys)
+	days := make([]JournalDay, 0, len(dayKeys))
+	for _, day := range dayKeys {
+		dateStr := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+		days = append(days, JournalDay{
+			Label: fmt.Sprintf("%02d", day),
+			Date:  dateStr,
+			URL:   "/daily/" + dateStr,
+		})
+	}
+	data := ViewData{
+		JournalMonth: JournalMonthNode{
+			Year:  year,
+			Month: int(month),
+			Days:  days,
+		},
+		FilterQuery: buildJournalFilterQuery(r),
+	}
+	s.views.RenderTemplate(w, "journal_month", data)
 }
 
 func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
