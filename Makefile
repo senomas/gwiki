@@ -9,7 +9,9 @@ IMAGE := docker.senomas.com/gwiki
 
 build:
 	docker build -t $(IMAGE):$(BUILD_TAG) .
+	docker tag $(IMAGE):$(BUILD_TAG) $(IMAGE):latest
 	docker push $(IMAGE):$(BUILD_TAG)
+	docker push $(IMAGE):latest
 
 docker-run:
 	docker run --rm -p 8080:8080 -v $(WIKI_REPO_PATH):/notes -v $(WIKI_DATA_PATH):/data -e WIKI_REPO_PATH=/notes -e WIKI_DATA_PATH=/data gwiki
