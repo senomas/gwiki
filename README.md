@@ -39,6 +39,11 @@ Defaults to the current directory if `WIKI_REPO_PATH_HOST` is not set:
 docker compose up --build
 ```
 
+Optional Compose envs:
+
+- `TZ` (default: `Asia/Jakarta`)
+- `UID` and `GID` (default: `1000`, container runs as this user)
+
 ### Make targets
 
 ```bash
