@@ -2873,6 +2873,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
 	calendarDate := date
+	dailyBase := "/daily/" + date
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -2911,7 +2912,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(activeTags, tags, allowed, dailyBase, todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2925,7 +2926,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, dailyBase, activeTags, activeDate, activeSearch)
 	data := ViewData{
 		Title:           "Daily",
 		ContentTemplate: "daily",
@@ -2940,7 +2941,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		ActiveFolder:    activeFolder,
 		FolderQuery:     buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:     filterQuery,
-		HomeURL:         buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		HomeURL:         buildTagsURL(dailyBase, activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:      activeDate,
 		DateQuery:       buildDateQuery(activeDate),
 		SearchQuery:     activeSearch,
