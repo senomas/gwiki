@@ -473,9 +473,6 @@ func buildTagsURL(basePath string, tags []string, activeDate string, activeSearc
 	if folderQuery != "" {
 		params = append(params, "f="+url.QueryEscape(folderQuery))
 	}
-	if activeDate != "" {
-		params = append(params, "d="+url.QueryEscape(activeDate))
-	}
 	if activeSearch != "" {
 		params = append(params, "s="+url.QueryEscape(activeSearch))
 	}
@@ -503,9 +500,6 @@ func buildFolderURL(basePath string, folder string, rootOnly bool, activeTags []
 	if folderQuery := buildFolderQuery(folder, rootOnly); folderQuery != "" {
 		params = append(params, "f="+url.QueryEscape(folderQuery))
 	}
-	if activeDate != "" {
-		params = append(params, "d="+url.QueryEscape(activeDate))
-	}
 	if activeSearch != "" {
 		params = append(params, "s="+url.QueryEscape(activeSearch))
 	}
@@ -522,9 +516,6 @@ func buildFilterQuery(activeTags []string, activeDate string, activeSearch strin
 	}
 	if folderQuery := buildFolderQuery(activeFolder, activeRoot); folderQuery != "" {
 		params = append(params, "f="+url.QueryEscape(folderQuery))
-	}
-	if activeDate != "" {
-		params = append(params, "d="+url.QueryEscape(activeDate))
 	}
 	if activeSearch != "" {
 		params = append(params, "s="+url.QueryEscape(activeSearch))
@@ -2752,7 +2743,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
-	activeDate := parseDateParam(r.URL.Query().Get("d"))
+	activeDate := ""
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -2876,12 +2867,86 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		}
 		noteCards = append(noteCards, card)
 	}
+
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	activeDate := ""
+	calendarDate := date
+	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	isAuth := IsAuthenticated(r.Context())
+	if !isAuth {
+		activeTodo = false
+		activeDue = false
+		activeTags = noteTags
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allowed := map[string]struct{}{}
+	todoCount := 0
+	dueCount := 0
+	if isAuth {
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+		if isAuth && (todoCount > 0 || activeTodo) {
+			allowed["TODO"] = struct{}{}
+		}
+		if isAuth && (dueCount > 0 || activeDue) {
+			allowed["DUE"] = struct{}{}
+		}
+	}
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagQuery := buildTagsQuery(activeTags)
+	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, calendarDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	folders, hasRoot, err := s.idx.ListFolders(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
 	data := ViewData{
 		Title:           "Daily",
 		ContentTemplate: "daily",
 		DailyDate:       date,
 		DailyJournal:    journalCard,
 		DailyNotes:      noteCards,
+		Tags:            tags,
+		TagLinks:        tagLinks,
+		ActiveTags:      activeTags,
+		TagQuery:        tagQuery,
+		FolderTree:      folderTree,
+		ActiveFolder:    activeFolder,
+		FolderQuery:     buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:     filterQuery,
+		HomeURL:         buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		ActiveDate:      activeDate,
+		DateQuery:       buildDateQuery(activeDate),
+		SearchQuery:     activeSearch,
+		SearchQueryParam: buildSearchQuery(activeSearch),
+		UpdateDays:       updateDays,
+		CalendarMonth:    calendar,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -3040,7 +3105,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
-	activeDate := parseDateParam(r.URL.Query().Get("d"))
+	activeDate := ""
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	if !IsAuthenticated(r.Context()) {
 		activeTodo = false
@@ -3081,7 +3146,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
-	activeDate := parseDateParam(r.URL.Query().Get("d"))
+	activeDate := ""
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	dueDate := ""
 	if activeDue {
@@ -3089,11 +3154,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	var tasks []index.TaskItem
 	var err error
-	if activeDate != "" {
-		tasks, err = s.idx.OpenTasksByDate(r.Context(), noteTags, 300, activeDue, dueDate, activeDate, activeFolder, activeRoot)
-	} else {
-		tasks, err = s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot)
-	}
+	tasks, err = s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3982,7 +4043,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
-	activeDate := parseDateParam(r.URL.Query().Get("d"))
+	activeDate := ""
 	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -4066,8 +4127,8 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
 		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
-		ActiveDate:       activeDate,
-		DateQuery:        buildDateQuery(activeDate),
+	ActiveDate:       activeDate,
+	DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
 		SearchQueryParam: buildSearchQuery(activeSearch),
 		UpdateDays:       updateDays,
@@ -4152,7 +4213,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
-	activeDate := parseDateParam(r.URL.Query().Get("d"))
+	activeDate := ""
 	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
 	noteURL := "/notes/" + notePath
 	if filterQuery != "" {

@@ -52,7 +52,7 @@
 {{end}} {{if .HomeHasMore}}
 <div
   class="h-10"
-  hx-get="/notes/page?offset={{.NextHomeOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .DateQuery}}&d={{.DateQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}"
+  hx-get="/notes/page?offset={{.NextHomeOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"

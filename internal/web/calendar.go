@@ -1,8 +1,6 @@
 package web
 
 import (
-	"net/url"
-	"strings"
 	"time"
 
 	"gwiki/internal/index"
@@ -47,11 +45,7 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 		url := ""
 		isActive := activeDate == dateKey && count > 0
 		if count > 0 {
-			nextDate := dateKey
-			if isActive {
-				nextDate = ""
-			}
-			url = buildCalendarURL(basePath, tagQuery, nextDate, activeSearch, folderQuery)
+			url = buildDailyURL(dateKey)
 		}
 		days = append(days, CalendarDay{
 			Date:        dateKey,
@@ -78,25 +72,9 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 	}
 }
 
-func buildCalendarURL(basePath string, tagQuery string, date string, activeSearch string, folderQuery string) string {
-	if basePath == "" {
-		basePath = "/"
+func buildDailyURL(date string) string {
+	if date == "" {
+		return "/"
 	}
-	params := make([]string, 0, 3)
-	if tagQuery != "" {
-		params = append(params, "t="+tagQuery)
-	}
-	if folderQuery != "" {
-		params = append(params, "f="+url.QueryEscape(folderQuery))
-	}
-	if date != "" {
-		params = append(params, "d="+date)
-	}
-	if activeSearch != "" {
-		params = append(params, "s="+url.QueryEscape(activeSearch))
-	}
-	if len(params) == 0 {
-		return basePath
-	}
-	return basePath + "?" + strings.Join(params, "&")
+	return "/daily/" + date
 }
