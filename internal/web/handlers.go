@@ -113,6 +113,126 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	}
 }
 
+func (s *Server) buildJournalSidebar(ctx context.Context, now time.Time) (JournalSidebar, error) {
+	dates, err := s.idx.JournalDates(ctx)
+	if err != nil {
+		return JournalSidebar{}, err
+	}
+	if len(dates) == 0 {
+		return JournalSidebar{}, nil
+	}
+	type daySet map[int]struct{}
+	yearMap := map[int]map[time.Month]daySet{}
+	for _, dt := range dates {
+		year, month, day := dt.Date()
+		if _, ok := yearMap[year]; !ok {
+			yearMap[year] = map[time.Month]daySet{}
+		}
+		if _, ok := yearMap[year][month]; !ok {
+			yearMap[year][month] = daySet{}
+		}
+		yearMap[year][month][day] = struct{}{}
+	}
+
+	currentYear, currentMonth, _ := now.Date()
+	currentDays := yearMap[currentYear][currentMonth]
+	dayKeys := make([]int, 0, len(currentDays))
+	for day := range currentDays {
+		dayKeys = append(dayKeys, day)
+	}
+	sort.Ints(dayKeys)
+	currentMonthDays := make([]JournalDay, 0, len(dayKeys))
+	for _, day := range dayKeys {
+		dateStr := fmt.Sprintf("%04d-%02d-%02d", currentYear, currentMonth, day)
+		currentMonthDays = append(currentMonthDays, JournalDay{
+			Label: fmt.Sprintf("%02d", day),
+			Date:  dateStr,
+			URL:   "/daily/" + dateStr,
+		})
+	}
+
+	otherMonths := make([]JournalMonth, 0)
+	if months, ok := yearMap[currentYear]; ok {
+		monthKeys := make([]int, 0, len(months))
+		for month := range months {
+			if month == currentMonth {
+				continue
+			}
+			monthKeys = append(monthKeys, int(month))
+		}
+		sort.Sort(sort.Reverse(sort.IntSlice(monthKeys)))
+		for _, monthValue := range monthKeys {
+			month := time.Month(monthValue)
+			days := months[month]
+			if len(days) == 0 {
+				continue
+			}
+			minDay := 32
+			for day := range days {
+				if day < minDay {
+					minDay = day
+				}
+			}
+			dateStr := fmt.Sprintf("%04d-%02d-%02d", currentYear, month, minDay)
+			otherMonths = append(otherMonths, JournalMonth{
+				Label: time.Date(currentYear, month, 1, 0, 0, 0, 0, time.UTC).Format("Jan"),
+				Date:  dateStr,
+				URL:   "/daily/" + dateStr,
+			})
+		}
+	}
+
+	yearKeys := make([]int, 0, len(yearMap))
+	for year := range yearMap {
+		if year == currentYear {
+			continue
+		}
+		yearKeys = append(yearKeys, year)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(yearKeys)))
+	otherYears := make([]JournalYear, 0, len(yearKeys))
+	for _, year := range yearKeys {
+		months := yearMap[year]
+		minMonth := time.December + 1
+		minDay := 32
+		for month, days := range months {
+			if month < minMonth {
+				minMonth = month
+				minDay = 32
+				for day := range days {
+					if day < minDay {
+						minDay = day
+					}
+				}
+				continue
+			}
+			if month == minMonth {
+				for day := range days {
+					if day < minDay {
+						minDay = day
+					}
+				}
+			}
+		}
+		if minMonth > time.December {
+			continue
+		}
+		dateStr := fmt.Sprintf("%04d-%02d-%02d", year, minMonth, minDay)
+		otherYears = append(otherYears, JournalYear{
+			Label: fmt.Sprintf("%d", year),
+			Date:  dateStr,
+			URL:   "/daily/" + dateStr,
+		})
+	}
+
+	return JournalSidebar{
+		CurrentMonthLabel: time.Date(currentYear, currentMonth, 1, 0, 0, 0, 0, time.UTC).Format("January 2006"),
+		CurrentMonthDays:  currentMonthDays,
+		OtherMonths:       otherMonths,
+		OtherYears:        otherYears,
+	}, nil
+}
+
 func historyUser(ctx context.Context) string {
 	if user, ok := CurrentUser(ctx); ok {
 		if name := strings.TrimSpace(user.Name); name != "" {
@@ -2802,6 +2922,11 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := ViewData{
 		Title:            "Home",
 		ContentTemplate:  "home",
@@ -2823,6 +2948,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		SearchQueryParam: buildSearchQuery(activeSearch),
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
+		JournalSidebar:   journalSidebar,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -2938,6 +3064,11 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, dailyBase, activeTags, activeDate, activeSearch)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := ViewData{
 		Title:           "Daily",
 		ContentTemplate: "daily",
@@ -2959,6 +3090,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		SearchQueryParam: buildSearchQuery(activeSearch),
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
+		JournalSidebar:   journalSidebar,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -3211,6 +3343,11 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/tasks", activeTags, activeDate, activeSearch)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := ViewData{
 		Title:            "Tasks",
 		ContentTemplate:  "tasks",
@@ -3230,6 +3367,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		SearchQueryParam: buildSearchQuery(activeSearch),
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
+		JournalSidebar:   journalSidebar,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -4073,6 +4211,10 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		return ViewData{}, http.StatusInternalServerError, err
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	if err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
+	}
 	data := ViewData{
 		Title:            meta.Title,
 		ContentTemplate:  "view",
@@ -4090,13 +4232,14 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
 		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
-	ActiveDate:       activeDate,
-	DateQuery:        buildDateQuery(activeDate),
+		ActiveDate:       activeDate,
+		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
 		SearchQueryParam: buildSearchQuery(activeSearch),
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
-		Backlinks: backlinkViews,
+		Backlinks:        backlinkViews,
+		JournalSidebar:   journalSidebar,
 	}
 	return data, http.StatusOK, nil
 }

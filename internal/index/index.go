@@ -2266,6 +2266,40 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 	return notes, rows.Err()
 }
 
+func (i *Index) JournalDates(ctx context.Context) ([]time.Time, error) {
+	query := "SELECT path FROM files WHERE is_journal = 1"
+	args := []interface{}{}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var dates []time.Time
+	for rows.Next() {
+		var notePath string
+		if err := rows.Scan(&notePath); err != nil {
+			return nil, err
+		}
+		trimmed := strings.TrimSuffix(notePath, ".md")
+		parts := strings.Split(trimmed, "/")
+		if len(parts) != 2 {
+			continue
+		}
+		dateStr := parts[0] + "-" + parts[1]
+		parsed, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			continue
+		}
+		dates = append(dates, parsed)
+	}
+	return dates, rows.Err()
+}
+
 func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string, folder string, rootOnly bool) (int, error) {
 	if activityDate == "" {
 		return 0, fmt.Errorf("activity date required")

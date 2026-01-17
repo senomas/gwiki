@@ -130,6 +130,52 @@
     {{template "folder_tree" .FolderTree}}
   </div>
 </div>
+
+<div>
+  <div
+    class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500"
+  >
+    <span>Journal</span>
+    <span class="text-slate-600">.</span>
+  </div>
+  <div class="mt-3 space-y-3 text-xs">
+    {{if .JournalSidebar.CurrentMonthLabel}}
+    <div>
+      <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500">{{.JournalSidebar.CurrentMonthLabel}}</div>
+      <div class="mt-2 flex flex-wrap gap-2">
+        {{range .JournalSidebar.CurrentMonthDays}}
+          <a class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-slate-300 transition hover:border-slate-500" href="{{.URL}}">{{.Label}}</a>
+        {{else}}
+          <span class="text-slate-500">No entries yet.</span>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+    {{if .JournalSidebar.OtherMonths}}
+    <div>
+      <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500">Other months</div>
+      <div class="flex flex-wrap gap-2">
+        {{range .JournalSidebar.OtherMonths}}
+          <a class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-slate-300 transition hover:border-slate-500" href="{{.URL}}">{{.Label}}</a>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+    {{if .JournalSidebar.OtherYears}}
+    <div>
+      <div class="text-[10px] uppercase tracking-[0.2em] text-slate-500">Other years</div>
+      <div class="flex flex-wrap gap-2">
+        {{range .JournalSidebar.OtherYears}}
+          <a class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-slate-300 transition hover:border-slate-500" href="{{.URL}}">{{.Label}}</a>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+    {{if and (not .JournalSidebar.CurrentMonthLabel) (not .JournalSidebar.OtherMonths) (not .JournalSidebar.OtherYears)}}
+      <span class="text-slate-500">No journal entries yet.</span>
+    {{end}}
+  </div>
+</div>
 {{end}}
 
 {{define "folder_tree"}}

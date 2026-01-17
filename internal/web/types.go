@@ -58,6 +58,7 @@ type ViewData struct {
 	DailyDate        string
 	DailyJournal     *NoteCard
 	DailyNotes       []NoteCard
+	JournalSidebar   JournalSidebar
 }
 
 type BacklinkView struct {
@@ -97,4 +98,29 @@ type NoteCard struct {
 	FileName     string
 	RenderedHTML template.HTML
 	Meta         index.FrontmatterAttrs
+}
+
+type JournalDay struct {
+	Label string
+	Date  string
+	URL   string
+}
+
+type JournalMonth struct {
+	Label string
+	Date  string
+	URL   string
+}
+
+type JournalYear struct {
+	Label string
+	Date  string
+	URL   string
+}
+
+type JournalSidebar struct {
+	CurrentMonthLabel string
+	CurrentMonthDays  []JournalDay
+	OtherMonths       []JournalMonth
+	OtherYears        []JournalYear
 }
