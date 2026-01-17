@@ -2831,10 +2831,12 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	date := strings.TrimPrefix(r.URL.Path, "/daily/")
 	date = strings.TrimSuffix(date, "/")
-	if _, err := time.Parse("2006-01-02", date); err != nil {
+	parsedDate, err := time.Parse("2006-01-02", date)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+	displayDate := parsedDate.Format("02 Jan 2006")
 	journalSummary, hasJournal, err := s.idx.JournalNoteByDate(r.Context(), date)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2939,7 +2941,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	data := ViewData{
 		Title:           "Daily",
 		ContentTemplate: "daily",
-		DailyDate:       date,
+		DailyDate:       displayDate,
 		DailyJournal:    journalCard,
 		DailyNotes:      noteCards,
 		Tags:            tags,

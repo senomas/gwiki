@@ -7,7 +7,15 @@
     <section class="flex-1 space-y-6">
       <div class="js-history-back-row flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
         <a class="js-history-back text-slate-400 transition hover:text-slate-200" href="#" onclick="history.back(); return false;" style="display:none;">Back</a>
-        <span>{{.DailyDate}}</span>
+        <div class="flex items-center gap-2">
+          {{if and .AuthEnabled .IsAuthenticated}}
+            <span class="rounded-xl border border-slate-700/70 bg-[#15181c] px-3 py-1.5 text-xs text-slate-300">{{.CurrentUser.Name}}</span>
+            <a class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-3 py-1.5 text-xs text-slate-200 transition hover:border-slate-500" href="/logout">Logout</a>
+            <a class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-3 py-1.5 text-xs text-slate-200 transition hover:border-slate-500" href="/notes/new">New Note</a>
+          {{else if .AuthEnabled}}
+            <a class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-3 py-1.5 text-xs text-slate-200 transition hover:border-slate-500" href="/login">Login</a>
+          {{end}}
+        </div>
       </div>
 
       <section class="space-y-4">
@@ -27,7 +35,13 @@
           </div>
         </article>
         {{else}}
-        <div class="rounded-3xl border border-slate-800/70 bg-[#121417]/70 p-6 text-sm text-slate-400">No journal entry.</div>
+        <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
+          <div class="space-y-3">
+            <h2 class="text-xl font-semibold text-sky-300">{{.DailyDate}}</h2>
+            <div class="text-xs uppercase tracking-[0.2em] text-slate-500"></div>
+            <div class="note-body text-sm leading-relaxed text-slate-200"></div>
+          </div>
+        </article>
         {{end}}
       </section>
 
