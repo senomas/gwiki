@@ -3510,9 +3510,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	priority := "10"
-	if journalMode && priorityInput == "" {
-		priority = "5"
-	}
 	if priorityInput != "" {
 		val, err := strconv.Atoi(priorityInput)
 		if err != nil || val <= 0 {
@@ -4805,11 +4802,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			}, http.StatusBadRequest)
 			return
 		}
-		if preserveUpdated && val == 10 {
-			priority = "5"
-		} else {
-			priority = strconv.Itoa(val)
-		}
+		priority = strconv.Itoa(val)
 	}
 
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
