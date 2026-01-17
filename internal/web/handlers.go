@@ -172,7 +172,7 @@ func (s *Server) buildJournalSidebar(ctx context.Context, now time.Time) (Journa
 					for day := range daysMap {
 						dayKeys = append(dayKeys, day)
 					}
-					sort.Ints(dayKeys)
+					sort.Sort(sort.Reverse(sort.IntSlice(dayKeys)))
 					for _, day := range dayKeys {
 						dateStr := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 						monthNode.Days = append(monthNode.Days, JournalDay{
@@ -3275,7 +3275,7 @@ func (s *Server) handleJournalMonth(w http.ResponseWriter, r *http.Request) {
 	for day := range daysMap {
 		dayKeys = append(dayKeys, day)
 	}
-	sort.Ints(dayKeys)
+	sort.Sort(sort.Reverse(sort.IntSlice(dayKeys)))
 	days := make([]JournalDay, 0, len(dayKeys))
 	for _, day := range dayKeys {
 		dateStr := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
