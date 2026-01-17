@@ -2898,10 +2898,27 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 			allowed["DUE"] = struct{}{}
 		}
 	}
-	notes, err := s.idx.NotesWithHistoryOnDate(r.Context(), date, excludeUID, noteTags, activeFolder, activeRoot, 200, 0)
+	var notes []index.NoteSummary
+	if activeDue {
+		notes, err = s.idx.NotesWithDueTasksByDate(r.Context(), noteTags, date, date, 200, 0, activeFolder, activeRoot)
+	} else if activeTodo {
+		notes, err = s.idx.NotesWithOpenTasksByDate(r.Context(), noteTags, date, 200, 0, activeFolder, activeRoot)
+	} else {
+		notes, err = s.idx.NotesWithHistoryOnDate(r.Context(), date, excludeUID, noteTags, activeFolder, activeRoot, 200, 0)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if (activeTodo || activeDue) && excludeUID != "" {
+		filtered := notes[:0]
+		for _, note := range notes {
+			if note.UID == excludeUID {
+				continue
+			}
+			filtered = append(filtered, note)
+		}
+		notes = filtered
 	}
 	noteCards := make([]NoteCard, 0, len(notes))
 	for _, note := range notes {

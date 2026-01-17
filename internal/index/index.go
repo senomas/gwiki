@@ -951,7 +951,7 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			WHERE tasks.checked = 0`
@@ -968,7 +968,7 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
@@ -1003,7 +1003,7 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
 			return nil, err
 		}
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
@@ -1030,7 +1030,7 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
@@ -1049,7 +1049,7 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
@@ -1083,7 +1083,7 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
 			return nil, err
 		}
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
@@ -1114,7 +1114,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
@@ -1134,7 +1134,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
@@ -1169,7 +1169,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
 			return nil, err
 		}
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
@@ -1203,7 +1203,7 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if len(tags) == 0 {
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
@@ -1223,7 +1223,7 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		query = `
-			SELECT files.path, files.title, files.mtime_unix
+			SELECT files.path, files.title, files.mtime_unix, files.uid
 			FROM files
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
@@ -1258,7 +1258,7 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
 			return nil, err
 		}
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
