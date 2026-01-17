@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 13
+const schemaVersion = 14
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS files (
 	size INTEGER,
 	created_at INTEGER,
 	updated_at INTEGER,
-	priority INTEGER NOT NULL DEFAULT 10
+	priority INTEGER NOT NULL DEFAULT 10,
+	is_journal INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS file_histories (

@@ -54,6 +54,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/notes/new", s.handleNewNote)
 	s.mux.HandleFunc("/notes/page", s.handleHomeNotesPage)
 	s.mux.HandleFunc("/notes/", s.handleNotes)
+	s.mux.HandleFunc("/daily/", s.handleDaily)
 	s.mux.HandleFunc("/attachments/", s.handleAttachmentFile)
 	s.mux.HandleFunc("/assets/", s.handleAssetFile)
 	s.mux.HandleFunc("/tags/suggest", s.handleTagSuggest)

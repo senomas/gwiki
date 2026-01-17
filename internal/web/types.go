@@ -55,6 +55,9 @@ type ViewData struct {
 	ReturnURL        string
 	FolderOptions    []string
 	TagSuggestions   []string
+	DailyDate        string
+	DailyJournal     *NoteCard
+	DailyNotes       []NoteCard
 }
 
 type BacklinkView struct {

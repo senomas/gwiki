@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type NoteSummary struct {
 	Path  string
 	Title string
 	MTime time.Time
+	UID   string
 }
 
 type NoteListFilter struct {
@@ -54,6 +56,12 @@ type UpdateDaySummary struct {
 	Count int
 }
 
+type NoteHistorySummary struct {
+	Path  string
+	Title string
+	MTime time.Time
+}
+
 type TaskItem struct {
 	Path      string
 	Title     string
@@ -79,6 +87,7 @@ type fileRecord struct {
 }
 
 const secondsPerDay = 86400
+var journalPathRE = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
 
 func dateToDay(date string) (int64, error) {
 	parsed, err := time.Parse("2006-01-02", date)
@@ -86,6 +95,11 @@ func dateToDay(date string) (int64, error) {
 		return 0, err
 	}
 	return parsed.UTC().Unix() / secondsPerDay, nil
+}
+
+func isJournalPath(notePath string) bool {
+	notePath = strings.TrimPrefix(notePath, "/")
+	return journalPathRE.MatchString(notePath)
 }
 
 func applyVisibilityFilter(ctx context.Context, clauses *[]string, args *[]interface{}, table string) {
@@ -376,6 +390,10 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if !attrs.Updated.IsZero() {
 		updatedAt = attrs.Updated.UTC().Unix()
 	}
+	isJournal := 0
+	if isJournalPath(notePath) {
+		isJournal = 1
+	}
 
 	tx, err := i.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -393,9 +411,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			visibility = "private"
 		}
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO files(path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, notePath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, meta.Priority)
+			INSERT INTO files(path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority, is_journal)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, notePath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, meta.Priority, isJournal)
 		if err != nil {
 			return err
 		}
@@ -408,8 +426,8 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			visibility = "private"
 		}
 		_, err = tx.ExecContext(ctx, `
-			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=? WHERE id=?
-		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, updatedAt, meta.Priority, existingID)
+			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=?, is_journal=? WHERE id=?
+		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, updatedAt, meta.Priority, isJournal, existingID)
 		if err != nil {
 			return err
 		}
@@ -2072,6 +2090,100 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, fold
 		return 0, err
 	}
 	return count, nil
+}
+
+func (i *Index) NoteSummaryByPath(ctx context.Context, notePath string) (NoteSummary, error) {
+	var note NoteSummary
+	row := i.db.QueryRowContext(ctx, `
+		SELECT path, title, mtime_unix, uid
+		FROM files
+		WHERE path=?
+	`, notePath)
+	var mtimeUnix int64
+	if err := row.Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID); err != nil {
+		return NoteSummary{}, err
+	}
+	note.MTime = time.Unix(mtimeUnix, 0)
+	return note, nil
+}
+
+func (i *Index) JournalNoteByDate(ctx context.Context, date string) (NoteSummary, bool, error) {
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return NoteSummary{}, false, err
+	}
+	notePath := filepath.ToSlash(filepath.Join(parsed.Format("2006-01"), parsed.Format("02")+".md"))
+	if publicOnly(ctx) {
+		var note NoteSummary
+		var mtimeUnix int64
+		err := i.db.QueryRowContext(ctx, `
+			SELECT path, title, mtime_unix, uid
+			FROM files
+			WHERE path=? AND visibility=? AND is_journal=1
+		`, notePath, "public").Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return NoteSummary{}, false, nil
+		}
+		if err != nil {
+			return NoteSummary{}, false, err
+		}
+		note.MTime = time.Unix(mtimeUnix, 0)
+		return note, true, nil
+	}
+	note, err := i.NoteSummaryByPath(ctx, notePath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NoteSummary{}, false, nil
+	}
+	if err != nil {
+		return NoteSummary{}, false, err
+	}
+	return note, true, nil
+}
+
+func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, excludeUID string, limit int, offset int) ([]NoteSummary, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	dayUnix, err := dateToDay(date)
+	if err != nil {
+		return nil, err
+	}
+	args := []interface{}{dayUnix}
+	query := `
+		SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid
+		FROM file_histories
+		JOIN files ON files.id = file_histories.file_id
+		WHERE file_histories.action_date = ?`
+	if publicOnly(ctx) {
+		query += " AND files.visibility = ?"
+		args = append(args, "public")
+	}
+	if strings.TrimSpace(excludeUID) != "" {
+		query += " AND files.uid != ?"
+		args = append(args, excludeUID)
+	}
+	query += `
+		GROUP BY files.id
+		ORDER BY last_action DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var notes []NoteSummary
+	for rows.Next() {
+		var note NoteSummary
+		var lastAction int64
+		if err := rows.Scan(&note.Path, &note.Title, &lastAction, &note.UID); err != nil {
+			return nil, err
+		}
+		note.MTime = time.Unix(lastAction, 0)
+		notes = append(notes, note)
+	}
+	return notes, rows.Err()
 }
 
 func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string, folder string, rootOnly bool) (int, error) {

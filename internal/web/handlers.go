@@ -2837,6 +2837,56 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderPage(w, data)
 }
 
+func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
+	date := strings.TrimPrefix(r.URL.Path, "/daily/")
+	date = strings.TrimSuffix(date, "/")
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	journalSummary, hasJournal, err := s.idx.JournalNoteByDate(r.Context(), date)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	journalCard := (*NoteCard)(nil)
+	if hasJournal {
+		card, err := s.buildNoteCard(r, journalSummary.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		journalCard = &card
+	}
+	excludeUID := ""
+	if journalSummary.UID != "" {
+		excludeUID = journalSummary.UID
+	}
+	notes, err := s.idx.NotesWithHistoryOnDate(r.Context(), date, excludeUID, 200, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	noteCards := make([]NoteCard, 0, len(notes))
+	for _, note := range notes {
+		card, err := s.buildNoteCard(r, note.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		noteCards = append(noteCards, card)
+	}
+	data := ViewData{
+		Title:           "Daily",
+		ContentTemplate: "daily",
+		DailyDate:       date,
+		DailyJournal:    journalCard,
+		DailyNotes:      noteCards,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.auth == nil {
 		http.NotFound(w, r)
@@ -3841,6 +3891,23 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "note_detail", data)
+}
+
+func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, error) {
+	data, status, err := s.buildNoteCardData(r, notePath)
+	if err != nil {
+		return NoteCard{}, err
+	}
+	if status != http.StatusOK {
+		return NoteCard{}, fmt.Errorf("unexpected status %d", status)
+	}
+	return NoteCard{
+		Path:         notePath,
+		Title:        data.NoteTitle,
+		FileName:     filepath.Base(notePath),
+		RenderedHTML: data.RenderedHTML,
+		Meta:         data.NoteMeta,
+	}, nil
 }
 
 func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody bool) (ViewData, int, error) {

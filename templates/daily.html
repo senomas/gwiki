@@ -1,0 +1,59 @@
+{{define "daily"}}
+<div class="app-shell relative min-h-screen overflow-hidden">
+  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
+  <div class="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-8 md:flex-row md:gap-10 md:px-6 md:py-10">
+    {{template "sidebar" .}}
+
+    <section class="flex-1 space-y-6">
+      <div class="js-history-back-row flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
+        <a class="js-history-back text-slate-400 transition hover:text-slate-200" href="#" onclick="history.back(); return false;" style="display:none;">Back</a>
+        <span>{{.DailyDate}}</span>
+      </div>
+
+      <section class="space-y-4">
+        <div class="text-xs uppercase tracking-[0.25em] text-slate-500">Journal</div>
+        {{if .DailyJournal}}
+        <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
+          <div class="space-y-3">
+            <h2 class="text-xl font-semibold text-slate-100">
+              <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.DailyJournal.Path}}">{{.DailyJournal.Title}}</a>
+            </h2>
+            <div class="text-xs uppercase tracking-[0.2em] text-slate-500">
+              {{if .DailyJournal.Meta.Folder}}{{.DailyJournal.Meta.Folder}}{{end}}
+              {{if and .DailyJournal.Meta.Folder (not .DailyJournal.Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
+              {{if .DailyJournal.Meta.Updated.IsZero}}{{else}}{{.DailyJournal.Meta.Updated.Format "02/01/2006 15:04:05"}}{{end}}
+            </div>
+            <div class="note-body text-sm leading-relaxed text-slate-200">{{.DailyJournal.RenderedHTML}}</div>
+          </div>
+        </article>
+        {{else}}
+        <div class="rounded-3xl border border-slate-800/70 bg-[#121417]/70 p-6 text-sm text-slate-400">No journal entry.</div>
+        {{end}}
+      </section>
+
+      <section class="space-y-4">
+        <div class="text-xs uppercase tracking-[0.25em] text-slate-500">Other Notes</div>
+        {{if .DailyNotes}}
+          {{range .DailyNotes}}
+          <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
+            <div class="space-y-3">
+              <h2 class="text-xl font-semibold text-slate-100">
+                <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">{{.Title}}</a>
+              </h2>
+              <div class="text-xs uppercase tracking-[0.2em] text-slate-500">
+                {{if .Meta.Folder}}{{.Meta.Folder}}{{end}}
+                {{if and .Meta.Folder (not .Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
+                {{if .Meta.Updated.IsZero}}{{else}}{{.Meta.Updated.Format "02/01/2006 15:04:05"}}{{end}}
+              </div>
+              <div class="note-body text-sm leading-relaxed text-slate-200">{{.RenderedHTML}}</div>
+            </div>
+          </article>
+          {{end}}
+        {{else}}
+        <div class="rounded-3xl border border-slate-800/70 bg-[#121417]/70 p-6 text-sm text-slate-400">No other notes updated on this day.</div>
+        {{end}}
+      </section>
+    </section>
+  </div>
+</div>
+{{end}}
