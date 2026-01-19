@@ -62,6 +62,7 @@ var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(&tiktokEmbedExtension{}),
 	goldmark.WithExtensions(&instagramEmbedExtension{}),
 	goldmark.WithExtensions(&chatgptEmbedExtension{}),
+	goldmark.WithExtensions(&whatsappLinkExtension{}),
 	goldmark.WithExtensions(&attachmentVideoEmbedExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
 )
@@ -966,6 +967,10 @@ var (
 	attachmentVideoEmbedContextKey = parser.NewContextKey()
 )
 
+var (
+	whatsappLinkKind = ast.NewNodeKind("WhatsAppLink")
+)
+
 type mapsEmbedStatus int
 
 const (
@@ -1345,6 +1350,34 @@ func (e *chatgptEmbedExtension) Extend(m goldmark.Markdown) {
 	))
 }
 
+type whatsappLink struct {
+	ast.BaseInline
+	Number      string
+	OriginalURL string
+}
+
+func (n *whatsappLink) Kind() ast.NodeKind {
+	return whatsappLinkKind
+}
+
+func (n *whatsappLink) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"Number":   n.Number,
+		"Original": n.OriginalURL,
+	}, nil)
+}
+
+type whatsappLinkExtension struct{}
+
+func (e *whatsappLinkExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&whatsappLinkTransformer{}, 129),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newWhatsAppLinkHTMLRenderer(), 536),
+	))
+}
+
 type attachmentVideoEmbedExtension struct{}
 
 func (e *attachmentVideoEmbedExtension) Extend(m goldmark.Markdown) {
@@ -1654,6 +1687,42 @@ func (t *chatgptEmbedTransformer) Transform(node *ast.Document, reader text.Read
 			parent.ReplaceChild(parent, para, embed)
 		}
 	}
+}
+
+type whatsappLinkTransformer struct{}
+
+func (t *whatsappLinkTransformer) Transform(node *ast.Document, reader text.Reader, _ parser.Context) {
+	source := reader.Source()
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var urlText string
+		switch link := n.(type) {
+		case *ast.Link:
+			urlText = strings.TrimSpace(string(link.Destination))
+		case *ast.AutoLink:
+			if link.AutoLinkType != ast.AutoLinkURL {
+				return ast.WalkContinue, nil
+			}
+			urlText = strings.TrimSpace(string(link.URL(source)))
+		default:
+			return ast.WalkContinue, nil
+		}
+		number, ok := whatsAppNumber(urlText)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		parent := n.Parent()
+		if parent == nil {
+			return ast.WalkContinue, nil
+		}
+		parent.ReplaceChild(parent, n, &whatsappLink{
+			Number:      number,
+			OriginalURL: urlText,
+		})
+		return ast.WalkContinue, nil
+	})
 }
 
 type attachmentVideoEmbedTransformer struct{}
@@ -2174,6 +2243,42 @@ func (r *chatgptEmbedHTMLRenderer) renderChatGPTEmbed(
 	return ast.WalkContinue, nil
 }
 
+type whatsappLinkHTMLRenderer struct{}
+
+func newWhatsAppLinkHTMLRenderer() renderer.NodeRenderer {
+	return &whatsappLinkHTMLRenderer{}
+}
+
+func (r *whatsappLinkHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(whatsappLinkKind, r.renderWhatsAppLink)
+}
+
+func (r *whatsappLinkHTMLRenderer) renderWhatsAppLink(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*whatsappLink)
+	if n.OriginalURL == "" || n.Number == "" {
+		return ast.WalkContinue, nil
+	}
+	url := html.EscapeString(n.OriginalURL)
+	number := html.EscapeString(n.Number)
+	_, _ = w.WriteString(`<a class="whatsapp-link" href="`)
+	_, _ = w.WriteString(url)
+	_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">`)
+	_, _ = w.WriteString(`<span class="whatsapp-link__icon" aria-hidden="true">`)
+	_, _ = w.WriteString(`<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6">`)
+	_, _ = w.WriteString(`<path d="M20.3 12.1c0 4.5-3.7 8.2-8.2 8.2-1.4 0-2.7-.4-3.9-1l-4.5 1.2 1.2-4.4c-.7-1.2-1.1-2.6-1.1-4 0-4.5 3.7-8.2 8.2-8.2 4.5 0 8.3 3.7 8.3 8.2z"/>`)
+	_, _ = w.WriteString(`<path d="M9.3 7.7c-.2-.4-.4-.4-.6-.4h-.6c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.2 0 1.3 1 2.5 1.1 2.7.1.2 2 3.1 4.9 4.2 2.4.9 2.9.7 3.4.7.5-.1 1.6-.7 1.8-1.3.2-.6.2-1.1.1-1.3-.1-.2-.3-.3-.7-.5-.4-.2-2.2-1.1-2.6-1.2-.3-.1-.6-.2-.8.2-.2.3-.9 1.2-1.1 1.4-.2.2-.4.3-.8.1-.4-.2-1.7-.6-3.2-1.9-1.2-1-2-2.2-2.2-2.6-.2-.4 0-.6.1-.8.2-.2.4-.4.6-.6.2-.2.3-.4.4-.6.1-.2 0-.4 0-.6-.1-.2-.7-1.9-1-2.5z"/>`)
+	_, _ = w.WriteString(`</svg></span>`)
+	_, _ = w.WriteString(`<span class="whatsapp-link__number">`)
+	_, _ = w.WriteString(number)
+	_, _ = w.WriteString(`</span></a>`)
+	return ast.WalkContinue, nil
+}
+
 type attachmentVideoEmbedHTMLRenderer struct{}
 
 func newAttachmentVideoEmbedHTMLRenderer() renderer.NodeRenderer {
@@ -2358,6 +2463,40 @@ func isChatGPTShareURL(raw string) bool {
 		return false
 	}
 	return strings.HasPrefix(parsed.Path, "/s/")
+}
+
+func whatsAppNumber(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+	host := strings.ToLower(parsed.Host)
+	host = strings.TrimPrefix(host, "www.")
+	switch host {
+	case "wa.me":
+		number := strings.TrimSpace(strings.Trim(parsed.Path, "/"))
+		if number == "" {
+			return "", false
+		}
+		return number, true
+	case "api.whatsapp.com", "chat.whatsapp.com":
+		phone := strings.TrimSpace(parsed.Query().Get("phone"))
+		if phone == "" {
+			return "", false
+		}
+		return phone, true
+	}
+	if strings.EqualFold(parsed.Scheme, "whatsapp") {
+		phone := strings.TrimSpace(parsed.Query().Get("phone"))
+		if phone == "" {
+			phone = strings.TrimSpace(parsed.Query().Get("number"))
+		}
+		if phone == "" {
+			return "", false
+		}
+		return phone, true
+	}
+	return "", false
 }
 
 func attachmentVideoFromURL(raw string) (string, string, bool) {

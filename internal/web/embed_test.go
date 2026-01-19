@@ -148,6 +148,11 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("upsert chatgpt cache: %v", err)
 	}
 
+	whatsappURL := "https://wa.me/628123456789"
+	if _, ok := whatsAppNumber(whatsappURL); !ok {
+		t.Fatalf("expected whatsapp url to be recognized")
+	}
+
 	html, err := srv.renderMarkdown(ctx, []byte(youtubeURL))
 	if err != nil {
 		t.Fatalf("render youtube: %v", err)
@@ -170,7 +175,7 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("expected maps embed to replace paragraph, got %s", html)
 	}
 
-	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + tiktokURL + "\n\n" + instagramURL + "\n\n" + instagramProfileURL + "\n\n" + chatgptURL + "\n\n" + mapsURL + "\n"
+	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + tiktokURL + "\n\n" + instagramURL + "\n\n" + instagramProfileURL + "\n\n" + chatgptURL + "\n\n" + whatsappURL + "\n\n" + mapsURL + "\n"
 	html, err = srv.renderMarkdown(ctx, []byte(multi))
 	if err != nil {
 		t.Fatalf("render multi: %v", err)
@@ -186,6 +191,9 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 	}
 	if count := strings.Count(html, `class="chatgpt-card"`); count != 1 {
 		t.Fatalf("expected one chatgpt card, got %d in %s", count, html)
+	}
+	if count := strings.Count(html, `class="whatsapp-link"`); count != 1 {
+		t.Fatalf("expected one whatsapp link, got %d in %s", count, html)
 	}
 	if count := strings.Count(html, "<iframe"); count != 1 {
 		t.Fatalf("expected one map iframe, got %d in %s", count, html)
