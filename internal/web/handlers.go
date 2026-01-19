@@ -3994,7 +3994,6 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tasks = filterFutureJournalTasks(tasks, time.Now())
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
