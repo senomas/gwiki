@@ -60,7 +60,8 @@ func ParseContent(input string) Metadata {
 	}
 
 	lines := strings.Split(body, "\n")
-	for i, line := range lines {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		for _, m := range wikiLinkRe.FindAllStringSubmatch(line, -1) {
 			meta.Links = append(meta.Links, Link{
 				Ref:    strings.TrimSpace(m[1]),
@@ -91,7 +92,7 @@ func ParseContent(input string) Metadata {
 		}
 		meta.Tasks = append(meta.Tasks, Task{
 			LineNo: i + 1,
-			Text:   strings.TrimSpace(match[2]),
+			Text:   line,
 			Done:   strings.TrimSpace(match[1]) != "",
 			Due:    due,
 			Hash:   TaskLineHash(line),
@@ -99,6 +100,67 @@ func ParseContent(input string) Metadata {
 	}
 
 	return meta
+}
+
+func UncheckedTasksSnippet(input string) string {
+	frontmatter := FrontmatterBlock(input)
+	body := StripFrontmatter(input)
+	lines := strings.Split(body, "\n")
+	title := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# ") {
+			title = trimmed
+			break
+		}
+	}
+	var tasks []string
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		indent := countIndentSpaces(line)
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "- [ ]") {
+			continue
+		}
+		paragraph := []string{line}
+		baseIndent := indent + 2
+		for j := i + 1; j < len(lines); j++ {
+			next := lines[j]
+			nextIndent := countIndentSpaces(next)
+			if next == "" && j+1 < len(lines) && countIndentSpaces(lines[j+1]) >= baseIndent {
+				paragraph = append(paragraph, next)
+				continue
+			}
+			if nextIndent >= baseIndent {
+				paragraph = append(paragraph, next)
+				continue
+			}
+			break
+		}
+		tasks = append(tasks, strings.Join(paragraph, "\n"))
+	}
+	var out []string
+	if frontmatter != "" {
+		out = append(out, frontmatter, "")
+	}
+	if title != "" {
+		out = append(out, title, "")
+	}
+	if len(tasks) > 0 {
+		out = append(out, strings.Join(tasks, "\n\n"))
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+}
+
+func countIndentSpaces(line string) int {
+	count := 0
+	for _, r := range line {
+		if r != ' ' {
+			break
+		}
+		count++
+	}
+	return count
 }
 
 func TaskLineHash(line string) string {

@@ -81,17 +81,17 @@
       content: "";
       position: absolute;
       left: 0;
-      top: 0.4rem;
+      top: 0.55em;
       width: 0.5rem;
       height: 0.5rem;
       border-radius: 999px;
       background: rgba(148, 163, 184, 0.8);
     }
     .note-body li:has(input[type="checkbox"])::before {
-      top: 0.15rem;
-      width: 0.75rem;
-      height: 0.75rem;
-      border-radius: 0.2rem;
+      top: 0.36em;
+      width: 0.9em;
+      height: 0.9em;
+      border-radius: 0.2em;
       background: transparent;
       border: 1px solid rgba(148, 163, 184, 0.7);
     }
@@ -102,10 +102,10 @@
     .note-body li:has(input[type="checkbox"]:checked)::after {
       content: "";
       position: absolute;
-      left: 0.22rem;
-      top: 0.38rem;
-      width: 0.3rem;
-      height: 0.15rem;
+      left: 0.22em;
+      top: 0.59em;
+      width: 0.35em;
+      height: 0.18em;
       border-right: 2px solid rgba(15, 23, 42, 0.95);
       border-bottom: 2px solid rgba(15, 23, 42, 0.95);
       transform: rotate(45deg);
@@ -113,10 +113,11 @@
     .note-body input[type="checkbox"] {
       appearance: none;
       -webkit-appearance: none;
-      width: 0;
-      height: 0;
+      width: 0.9em;
+      height: 0.9em;
+      opacity: 0;
       position: relative;
-      top: -1px;
+      top: 0.36em;
       place-content: center;
       margin: 0;
       vertical-align: -0.05rem;
@@ -530,8 +531,8 @@
     }
   </style>
 </head>
-<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily")}}
+<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
+{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily")}}
   {{.ContentHTML}}
 {{else}}
   <div class="mx-auto max-w-5xl px-6 py-8">

@@ -74,3 +74,42 @@ Body text.
 		t.Fatalf("unexpected body: %q", out)
 	}
 }
+
+func TestUncheckedTasksSnippet(t *testing.T) {
+	input := `---
+title: Demo
+---
+# demo-cache
+
+cache 4
+
+## demo
+
+- [ ] demo
+
+  Call me at https://wa.me/628129777287 thanks
+
+- foo
+
+  https://chatgpt.com/s/t_696d2140457c819180ea7dfed7e578d9
+- [x] sample foo
+
+  https://youtu.be/Yzb5c-fIfnM
+
+  demoo
+`
+	out := UncheckedTasksSnippet(input)
+	expected := `---
+title: Demo
+---
+
+# demo-cache
+
+- [ ] demo
+
+  Call me at https://wa.me/628129777287 thanks
+`
+	if out != expected {
+		t.Fatalf("unexpected snippet:\n%s", out)
+	}
+}

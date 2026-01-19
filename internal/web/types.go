@@ -37,6 +37,9 @@ type ViewData struct {
 	UpdateDays       []index.UpdateDaySummary
 	CalendarMonth    CalendarMonth
 	OpenTasks        []index.TaskItem
+	TodoTasks        []TaskView
+	TodoNotes        []NoteCard
+	TodoCount        int
 	TagLinks         []TagLink
 	ActiveTags       []string
 	TagQuery         string
@@ -76,6 +79,17 @@ type TagLink struct {
 	URL      string
 	Active   bool
 	Disabled bool
+}
+
+type TaskView struct {
+	CheckboxHTML template.HTML
+	TextHTML     template.HTML
+	RenderedHTML template.HTML
+	Path         string
+	LineNo       int
+	Title        string
+	DueDate      string
+	UpdatedAt    string
 }
 
 type FolderLink struct {

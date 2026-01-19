@@ -69,8 +69,10 @@ type TaskItem struct {
 	Title     string
 	LineNo    int
 	Text      string
+	Hash      string
 	DueDate   string
 	UpdatedAt time.Time
+	FileID    int
 }
 
 type Backlink struct {
@@ -532,11 +534,12 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			checked = 1
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tasks(file_id, line_no, text, checked, due_date, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?)`,
+			INSERT INTO tasks(file_id, line_no, text, hash, checked, due_date, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?)`,
 			existingID,
 			task.LineNo,
 			task.Text,
+			task.Hash,
 			checked,
 			nullIfEmpty(task.Due),
 			time.Now().Unix(),
@@ -653,25 +656,8 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	}
 	query := strings.TrimSpace(filter.Query)
 	tagList := make([]string, 0, len(filter.Tags))
-	hasTodo := false
-	hasDue := false
 	for _, tag := range filter.Tags {
-		switch {
-		case strings.EqualFold(tag, "todo"):
-			hasTodo = true
-		case strings.EqualFold(tag, "due"):
-			hasDue = true
-		default:
-			tagList = append(tagList, tag)
-		}
-	}
-	dueDate := ""
-	if hasDue {
-		if filter.Date != "" {
-			dueDate = filter.Date
-		} else {
-			dueDate = time.Now().Format("2006-01-02")
-		}
+		tagList = append(tagList, tag)
 	}
 	joins := make([]string, 0, 3)
 	clauses := make([]string, 0, 3)
@@ -691,15 +677,6 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		joins = append(joins, "JOIN file_histories ON files.id = file_histories.file_id")
 		clauses = append(clauses, "file_histories.action_date = ?")
 		args = append(args, day)
-		groupBy = true
-	}
-	if hasTodo || hasDue {
-		joins = append(joins, "JOIN tasks ON files.id = tasks.file_id")
-		clauses = append(clauses, "tasks.checked = 0")
-		if hasDue {
-			clauses = append(clauses, "tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?")
-			args = append(args, dueDate)
-		}
 		groupBy = true
 	}
 	if len(tagList) > 0 {
@@ -771,7 +748,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 	if len(tags) == 0 {
 		if dueOnly {
 			query := `
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
 				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
@@ -788,7 +765,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			rows, err = i.db.QueryContext(ctx, query, args...)
 		} else {
 			query := `
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
 				WHERE tasks.checked = 0
@@ -808,7 +785,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		base := `
-			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id
 			FROM tasks
 			JOIN files ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
@@ -852,7 +829,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 		var item TaskItem
 		var due sql.NullString
 		var updatedUnix int64
-		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &due, &updatedUnix); err != nil {
+		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &item.Hash, &due, &updatedUnix, &item.FileID); err != nil {
 			return nil, err
 		}
 		if due.Valid {
@@ -892,7 +869,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 					FROM file_histories
 					WHERE action_date = ?
 				)
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
 				JOIN matching_files ON matching_files.file_id = files.id
@@ -914,7 +891,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 					FROM file_histories
 					WHERE action_date = ?
 				)
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
 				JOIN matching_files ON matching_files.file_id = files.id
@@ -945,7 +922,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
 			)
-			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.due_date, tasks.updated_at
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id
 			FROM tasks
 			JOIN files ON files.id = tasks.file_id
 			JOIN matching_files ON matching_files.id = files.id
@@ -986,7 +963,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 		var item TaskItem
 		var due sql.NullString
 		var updatedUnix int64
-		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &due, &updatedUnix); err != nil {
+		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &item.Hash, &due, &updatedUnix, &item.FileID); err != nil {
 			return nil, err
 		}
 		if due.Valid {
