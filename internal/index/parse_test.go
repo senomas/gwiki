@@ -148,3 +148,26 @@ title: Demo
 		t.Fatalf("unexpected snippet:\n%s", out)
 	}
 }
+
+func TestDueTasksSnippetWithDefaultDate(t *testing.T) {
+	input := `# demo-cache
+
+- [ ] demo
+
+  Call me at https://wa.me/628129777287 thanks
+
+- [ ] has due @due(2026-02-01)
+`
+	out := DueTasksSnippetWithDefaultDate(input, "2026-01-15")
+	expected := `# demo-cache
+
+- [ ] demo due:2026-01-15
+
+  Call me at https://wa.me/628129777287 thanks
+
+- [ ] has due @due(2026-02-01)
+`
+	if out != expected {
+		t.Fatalf("unexpected snippet:\n%s", out)
+	}
+}

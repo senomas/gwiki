@@ -116,6 +116,23 @@ func isJournalPath(notePath string) bool {
 	return journalPathRE.MatchString(notePath)
 }
 
+func journalDateForPath(notePath string) (string, bool) {
+	notePath = strings.TrimPrefix(notePath, "/")
+	if !journalPathRE.MatchString(notePath) {
+		return "", false
+	}
+	datePart := strings.TrimSuffix(notePath, ".md")
+	parsed, err := time.Parse("2006-01/02", datePart)
+	if err != nil {
+		return "", false
+	}
+	return parsed.Format("2006-01-02"), true
+}
+
+func JournalDateForPath(notePath string) (string, bool) {
+	return journalDateForPath(notePath)
+}
+
 func journalEndOfDayForPath(notePath string) (time.Time, bool) {
 	notePath = strings.TrimPrefix(notePath, "/")
 	notePath = strings.TrimSuffix(notePath, ".md")
@@ -542,6 +559,12 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if task.Done {
 			checked = 1
 		}
+		due := task.Due
+		if due == "" && isJournal == 1 {
+			if journalDate, ok := journalDateForPath(notePath); ok {
+				due = journalDate
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tasks(file_id, line_no, text, hash, checked, due_date, updated_at)
 			VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -550,7 +573,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			task.Text,
 			task.Hash,
 			checked,
-			nullIfEmpty(task.Due),
+			nullIfEmpty(due),
 			time.Now().Unix(),
 		); err != nil {
 			return err

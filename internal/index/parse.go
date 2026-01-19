@@ -153,6 +153,10 @@ func UncheckedTasksSnippet(input string) string {
 }
 
 func DueTasksSnippet(input string) string {
+	return DueTasksSnippetWithDefaultDate(input, "")
+}
+
+func DueTasksSnippetWithDefaultDate(input string, defaultDue string) string {
 	frontmatter := FrontmatterBlock(input)
 	body := StripFrontmatter(input)
 	lines := strings.Split(body, "\n")
@@ -176,8 +180,15 @@ func DueTasksSnippet(input string) string {
 		if len(match) == 0 {
 			continue
 		}
-		if d := dueRe.FindStringSubmatch(match[2]); len(d) == 0 {
+		hasDue := false
+		if d := dueRe.FindStringSubmatch(match[2]); len(d) > 0 {
+			hasDue = true
+		}
+		if !hasDue && defaultDue == "" {
 			continue
+		}
+		if !hasDue && defaultDue != "" {
+			line = strings.TrimRight(line, " ") + " due:" + defaultDue
 		}
 		paragraph := []string{line}
 		baseIndent := indent + 2

@@ -4246,7 +4246,11 @@ func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		snippet := index.DueTasksSnippet(string(contentBytes))
+		journalDate := ""
+		if date, ok := index.JournalDateForPath(path); ok {
+			journalDate = date
+		}
+		snippet := index.DueTasksSnippetWithDefaultDate(string(contentBytes), journalDate)
 		htmlStr, err := s.renderNoteBody(r.Context(), []byte(snippet))
 		if err != nil {
 			slog.Warn("render due note snippet", "path", path, "err", err)
