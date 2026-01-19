@@ -3177,35 +3177,75 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if query == "" {
-		s.views.RenderTemplate(w, "tag_suggest", ViewData{})
-		return
-	}
 	tags, err := s.idx.ListTags(r.Context(), 200, "", false)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	queryLower := strings.ToLower(query)
-	suggestions := make([]string, 0, 8)
+	queryNormalized := normalizeFuzzyTerm(queryLower)
+	const maxSuggestions = 10
+	suggestions := make([]string, 0, maxSuggestions)
 	seen := map[string]struct{}{}
 	for _, tag := range tags {
 		if strings.EqualFold(tag.Name, "todo") || strings.EqualFold(tag.Name, "due") {
 			continue
 		}
-		if !strings.HasPrefix(strings.ToLower(tag.Name), queryLower) {
+		if _, ok := seen[tag.Name]; ok {
 			continue
 		}
-		if _, ok := seen[tag.Name]; ok {
+		nameLower := strings.ToLower(tag.Name)
+		if !fuzzyMatchTag(queryNormalized, nameLower) {
 			continue
 		}
 		seen[tag.Name] = struct{}{}
 		suggestions = append(suggestions, tag.Name)
-		if len(suggestions) >= 8 {
+		if len(suggestions) >= maxSuggestions {
 			break
 		}
 	}
 	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions})
+}
+
+func normalizeFuzzyTerm(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func fuzzyMatchTag(term string, candidate string) bool {
+	if term == "" {
+		return true
+	}
+	candidateNormalized := normalizeFuzzyTerm(candidate)
+	if fuzzySubsequence(term, candidateNormalized) {
+		return true
+	}
+	parts := strings.FieldsFunc(candidate, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	if len(parts) == 0 {
+		return false
+	}
+	var initials strings.Builder
+	for _, part := range parts {
+		initials.WriteByte(part[0])
+	}
+	return fuzzySubsequence(term, initials.String())
+}
+
+func fuzzySubsequence(term string, candidate string) bool {
+	ti := 0
+	for i := 0; i < len(candidate) && ti < len(term); i++ {
+		if term[ti] == candidate[i] {
+			ti++
+		}
+	}
+	return ti == len(term)
 }
 
 func (s *Server) handleJournalYear(w http.ResponseWriter, r *http.Request) {

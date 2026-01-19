@@ -69,14 +69,18 @@
         </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Folder</label>
-          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" list="folder-options" value="{{.NoteMeta.Folder}}">
-          {{if .FolderOptions}}
-          <datalist id="folder-options">
-            {{range .FolderOptions}}
-              <option value="{{.}}"></option>
+          <div class="relative">
+            <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" value="{{.NoteMeta.Folder}}" data-folder-input autocomplete="off">
+            {{if .FolderOptions}}
+            <div id="folder-suggest" class="absolute z-10 mt-2 hidden w-full rounded-xl border border-slate-700/80 bg-[#1a2330] p-2 text-xs text-slate-100 shadow-[0_12px_30px_-20px_rgba(15,23,42,0.9)]">
+              <div class="flex flex-wrap gap-2">
+                {{range .FolderOptions}}
+                  <button class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-xs text-slate-200 hover:border-slate-500" type="button" data-folder-option data-folder-name="{{.}}">{{.}}</button>
+                {{end}}
+              </div>
+            </div>
             {{end}}
-          </datalist>
-          {{end}}
+          </div>
         </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Priority</label>
@@ -174,6 +178,104 @@
 </script>
 <script>
   (function () {
+    var input = document.querySelector("[data-folder-input]");
+    var suggest = document.getElementById("folder-suggest");
+    if (!input || !suggest) {
+      return;
+    }
+    var options = Array.from(suggest.querySelectorAll("[data-folder-option]"));
+    function fuzzyMatch(term, candidate) {
+      if (term === "") {
+        return true;
+      }
+      var normalize = function (value) {
+        return value.replace(/[^a-z0-9]+/g, "");
+      };
+      var subseq = function (needle, haystack) {
+        var ni = 0;
+        var hi = 0;
+        while (ni < needle.length && hi < haystack.length) {
+          if (needle.charAt(ni) === haystack.charAt(hi)) {
+            ni += 1;
+          }
+          hi += 1;
+        }
+        return ni === needle.length;
+      };
+      var termClean = normalize(term);
+      var candidateClean = normalize(candidate);
+      if (subseq(termClean, candidateClean)) {
+        return true;
+      }
+      var initials = candidate
+        .split(/[^a-z0-9]+/g)
+        .filter(Boolean)
+        .map(function (part) {
+          return part.charAt(0);
+        })
+        .join("");
+      return subseq(termClean, initials);
+    }
+    function applyFilter(query) {
+      var term = query.trim().toLowerCase();
+      var visible = 0;
+      options.forEach(function (option) {
+        var name = option.getAttribute("data-folder-name") || option.textContent || "";
+        var match = fuzzyMatch(term, name.toLowerCase());
+        option.style.display = match ? "" : "none";
+        if (match) {
+          visible += 1;
+        }
+      });
+      if (visible > 0) {
+        suggest.classList.remove("hidden");
+      } else {
+        suggest.classList.add("hidden");
+      }
+    }
+    input.addEventListener("focus", function () {
+      applyFilter(input.value);
+    });
+    input.addEventListener("input", function () {
+      applyFilter(input.value);
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") {
+        return;
+      }
+      var first = options.find(function (option) {
+        return option.style.display !== "none";
+      });
+      if (!first) {
+        return;
+      }
+      event.preventDefault();
+      var name = first.getAttribute("data-folder-name") || first.textContent || "";
+      input.value = name;
+      suggest.classList.add("hidden");
+    });
+    input.addEventListener("blur", function () {
+      window.setTimeout(function () {
+        suggest.classList.add("hidden");
+      }, 100);
+    });
+    suggest.addEventListener("mousedown", function (event) {
+      event.preventDefault();
+    });
+    suggest.addEventListener("click", function (event) {
+      var option = event.target.closest("[data-folder-option]");
+      if (!option) {
+        return;
+      }
+      var name = option.getAttribute("data-folder-name") || option.textContent || "";
+      input.value = name;
+      suggest.classList.add("hidden");
+      input.focus();
+    });
+  })();
+</script>
+<script>
+  (function () {
     var textarea = document.getElementById("note-content");
     var suggest = document.getElementById("tag-suggest");
     if (!textarea || !suggest || !window.htmx) {
@@ -190,9 +292,6 @@
       }
       var term = value.slice(hash + 1, caret);
       if (term.indexOf(" ") !== -1 || term.indexOf("\n") !== -1) {
-        return null;
-      }
-      if (term.length < 1) {
         return null;
       }
       return { term: term, start: hash, end: caret };
@@ -273,7 +372,7 @@
         suggest.removeAttribute("data-tag-end");
         return;
       }
-      if (current.term === lastQuery) {
+      if (current.term === lastQuery && current.term !== "") {
         return;
       }
       lastQuery = current.term;
@@ -285,6 +384,31 @@
     textarea.addEventListener("input", updateSuggest);
     textarea.addEventListener("click", updateSuggest);
     textarea.addEventListener("keyup", updateSuggest);
+    textarea.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") {
+        return;
+      }
+      if (suggest.classList.contains("hidden")) {
+        return;
+      }
+      var first = suggest.querySelector("[data-tag]");
+      if (!first) {
+        return;
+      }
+      event.preventDefault();
+      var tag = first.getAttribute("data-tag");
+      var start = Number(suggest.dataset.tagStart || "0");
+      var end = Number(suggest.dataset.tagEnd || "0");
+      var insert = tag;
+      var nextChar = textarea.value.charAt(end);
+      if (nextChar && !/\s/.test(nextChar)) {
+        insert += " ";
+      }
+      textarea.setRangeText(insert, start + 1, end, "end");
+      lastQuery = "";
+      suggest.innerHTML = "";
+      suggest.classList.add("hidden");
+    });
     suggest.addEventListener("click", function (event) {
       var target = event.target.closest("[data-tag]");
       if (!target) {
