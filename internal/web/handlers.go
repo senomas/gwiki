@@ -5261,9 +5261,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 
 	if err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
 		targetURL := "/notes/" + notePath
+		if returnURL != "" {
+			targetURL = returnURL
+		}
 		if isHTMX(r) {
-			w.Header().Set("HX-Redirect", targetURL)
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		http.Redirect(w, r, targetURL, http.StatusSeeOther)
@@ -5397,9 +5399,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 
 	targetURL := "/notes/" + targetPath
+	if returnURL != "" {
+		targetURL = returnURL
+	}
 	if isHTMX(r) {
-		w.Header().Set("HX-Redirect", targetURL)
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	http.Redirect(w, r, targetURL, http.StatusSeeOther)

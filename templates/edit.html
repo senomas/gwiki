@@ -166,17 +166,8 @@
         return;
       }
       if (event.detail.elt && event.detail.elt.closest && event.detail.elt.closest("[data-edit-save]")) {
-        window.history.go(-2);
+        window.history.go(-1);
         return;
-      }
-      var redirect = event.detail.xhr.getResponseHeader("HX-Redirect");
-      if (!redirect) {
-        return;
-      }
-      try {
-        window.location.replace(redirect);
-      } catch (err) {
-        window.location.href = redirect;
       }
     });
   })();
