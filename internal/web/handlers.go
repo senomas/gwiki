@@ -840,6 +840,8 @@ var (
 	whatsappLinkKind = ast.NewNodeKind("WhatsAppLink")
 )
 
+var dueTokenRe = regexp.MustCompile(`(?i)(?:@due\((\d{4}-\d{2}-\d{2})\)|due:(\d{4}-\d{2}-\d{2}))`)
+
 type mapsEmbedStatus int
 
 const (
@@ -3712,6 +3714,33 @@ func normalizeFuzzyTerm(value string) string {
 	return b.String()
 }
 
+func applyRenderReplacements(input string) string {
+	input = replaceDueTokens(input)
+	return input
+}
+
+func replaceDueTokens(input string) string {
+	return dueTokenRe.ReplaceAllStringFunc(input, func(match string) string {
+		parts := dueTokenRe.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		raw := parts[1]
+		if raw == "" {
+			raw = parts[2]
+		}
+		if raw == "" {
+			return match
+		}
+		parsed, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			return match
+		}
+		label := parsed.Format("2 Jan 2006")
+		return fmt.Sprintf(`<span class="due-badge">Due %s</span>`, label)
+	})
+}
+
 func fuzzyMatchTag(term string, candidate string) bool {
 	if term == "" {
 		return true
@@ -6386,7 +6415,7 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
-	return b.String(), nil
+	return applyRenderReplacements(b.String()), nil
 }
 
 func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error) {
@@ -6407,7 +6436,7 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
-	return b.String(), nil
+	return applyRenderReplacements(b.String()), nil
 }
 
 func (s *Server) renderLineMarkdown(ctx context.Context, line string) (template.HTML, error) {

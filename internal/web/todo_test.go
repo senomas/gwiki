@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -23,5 +24,19 @@ func TestFilterFutureJournalTasks(t *testing.T) {
 		if task.Path == "2026-01/21.md" {
 			t.Fatalf("future journal task should be filtered")
 		}
+	}
+}
+
+func TestApplyRenderReplacementsDue(t *testing.T) {
+	input := `<p>Pay rent due:2026-02-05 and call @due(2026-02-07).</p>`
+	out := applyRenderReplacements(input)
+	if !strings.Contains(out, "Due 5 Feb 2026") {
+		t.Fatalf("expected formatted due date, got %q", out)
+	}
+	if !strings.Contains(out, "Due 7 Feb 2026") {
+		t.Fatalf("expected formatted due date for second token, got %q", out)
+	}
+	if strings.Contains(out, "due:2026-02-05") || strings.Contains(out, "@due(2026-02-07)") {
+		t.Fatalf("expected due tokens to be replaced, got %q", out)
 	}
 }

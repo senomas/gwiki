@@ -152,6 +152,63 @@ func UncheckedTasksSnippet(input string) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
 }
 
+func DueTasksSnippet(input string) string {
+	frontmatter := FrontmatterBlock(input)
+	body := StripFrontmatter(input)
+	lines := strings.Split(body, "\n")
+	title := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# ") {
+			title = trimmed
+			break
+		}
+	}
+	var tasks []string
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		indent := countIndentSpaces(line)
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "- [ ]") {
+			continue
+		}
+		match := taskRe.FindStringSubmatch(line)
+		if len(match) == 0 {
+			continue
+		}
+		if d := dueRe.FindStringSubmatch(match[2]); len(d) == 0 {
+			continue
+		}
+		paragraph := []string{line}
+		baseIndent := indent + 2
+		for j := i + 1; j < len(lines); j++ {
+			next := lines[j]
+			nextIndent := countIndentSpaces(next)
+			if next == "" && j+1 < len(lines) && countIndentSpaces(lines[j+1]) >= baseIndent {
+				paragraph = append(paragraph, next)
+				continue
+			}
+			if nextIndent >= baseIndent {
+				paragraph = append(paragraph, next)
+				continue
+			}
+			break
+		}
+		tasks = append(tasks, strings.Join(paragraph, "\n"))
+	}
+	var out []string
+	if frontmatter != "" {
+		out = append(out, frontmatter, "")
+	}
+	if title != "" {
+		out = append(out, title, "")
+	}
+	if len(tasks) > 0 {
+		out = append(out, strings.Join(tasks, "\n\n"))
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+}
+
 func countIndentSpaces(line string) int {
 	count := 0
 	for _, r := range line {

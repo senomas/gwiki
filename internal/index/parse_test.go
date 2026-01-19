@@ -113,3 +113,38 @@ title: Demo
 		t.Fatalf("unexpected snippet:\n%s", out)
 	}
 }
+
+func TestDueTasksSnippet(t *testing.T) {
+	input := `---
+title: Demo
+---
+# demo-cache
+
+## demo
+
+- [ ] demo @due(2026-01-20)
+
+  Call me at https://wa.me/628129777287 thanks
+
+- [ ] no due here
+
+  https://chatgpt.com/s/t_696d2140457c819180ea7dfed7e578d9
+- [x] sample foo due:2026-01-21
+
+  https://youtu.be/Yzb5c-fIfnM
+`
+	out := DueTasksSnippet(input)
+	expected := `---
+title: Demo
+---
+
+# demo-cache
+
+- [ ] demo @due(2026-01-20)
+
+  Call me at https://wa.me/628129777287 thanks
+`
+	if out != expected {
+		t.Fatalf("unexpected snippet:\n%s", out)
+	}
+}
