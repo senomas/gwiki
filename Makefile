@@ -18,7 +18,7 @@ docker-run:
 
 dev:
 	@if command -v air >/dev/null 2>&1; then \
-		WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) air -c .air.toml; \
+		WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) WIKI_LOG_LEVEL=debug air -c .air.toml; \
 	else \
 		echo "air is not installed. Install with:"; \
 		echo "  go install github.com/air-verse/air@latest"; \

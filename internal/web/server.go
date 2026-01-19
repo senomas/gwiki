@@ -1,7 +1,11 @@
 package web
 
 import (
+	"bytes"
+	"io"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"gwiki/internal/config"
 	"gwiki/internal/index"
@@ -37,13 +41,60 @@ func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
 }
 
 func (s *Server) Handler() http.Handler {
+	var handler http.Handler
 	if s.auth != nil {
-		return s.auth.Middleware(s.mux)
+		handler = s.auth.Middleware(s.mux)
+	} else {
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := WithUser(r.Context(), User{Name: "local", Authenticated: true})
+			s.mux.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
+	return s.debugLogMiddleware(handler)
+}
+
+func (s *Server) debugLogMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := WithUser(r.Context(), User{Name: "local", Authenticated: true})
-		s.mux.ServeHTTP(w, r.WithContext(ctx))
+		const maxBodySize = 1024
+		start := time.Now()
+		var bodyPreview []byte
+		if r.Body != nil && r.Body != http.NoBody {
+			limited := io.LimitReader(r.Body, maxBodySize)
+			bodyPreview, _ = io.ReadAll(limited)
+			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyPreview), r.Body))
+		}
+
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		elapsed := time.Since(start)
+
+		slog.Debug(
+			"http request",
+			"method", r.Method,
+			"url", r.URL.String(),
+			"status", rec.status,
+			"duration_ms", elapsed.Milliseconds(),
+			"headers", r.Header,
+			"body", string(bodyPreview),
+		)
 	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(p)
 }
 
 func (s *Server) routes() {

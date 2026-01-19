@@ -74,6 +74,8 @@ func parseLogLevel(raw string) slog.Leveler {
 	level := new(slog.LevelVar)
 	level.Set(slog.LevelInfo)
 	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "debug":
+		level.Set(slog.LevelDebug)
 	case "info":
 		level.Set(slog.LevelInfo)
 	case "warn", "warning":
