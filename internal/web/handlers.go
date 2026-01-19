@@ -709,37 +709,25 @@ func buildFolderTree(folders []string, hasRoot bool, activeFolder string, active
 func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool) (int, int, error) {
 	_ = activeTodo
 	_ = activeDue
-	todoCount := 0
-	dueCount := 0
-
-	if activeDate != "" {
-		if len(noteTags) > 0 {
-			count, err := s.idx.CountNotesWithOpenTasksByDate(r.Context(), noteTags, activeDate, folder, rootOnly)
-			if err != nil {
-				return 0, 0, err
-			}
-			todoCount = count
-		} else {
-			count, err := s.idx.CountNotesWithOpenTasksByDate(r.Context(), nil, activeDate, folder, rootOnly)
-			if err != nil {
-				return 0, 0, err
-			}
-			todoCount = count
-		}
-	} else if len(noteTags) > 0 {
-		count, err := s.idx.CountNotesWithOpenTasks(r.Context(), noteTags, folder, rootOnly)
-		if err != nil {
-			return 0, 0, err
-		}
-		todoCount = count
-	} else {
-		count, err := s.idx.CountNotesWithOpenTasks(r.Context(), nil, folder, rootOnly)
-		if err != nil {
-			return 0, 0, err
-		}
-		todoCount = count
+	todoCount, err := s.idx.CountTasks(r.Context(), index.TaskCountFilter{
+		Tags:   noteTags,
+		Date:   activeDate,
+		Folder: folder,
+		Root:   rootOnly,
+	})
+	if err != nil {
+		return 0, 0, err
 	}
-
+	dueCount, err := s.idx.CountTasks(r.Context(), index.TaskCountFilter{
+		Tags:    noteTags,
+		Date:    activeDate,
+		Folder:  folder,
+		Root:    rootOnly,
+		DueOnly: true,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
 	return todoCount, dueCount, nil
 }
 
@@ -3416,6 +3404,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		Tags:             tags,
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
+		DueCount:         dueCount,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
@@ -3554,6 +3543,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		Tags:             tags,
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
+		DueCount:         dueCount,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
@@ -3953,6 +3943,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		Tags:             tags,
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
+		DueCount:         dueCount,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
@@ -4103,6 +4094,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		Tags:             tags,
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
+		DueCount:         dueCount,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
@@ -4110,6 +4102,168 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
 		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		ActiveDate:       activeDate,
+		DateQuery:        buildDateQuery(activeDate),
+		SearchQuery:      activeSearch,
+		SearchQueryParam: buildSearchQuery(activeSearch),
+		UpdateDays:       updateDays,
+		CalendarMonth:    calendar,
+		JournalSidebar:   journalSidebar,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	activeDate := ""
+	_, _, noteTags := splitSpecialTags(activeTags)
+	tasks, err := s.idx.OpenTasks(r.Context(), noteTags, 300, false, "", activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allowed := map[string]struct{}{}
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, false, false, activeDate, activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, false, false, activeDate, activeFolder, activeRoot)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+	}
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/due", todoCount, 0, activeDate, activeSearch, true, activeFolder, activeRoot)
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagQuery := buildTagsQuery(activeTags)
+	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	calendar := buildCalendarMonth(time.Now(), updateDays, "/due", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	folders, hasRoot, err := s.idx.ListFolders(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/due", activeTags, activeDate, activeSearch)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tasksByNote := make(map[string][]index.Task)
+	noteTitles := make(map[string]string)
+	noteEarliestDue := make(map[string]time.Time)
+	noteUpdated := make(map[string]time.Time)
+	noteFileID := make(map[string]int)
+	for _, task := range tasks {
+		if task.FileID <= 0 || task.Hash == "" || task.DueDate == "" {
+			continue
+		}
+		dueTime, err := time.Parse("2006-01-02", task.DueDate)
+		if err != nil {
+			continue
+		}
+		tasksByNote[task.Path] = append(tasksByNote[task.Path], index.Task{
+			LineNo: task.LineNo,
+			Hash:   task.Hash,
+		})
+		if _, ok := noteTitles[task.Path]; !ok {
+			noteTitles[task.Path] = task.Title
+			noteEarliestDue[task.Path] = dueTime
+			noteUpdated[task.Path] = task.UpdatedAt
+			noteFileID[task.Path] = task.FileID
+		} else {
+			if dueTime.Before(noteEarliestDue[task.Path]) {
+				noteEarliestDue[task.Path] = dueTime
+			}
+			if task.UpdatedAt.Before(noteUpdated[task.Path]) {
+				noteUpdated[task.Path] = task.UpdatedAt
+			}
+		}
+	}
+	dueNotes := make([]NoteCard, 0, len(tasksByNote))
+	for path, noteTasks := range tasksByNote {
+		sort.Slice(noteTasks, func(i, j int) bool {
+			return noteTasks[i].LineNo < noteTasks[j].LineNo
+		})
+		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, path)
+		if err != nil {
+			continue
+		}
+		contentBytes, err := os.ReadFile(fullPath)
+		if err != nil {
+			continue
+		}
+		snippet := index.DueTasksSnippet(string(contentBytes))
+		htmlStr, err := s.renderNoteBody(r.Context(), []byte(snippet))
+		if err != nil {
+			slog.Warn("render due note snippet", "path", path, "err", err)
+			continue
+		}
+		fileID := noteFileID[path]
+		if fileID > 0 {
+			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, noteTasks)
+		}
+		noteMeta := index.FrontmatterAttributes(snippet)
+		dueNotes = append(dueNotes, NoteCard{
+			Path:         path,
+			Title:        noteTitles[path],
+			FileName:     filepath.Base(path),
+			RenderedHTML: template.HTML(htmlStr),
+			Meta:         noteMeta,
+		})
+	}
+	sort.Slice(dueNotes, func(i, j int) bool {
+		leftDue := noteEarliestDue[dueNotes[i].Path]
+		rightDue := noteEarliestDue[dueNotes[j].Path]
+		if leftDue.Equal(rightDue) {
+			leftUpdated := noteUpdated[dueNotes[i].Path]
+			rightUpdated := noteUpdated[dueNotes[j].Path]
+			if leftUpdated.Equal(rightUpdated) {
+				return dueNotes[i].Title < dueNotes[j].Title
+			}
+			return leftUpdated.Before(rightUpdated)
+		}
+		return leftDue.Before(rightDue)
+	})
+	data := ViewData{
+		Title:            "Due",
+		ContentTemplate:  "due",
+		TodoNotes:        dueNotes,
+		Tags:             tags,
+		TagLinks:         tagLinks,
+		TodoCount:        todoCount,
+		DueCount:         dueCount,
+		ActiveTags:       activeTags,
+		TagQuery:         tagQuery,
+		FolderTree:       folderTree,
+		ActiveFolder:     activeFolder,
+		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      filterQuery,
+		HomeURL:          buildTagsURL("/due", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -4994,6 +5148,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		Tags:             tags,
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
+		DueCount:         dueCount,
 		ActiveTags:       activeTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,

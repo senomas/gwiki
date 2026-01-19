@@ -40,6 +40,7 @@ type ViewData struct {
 	TodoTasks        []TaskView
 	TodoNotes        []NoteCard
 	TodoCount        int
+	DueCount         int
 	TagLinks         []TagLink
 	ActiveTags       []string
 	TagQuery         string

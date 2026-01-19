@@ -58,6 +58,15 @@ type UpdateDaySummary struct {
 	Count int
 }
 
+type TaskCountFilter struct {
+	Tags    []string
+	Date    string
+	Folder  string
+	Root    bool
+	DueOnly bool
+	DueDate string
+}
+
 type NoteHistorySummary struct {
 	Path  string
 	Title string
@@ -2410,6 +2419,74 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 
 	var count int
 	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (i *Index) CountTasks(ctx context.Context, filter TaskCountFilter) (int, error) {
+	clauses := []string{"tasks.checked = 0"}
+	args := make([]interface{}, 0, 6)
+
+	if filter.DueOnly {
+		dueDate := filter.DueDate
+		if dueDate == "" {
+			dueDate = time.Now().Format("2006-01-02")
+		}
+		clauses = append(clauses, "tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?")
+		args = append(args, dueDate)
+	}
+
+	if filter.Date != "" {
+		day, err := dateToDay(filter.Date)
+		if err != nil {
+			return 0, err
+		}
+		clauses = append(clauses, "file_histories.action_date = ?")
+		args = append(args, day)
+	}
+
+	if len(filter.Tags) > 0 {
+		placeholders := strings.Repeat("?,", len(filter.Tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		clauses = append(clauses, "tags.name IN ("+placeholders+")")
+		for _, tag := range filter.Tags {
+			args = append(args, tag)
+		}
+	}
+
+	folderClause, folderArgs := folderWhere(filter.Folder, filter.Root, "files")
+	if folderClause != "" {
+		clauses = append(clauses, folderClause)
+		args = append(args, folderArgs...)
+	}
+
+	sqlStr := `
+		SELECT COUNT(*)
+		FROM tasks
+		JOIN files ON files.id = tasks.file_id
+	`
+	if filter.Date != "" {
+		sqlStr += " JOIN file_histories ON files.id = file_histories.file_id"
+	}
+	if len(filter.Tags) > 0 {
+		sqlStr += " JOIN file_tags ON files.id = file_tags.file_id JOIN tags ON tags.id = file_tags.tag_id"
+	}
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		sqlStr += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	if len(filter.Tags) > 0 {
+		sqlStr += " GROUP BY tasks.id HAVING COUNT(DISTINCT tags.name) = ?"
+		args = append(args, len(filter.Tags))
+	}
+
+	var count int
+	err := i.db.QueryRowContext(ctx, sqlStr, args...).Scan(&count)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
 		return 0, err
 	}
 	return count, nil
