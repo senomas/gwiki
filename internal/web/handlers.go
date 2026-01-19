@@ -4095,7 +4095,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		if left.Equal(right) {
 			return todoNotes[i].Title < todoNotes[j].Title
 		}
-		return left.After(right)
+		return left.Before(right)
 	})
 	data := ViewData{
 		Title:            "Todo",
