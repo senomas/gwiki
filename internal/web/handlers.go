@@ -2478,13 +2478,13 @@ func whatsAppNumber(raw string) (string, bool) {
 		if number == "" {
 			return "", false
 		}
-		return number, true
+		return formatWhatsAppNumber(number), true
 	case "api.whatsapp.com", "chat.whatsapp.com":
 		phone := strings.TrimSpace(parsed.Query().Get("phone"))
 		if phone == "" {
 			return "", false
 		}
-		return phone, true
+		return formatWhatsAppNumber(phone), true
 	}
 	if strings.EqualFold(parsed.Scheme, "whatsapp") {
 		phone := strings.TrimSpace(parsed.Query().Get("phone"))
@@ -2494,9 +2494,65 @@ func whatsAppNumber(raw string) (string, bool) {
 		if phone == "" {
 			return "", false
 		}
-		return phone, true
+		return formatWhatsAppNumber(phone), true
 	}
 	return "", false
+}
+
+func formatWhatsAppNumber(raw string) string {
+	var digits strings.Builder
+	for _, r := range raw {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	value := digits.String()
+	if value == "" {
+		return raw
+	}
+	trimmed := strings.TrimSpace(raw)
+	hasPlus := strings.HasPrefix(trimmed, "+") || strings.HasPrefix(trimmed, "00")
+	if strings.HasPrefix(value, "0") {
+		value = "62" + strings.TrimPrefix(value, "0")
+	}
+	country := "62"
+	local := value
+	if hasPlus {
+		switch {
+		case strings.HasPrefix(value, "1"):
+			country = "1"
+			local = strings.TrimPrefix(value, "1")
+		case strings.HasPrefix(value, "7"):
+			country = "7"
+			local = strings.TrimPrefix(value, "7")
+		case strings.HasPrefix(value, "62"):
+			country = "62"
+			local = strings.TrimPrefix(value, "62")
+		default:
+			for i := 1; i <= 3 && i <= len(value); i++ {
+				country = value[:i]
+				local = value[i:]
+			}
+		}
+	} else if strings.HasPrefix(value, "62") {
+		country = "62"
+		local = strings.TrimPrefix(value, "62")
+	} else if strings.HasPrefix(value, "1") || strings.HasPrefix(value, "7") {
+		country = value[:1]
+		local = value[1:]
+	}
+	if local == "" {
+		return "+" + country
+	}
+	return formatIntlNumber(country, local)
+}
+
+func formatIntlNumber(country string, local string) string {
+	group := local
+	if len(local) > 3 {
+		group = local[:3] + "-" + local[3:]
+	}
+	return "+" + country + " " + group
 }
 
 func attachmentVideoFromURL(raw string) (string, string, bool) {
