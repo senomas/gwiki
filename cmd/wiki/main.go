@@ -16,6 +16,8 @@ import (
 	"gwiki/internal/config"
 	"gwiki/internal/index"
 	"gwiki/internal/web"
+
+	"golang.org/x/term"
 )
 
 func main() {
@@ -107,14 +109,19 @@ func selectLogWriter() (io.Writer, io.Closer) {
 }
 
 type prettyHandler struct {
-	w      io.Writer
-	level  slog.Leveler
-	attrs  []slog.Attr
-	groups []string
+	w            io.Writer
+	level        slog.Leveler
+	colorEnabled bool
+	attrs        []slog.Attr
+	groups       []string
 }
 
 func newPrettyHandler(w io.Writer, level slog.Leveler) slog.Handler {
-	return &prettyHandler{w: w, level: level}
+	return &prettyHandler{
+		w:            w,
+		level:        level,
+		colorEnabled: isTerminalWriter(w),
+	}
 }
 
 func (h *prettyHandler) Enabled(_ context.Context, lvl slog.Level) bool {
@@ -129,7 +136,7 @@ func (h *prettyHandler) Handle(_ context.Context, r slog.Record) error {
 	ts := r.Time.Format("2006-01-02 15:04:05")
 	b.WriteString(ts)
 	b.WriteString(" ")
-	b.WriteString(colorizeLevel(r.Level))
+	b.WriteString(colorizeLevel(r.Level, h.colorEnabled))
 	b.WriteString(" ")
 	b.WriteString(r.Message)
 	b.WriteString("\n")
@@ -147,10 +154,11 @@ func (h *prettyHandler) Handle(_ context.Context, r slog.Record) error {
 
 func (h *prettyHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	next := &prettyHandler{
-		w:      h.w,
-		level:  h.level,
-		attrs:  append(append([]slog.Attr{}, h.attrs...), attrs...),
-		groups: append([]string{}, h.groups...),
+		w:            h.w,
+		level:        h.level,
+		colorEnabled: h.colorEnabled,
+		attrs:        append(append([]slog.Attr{}, h.attrs...), attrs...),
+		groups:       append([]string{}, h.groups...),
 	}
 	return next
 }
@@ -160,10 +168,11 @@ func (h *prettyHandler) WithGroup(name string) slog.Handler {
 		return h
 	}
 	next := &prettyHandler{
-		w:      h.w,
-		level:  h.level,
-		attrs:  append([]slog.Attr{}, h.attrs...),
-		groups: append(append([]string{}, h.groups...), name),
+		w:            h.w,
+		level:        h.level,
+		colorEnabled: h.colorEnabled,
+		attrs:        append([]slog.Attr{}, h.attrs...),
+		groups:       append(append([]string{}, h.groups...), name),
 	}
 	return next
 }
@@ -264,16 +273,18 @@ func prettyJSON(raw string) string {
 }
 
 const (
-	colorReset   = "\x1b[0m"
-	colorDebug   = "\x1b[36m"
-	colorInfo    = "\x1b[32m"
-	colorWarn    = "\x1b[33m"
-	colorError   = "\x1b[31m"
-	colorDefault = "\x1b[37m"
+	colorReset = "\x1b[0m"
+	colorDebug = "\x1b[36m"
+	colorInfo  = "\x1b[32m"
+	colorWarn  = "\x1b[33m"
+	colorError = "\x1b[31m"
 )
 
-func colorizeLevel(level slog.Level) string {
+func colorizeLevel(level slog.Level, enabled bool) string {
 	label := level.String()
+	if !enabled {
+		return label
+	}
 	switch {
 	case level <= slog.LevelDebug:
 		return colorDebug + label + colorReset
@@ -284,4 +295,11 @@ func colorizeLevel(level slog.Level) string {
 	default:
 		return colorError + label + colorReset
 	}
+}
+
+func isTerminalWriter(w io.Writer) bool {
+	if file, ok := w.(*os.File); ok {
+		return term.IsTerminal(int(file.Fd()))
+	}
+	return false
 }
