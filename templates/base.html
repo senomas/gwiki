@@ -72,62 +72,65 @@
       padding-left: 0;
     }
     .note-body li {
-      margin: 0.35rem 0;
-      padding-left: 0.3rem;
-    }
-    .note-body li:has(> input[type="checkbox"]) {
       list-style: none;
       position: relative;
-      padding-left: 0.3rem;
+      margin: 0.35rem 0;
+      padding-left: 1.2rem;
+    }
+    .note-body li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.4rem;
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.8);
+    }
+    .note-body li:has(input[type="checkbox"])::before {
+      top: 0.15rem;
+      width: 0.75rem;
+      height: 0.75rem;
+      border-radius: 0.2rem;
+      background: transparent;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+    }
+    .note-body li:has(input[type="checkbox"]:checked)::before {
+      background: rgba(96, 165, 250, 0.9);
+      border-color: rgba(96, 165, 250, 0.9);
+    }
+    .note-body li:has(input[type="checkbox"]:checked)::after {
+      content: "";
+      position: absolute;
+      left: 0.22rem;
+      top: 0.38rem;
+      width: 0.3rem;
+      height: 0.15rem;
+      border-right: 2px solid rgba(15, 23, 42, 0.95);
+      border-bottom: 2px solid rgba(15, 23, 42, 0.95);
+      transform: rotate(45deg);
     }
     .note-body input[type="checkbox"] {
       appearance: none;
       -webkit-appearance: none;
-      width: 1rem;
-      height: 1rem;
-      border: 1px solid rgba(148, 163, 184, 0.5);
-      border-radius: 0.25rem;
-      background: transparent;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+      width: 0;
+      height: 0;
       position: relative;
       top: -1px;
       place-content: center;
       margin: 0;
       vertical-align: -0.05rem;
     }
-    .note-body li:has(> input[type="checkbox"]) > input[type="checkbox"] {
+    .note-body li input[type="checkbox"] {
       position: absolute;
-      left: -1rem;
-      top: 0.1rem;
+      left: 0;
+      top: 0.2rem;
     }
     .note-body input[type="checkbox"][data-task-id] {
       cursor: pointer;
     }
-    .note-body input[type="checkbox"]::after {
-      content: "";
-      width: 0.45rem;
-      height: 0.25rem;
-      border-right: 2px solid rgba(15, 23, 42, 0.95);
-      border-bottom: 2px solid rgba(15, 23, 42, 0.95);
-      transform: rotate(45deg);
-      opacity: 0;
-      margin-top: -0.05rem;
-    }
-    .note-body input[type="checkbox"]:checked {
-      background: #60a5fa;
-      border-color: #60a5fa;
-      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35);
-    }
-    .note-body input[type="checkbox"]:checked::after {
-      opacity: 1;
-    }
     .note-body input[type="checkbox"]:disabled {
       cursor: default;
-    }
-    .note-body ul {
-      list-style: disc;
     }
     .note-body ol {
       list-style: decimal;

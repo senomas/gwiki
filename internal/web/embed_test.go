@@ -164,6 +164,18 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("expected youtube card to replace paragraph, got %s", html)
 	}
 
+	taskEmbed := "- [ ] " + youtubeURL + "\n"
+	html, err = srv.renderMarkdown(ctx, []byte(taskEmbed))
+	if err != nil {
+		t.Fatalf("render task youtube: %v", err)
+	}
+	if !strings.Contains(html, `type="checkbox"`) {
+		t.Fatalf("expected checkbox, got %s", html)
+	}
+	if !strings.Contains(html, `class="youtube-card"`) {
+		t.Fatalf("expected youtube card for task, got %s", html)
+	}
+
 	html, err = srv.renderMarkdown(ctx, []byte(mapsURL))
 	if err != nil {
 		t.Fatalf("render maps: %v", err)

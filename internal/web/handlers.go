@@ -1505,23 +1505,26 @@ type youtubeEmbedTransformer struct{}
 func (t *youtubeEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
 	ctx := youtubeEmbedContext(pc)
 	source := reader.Source()
-	var paragraphs []*ast.Paragraph
+	var blocks []ast.Node
 	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
 		if para, ok := n.(*ast.Paragraph); ok {
-			paragraphs = append(paragraphs, para)
+			blocks = append(blocks, para)
+		}
+		if block, ok := n.(*ast.TextBlock); ok {
+			blocks = append(blocks, block)
 		}
 		return ast.WalkContinue, nil
 	})
 
-	for _, para := range paragraphs {
-		if !isEmbedParagraphParent(para.Parent()) {
+	for _, block := range blocks {
+		if !isEmbedParagraphParent(block.Parent()) {
 			// Skip paragraphs already replaced during link processing.
 			continue
 		}
-		urlText, ok := paragraphOnlyURL(para, source)
+		urlText, ok := blockOnlyURL(block, source)
 		if !ok || !isYouTubeURL(urlText) {
 			continue
 		}
@@ -1541,10 +1544,8 @@ func (t *youtubeEmbedTransformer) Transform(node *ast.Document, reader text.Read
 			embed.ThumbnailURL = ""
 			embed.FallbackMessage = "YouTube preview loading. Reload to display the card."
 		}
-		parent := para.Parent()
-		if parent != nil {
-			parent.ReplaceChild(parent, para, embed)
-		}
+		parent := block.Parent()
+		replaceBlockWithEmbed(parent, block, embed)
 	}
 }
 
@@ -1553,22 +1554,25 @@ type tiktokEmbedTransformer struct{}
 func (t *tiktokEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
 	ctx := tiktokEmbedContext(pc)
 	source := reader.Source()
-	var paragraphs []*ast.Paragraph
+	var blocks []ast.Node
 	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
 		if para, ok := n.(*ast.Paragraph); ok {
-			paragraphs = append(paragraphs, para)
+			blocks = append(blocks, para)
+		}
+		if block, ok := n.(*ast.TextBlock); ok {
+			blocks = append(blocks, block)
 		}
 		return ast.WalkContinue, nil
 	})
 
-	for _, para := range paragraphs {
-		if !isEmbedParagraphParent(para.Parent()) {
+	for _, block := range blocks {
+		if !isEmbedParagraphParent(block.Parent()) {
 			continue
 		}
-		urlText, ok := paragraphOnlyURL(para, source)
+		urlText, ok := blockOnlyURL(block, source)
 		if !ok || !isTikTokURL(urlText) {
 			continue
 		}
@@ -1588,10 +1592,8 @@ func (t *tiktokEmbedTransformer) Transform(node *ast.Document, reader text.Reade
 			embed.ThumbnailURL = ""
 			embed.FallbackMessage = "TikTok preview loading. Reload to display the card."
 		}
-		parent := para.Parent()
-		if parent != nil {
-			parent.ReplaceChild(parent, para, embed)
-		}
+		parent := block.Parent()
+		replaceBlockWithEmbed(parent, block, embed)
 	}
 }
 
@@ -1600,22 +1602,25 @@ type instagramEmbedTransformer struct{}
 func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
 	ctx := instagramEmbedContext(pc)
 	source := reader.Source()
-	var paragraphs []*ast.Paragraph
+	var blocks []ast.Node
 	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
 		if para, ok := n.(*ast.Paragraph); ok {
-			paragraphs = append(paragraphs, para)
+			blocks = append(blocks, para)
+		}
+		if block, ok := n.(*ast.TextBlock); ok {
+			blocks = append(blocks, block)
 		}
 		return ast.WalkContinue, nil
 	})
 
-	for _, para := range paragraphs {
-		if !isEmbedParagraphParent(para.Parent()) {
+	for _, block := range blocks {
+		if !isEmbedParagraphParent(block.Parent()) {
 			continue
 		}
-		urlText, ok := paragraphOnlyURL(para, source)
+		urlText, ok := blockOnlyURL(block, source)
 		if !ok || !isInstagramURL(urlText) {
 			continue
 		}
@@ -1635,10 +1640,8 @@ func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Re
 			embed.ThumbnailURL = ""
 			embed.FallbackMessage = "Instagram preview loading. Reload to display the card."
 		}
-		parent := para.Parent()
-		if parent != nil {
-			parent.ReplaceChild(parent, para, embed)
-		}
+		parent := block.Parent()
+		replaceBlockWithEmbed(parent, block, embed)
 	}
 }
 
@@ -1647,22 +1650,25 @@ type chatgptEmbedTransformer struct{}
 func (t *chatgptEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
 	ctx := chatgptEmbedContext(pc)
 	source := reader.Source()
-	var paragraphs []*ast.Paragraph
+	var blocks []ast.Node
 	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
 		if para, ok := n.(*ast.Paragraph); ok {
-			paragraphs = append(paragraphs, para)
+			blocks = append(blocks, para)
+		}
+		if block, ok := n.(*ast.TextBlock); ok {
+			blocks = append(blocks, block)
 		}
 		return ast.WalkContinue, nil
 	})
 
-	for _, para := range paragraphs {
-		if !isEmbedParagraphParent(para.Parent()) {
+	for _, block := range blocks {
+		if !isEmbedParagraphParent(block.Parent()) {
 			continue
 		}
-		urlText, ok := paragraphOnlyURL(para, source)
+		urlText, ok := blockOnlyURL(block, source)
 		if !ok || !isChatGPTShareURL(urlText) {
 			continue
 		}
@@ -1682,10 +1688,8 @@ func (t *chatgptEmbedTransformer) Transform(node *ast.Document, reader text.Read
 			embed.Preview = ""
 			embed.FallbackMessage = "ChatGPT preview loading. Reload to display the card."
 		}
-		parent := para.Parent()
-		if parent != nil {
-			parent.ReplaceChild(parent, para, embed)
-		}
+		parent := block.Parent()
+		replaceBlockWithEmbed(parent, block, embed)
 	}
 }
 
@@ -1771,9 +1775,48 @@ func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader t
 			embed.FallbackMessage = "Video preview unavailable."
 		}
 		parent := para.Parent()
-		if parent != nil {
-			parent.ReplaceChild(parent, para, embed)
+		replaceBlockWithEmbed(parent, para, embed)
+	}
+}
+
+func replaceBlockWithEmbed(parent ast.Node, block ast.Node, embed ast.Node) {
+	if parent == nil {
+		return
+	}
+	if checkbox := taskCheckboxClone(block); checkbox != nil {
+		placeholder := ast.NewParagraph()
+		placeholder.AppendChild(placeholder, checkbox)
+		parent.ReplaceChild(parent, block, placeholder)
+		parent.InsertAfter(parent, placeholder, embed)
+		return
+	}
+	parent.ReplaceChild(parent, block, embed)
+}
+
+func taskCheckboxClone(block ast.Node) *extensionast.TaskCheckBox {
+	for child := block.FirstChild(); child != nil; child = child.NextSibling() {
+		if checkbox, ok := child.(*extensionast.TaskCheckBox); ok {
+			return extensionast.NewTaskCheckBox(checkbox.IsChecked)
 		}
+	}
+	return nil
+}
+
+func blockHasTaskCheckbox(block ast.Node) bool {
+	for child := block.FirstChild(); child != nil; child = child.NextSibling() {
+		if _, ok := child.(*extensionast.TaskCheckBox); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func isTaskMarkerText(text string) bool {
+	switch strings.TrimSpace(text) {
+	case "[ ]", "[x]", "[X]":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1881,10 +1924,11 @@ func isEmbedParagraphParent(parent ast.Node) bool {
 	}
 }
 
-func paragraphOnlyURL(para *ast.Paragraph, source []byte) (string, bool) {
+func blockOnlyURL(block ast.Node, source []byte) (string, bool) {
+	hasTask := blockHasTaskCheckbox(block)
 	var b strings.Builder
 	hasLink := false
-	for child := para.FirstChild(); child != nil; child = child.NextSibling() {
+	for child := block.FirstChild(); child != nil; child = child.NextSibling() {
 		switch node := child.(type) {
 		case *extensionast.TaskCheckBox:
 			continue
@@ -1908,6 +1952,9 @@ func paragraphOnlyURL(para *ast.Paragraph, source []byte) (string, bool) {
 		case *ast.Text:
 			text := strings.TrimSpace(string(node.Segment.Value(source)))
 			if text == "" {
+				continue
+			}
+			if hasTask && isTaskMarkerText(text) {
 				continue
 			}
 			if hasLink {
