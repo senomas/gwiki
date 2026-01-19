@@ -92,6 +92,7 @@ func resolveTemplateGlob() string {
 }
 
 func (t *Templates) RenderPage(w http.ResponseWriter, data ViewData) {
+	setNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var content bytes.Buffer
 	if err := t.all.ExecuteTemplate(&content, data.ContentTemplate, data); err != nil {
@@ -106,8 +107,16 @@ func (t *Templates) RenderPage(w http.ResponseWriter, data ViewData) {
 }
 
 func (t *Templates) RenderTemplate(w http.ResponseWriter, name string, data ViewData) {
+	setNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.all.ExecuteTemplate(w, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func setNoCacheHeaders(w http.ResponseWriter) {
+	headers := w.Header()
+	headers.Set("Cache-Control", "no-store")
+	headers.Set("Pragma", "no-cache")
+	headers.Set("Expires", "0")
 }
