@@ -135,6 +135,8 @@ SQLite index implementation (notes, tags, tasks, links, history).
 - `NoteList`: helper for note list
 - `OpenTasks`: opens tasks
 - `OpenTasksByDate`: opens tasks by date
+- `TaskCountFilter`: task count filter struct
+- `CountTasks`: counts tasks with filters
 - `NotesWithOpenTasks`: helper for notes with open tasks
 - `NotesWithDueTasks`: helper for notes with due tasks
 - `NotesWithOpenTasksByDate`: helper for notes with open tasks by date
@@ -180,7 +182,10 @@ Visibility indexing tests.
 Markdown parsing to metadata (tags, links, tasks).
 
 - `ParseContent`: parses content
+- `UncheckedTasksSnippet`: builds markdown snippet with unchecked tasks
+- `DueTasksSnippet`: builds markdown snippet with due tasks
 - `TaskLineHash`: helper for task line hash
+- `countIndentSpaces`: helper for count indent spaces
 - `expandTagPrefixes`: helper for expand tag prefixes
 - `splitTagParts`: helper for split tag parts
 - `StripFrontmatter`: helper for strip frontmatter
@@ -195,6 +200,8 @@ Parser unit tests.
 
 - `TestParseContent`: test case for parse content
 - `TestStripFrontmatter`: test case for strip frontmatter
+- `TestUncheckedTasksSnippet`: test case for unchecked tasks snippet
+- `TestDueTasksSnippet`: test case for due tasks snippet
 
 ## `internal/index/schema.go`
 Database schema definition and version.
@@ -311,10 +318,10 @@ HTTP handlers, markdown rendering, embeds, and UI helpers.
 - `buildFilterQuery`: builds filter query
 - `folderOptions`: helper for folder options
 - `buildFolderTree`: builds folder tree
-- `buildDueTagLink`: builds due tag link
 - `loadSpecialTagCounts`: loads special tag counts
 - `loadFilteredTags`: loads filtered tags
-- `buildTodoTagLink`: builds todo tag link
+- `applyRenderReplacements`: applies render replacements
+- `replaceDueTokens`: replaces due tokens with formatted badges
 - `Kind`: helper for kind
 - `Dump`: helper for dump
 - `Extend`: helper for extend
@@ -428,6 +435,8 @@ HTTP handlers, markdown rendering, embeds, and UI helpers.
 - `handleJournalMonth`: HTTP handler for journal month
 - `handleHomeNotesPage`: HTTP handler for home notes page
 - `handleTasks`: HTTP handler for tasks
+- `handleTodo`: HTTP handler for todo
+- `handleDue`: HTTP handler for due
 - `handleToggleTask`: HTTP handler for toggle task
 - `loadHomeNotes`: loads home notes
 - `handleNewNote`: HTTP handler for new note
