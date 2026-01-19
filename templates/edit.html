@@ -129,7 +129,7 @@
     }
     returnLink.addEventListener("click", function (event) {
       event.preventDefault();
-      window.location.replace(returnLink.getAttribute("href"));
+      window.history.go(-1);
     });
   })();
 </script>
@@ -163,6 +163,10 @@
     }
     document.body.addEventListener("htmx:afterRequest", function (event) {
       if (!event.detail || !event.detail.xhr) {
+        return;
+      }
+      if (event.detail.elt && event.detail.elt.closest && event.detail.elt.closest("[data-edit-save]")) {
+        window.history.go(-2);
         return;
       }
       var redirect = event.detail.xhr.getResponseHeader("HX-Redirect");
