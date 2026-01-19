@@ -29,6 +29,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	extensionast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/text"
@@ -1426,7 +1427,7 @@ func (t *youtubeEmbedTransformer) Transform(node *ast.Document, reader text.Read
 	})
 
 	for _, para := range paragraphs {
-		if _, ok := para.Parent().(*ast.Document); !ok {
+		if !isEmbedParagraphParent(para.Parent()) {
 			// Skip paragraphs already replaced during link processing.
 			continue
 		}
@@ -1474,7 +1475,7 @@ func (t *tiktokEmbedTransformer) Transform(node *ast.Document, reader text.Reade
 	})
 
 	for _, para := range paragraphs {
-		if _, ok := para.Parent().(*ast.Document); !ok {
+		if !isEmbedParagraphParent(para.Parent()) {
 			continue
 		}
 		urlText, ok := paragraphOnlyURL(para, source)
@@ -1521,7 +1522,7 @@ func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Re
 	})
 
 	for _, para := range paragraphs {
-		if _, ok := para.Parent().(*ast.Document); !ok {
+		if !isEmbedParagraphParent(para.Parent()) {
 			continue
 		}
 		urlText, ok := paragraphOnlyURL(para, source)
@@ -1571,7 +1572,7 @@ func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader t
 	})
 
 	for _, para := range paragraphs {
-		if _, ok := para.Parent().(*ast.Document); !ok {
+		if !isEmbedParagraphParent(para.Parent()) {
 			continue
 		}
 		urlText, label, ok := paragraphOnlyLink(para, source)
@@ -1658,11 +1659,22 @@ func textMatchesURL(text string, rawURL string) bool {
 	return false
 }
 
+func isEmbedParagraphParent(parent ast.Node) bool {
+	switch parent.(type) {
+	case *ast.Document, *ast.ListItem:
+		return true
+	default:
+		return false
+	}
+}
+
 func paragraphOnlyURL(para *ast.Paragraph, source []byte) (string, bool) {
 	var b strings.Builder
 	hasLink := false
 	for child := para.FirstChild(); child != nil; child = child.NextSibling() {
 		switch node := child.(type) {
+		case *extensionast.TaskCheckBox:
+			continue
 		case *ast.Link:
 			if hasLink {
 				return "", false
