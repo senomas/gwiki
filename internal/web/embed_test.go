@@ -132,6 +132,22 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("upsert instagram profile cache: %v", err)
 	}
 
+	chatgptURL := "https://chatgpt.com/s/abc123"
+	if !isChatGPTShareURL(chatgptURL) {
+		t.Fatalf("expected chatgpt share url to be recognized")
+	}
+	if err := idx.UpsertEmbedCache(ctx, index.EmbedCacheEntry{
+		URL:       chatgptURL,
+		Kind:      chatgptEmbedCacheKind,
+		EmbedURL:  "Example preview text",
+		Status:    index.EmbedCacheStatusFound,
+		ErrorMsg:  "Example ChatGPT",
+		UpdatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("upsert chatgpt cache: %v", err)
+	}
+
 	html, err := srv.renderMarkdown(ctx, []byte(youtubeURL))
 	if err != nil {
 		t.Fatalf("render youtube: %v", err)
@@ -154,7 +170,7 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("expected maps embed to replace paragraph, got %s", html)
 	}
 
-	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + tiktokURL + "\n\n" + instagramURL + "\n\n" + instagramProfileURL + "\n\n" + mapsURL + "\n"
+	multi := youtubeURL + "\n\n" + youtubeURL2 + "\n\n" + tiktokURL + "\n\n" + instagramURL + "\n\n" + instagramProfileURL + "\n\n" + chatgptURL + "\n\n" + mapsURL + "\n"
 	html, err = srv.renderMarkdown(ctx, []byte(multi))
 	if err != nil {
 		t.Fatalf("render multi: %v", err)
@@ -167,6 +183,9 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 	}
 	if count := strings.Count(html, `class="instagram-card"`); count != 2 {
 		t.Fatalf("expected two instagram cards, got %d in %s", count, html)
+	}
+	if count := strings.Count(html, `class="chatgpt-card"`); count != 1 {
+		t.Fatalf("expected one chatgpt card, got %d in %s", count, html)
 	}
 	if count := strings.Count(html, "<iframe"); count != 1 {
 		t.Fatalf("expected one map iframe, got %d in %s", count, html)

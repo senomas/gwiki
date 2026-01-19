@@ -61,6 +61,7 @@ var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(&youtubeEmbedExtension{}),
 	goldmark.WithExtensions(&tiktokEmbedExtension{}),
 	goldmark.WithExtensions(&instagramEmbedExtension{}),
+	goldmark.WithExtensions(&chatgptEmbedExtension{}),
 	goldmark.WithExtensions(&attachmentVideoEmbedExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
 )
@@ -945,6 +946,22 @@ const (
 var instagramEmbedInFlight = newTTLCache(512)
 
 var (
+	chatgptEmbedKind       = ast.NewNodeKind("ChatGPTEmbed")
+	chatgptEmbedHTTPClient = &http.Client{Timeout: 3 * time.Second}
+	chatgptEmbedCacheKind  = "chatgpt"
+	chatgptEmbedContextKey = parser.NewContextKey()
+)
+
+const (
+	chatgptEmbedSuccessTTL  = 7 * 24 * time.Hour
+	chatgptEmbedFailureTTL  = 30 * time.Minute
+	chatgptEmbedPendingTTL  = 20 * time.Second
+	chatgptEmbedSyncTimeout = 1200 * time.Millisecond
+)
+
+var chatgptEmbedInFlight = newTTLCache(512)
+
+var (
 	attachmentVideoEmbedKind       = ast.NewNodeKind("AttachmentVideoEmbed")
 	attachmentVideoEmbedContextKey = parser.NewContextKey()
 )
@@ -979,6 +996,14 @@ const (
 	instagramEmbedStatusPending instagramEmbedStatus = iota
 	instagramEmbedStatusFound
 	instagramEmbedStatusFailed
+)
+
+type chatgptEmbedStatus int
+
+const (
+	chatgptEmbedStatusPending chatgptEmbedStatus = iota
+	chatgptEmbedStatusFound
+	chatgptEmbedStatusFailed
 )
 
 type collapsibleSection struct {
@@ -1288,6 +1313,38 @@ func (e *instagramEmbedExtension) Extend(m goldmark.Markdown) {
 	))
 }
 
+type chatgptEmbed struct {
+	ast.BaseBlock
+	Title           string
+	Preview         string
+	OriginalURL     string
+	FallbackMessage string
+}
+
+func (n *chatgptEmbed) Kind() ast.NodeKind {
+	return chatgptEmbedKind
+}
+
+func (n *chatgptEmbed) Dump(source []byte, level int) {
+	ast.DumpHelper(n, source, level, map[string]string{
+		"Title":    n.Title,
+		"Preview":  n.Preview,
+		"Original": n.OriginalURL,
+		"Fallback": n.FallbackMessage,
+	}, nil)
+}
+
+type chatgptEmbedExtension struct{}
+
+func (e *chatgptEmbedExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&chatgptEmbedTransformer{}, 128),
+	))
+	m.Renderer().AddOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newChatGPTEmbedHTMLRenderer(), 535),
+	))
+}
+
 type attachmentVideoEmbedExtension struct{}
 
 func (e *attachmentVideoEmbedExtension) Extend(m goldmark.Markdown) {
@@ -1552,6 +1609,53 @@ func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Re
 	}
 }
 
+type chatgptEmbedTransformer struct{}
+
+func (t *chatgptEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ctx := chatgptEmbedContext(pc)
+	source := reader.Source()
+	var paragraphs []*ast.Paragraph
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if para, ok := n.(*ast.Paragraph); ok {
+			paragraphs = append(paragraphs, para)
+		}
+		return ast.WalkContinue, nil
+	})
+
+	for _, para := range paragraphs {
+		if !isEmbedParagraphParent(para.Parent()) {
+			continue
+		}
+		urlText, ok := paragraphOnlyURL(para, source)
+		if !ok || !isChatGPTShareURL(urlText) {
+			continue
+		}
+		status, title, preview, errMsg := lookupChatGPTEmbed(ctx, urlText)
+		embed := &chatgptEmbed{
+			Title:       title,
+			Preview:     preview,
+			OriginalURL: urlText,
+		}
+		switch status {
+		case chatgptEmbedStatusFailed:
+			embed.Title = ""
+			embed.Preview = ""
+			embed.FallbackMessage = errMsg
+		case chatgptEmbedStatusPending:
+			embed.Title = ""
+			embed.Preview = ""
+			embed.FallbackMessage = "ChatGPT preview loading. Reload to display the card."
+		}
+		parent := para.Parent()
+		if parent != nil {
+			parent.ReplaceChild(parent, para, embed)
+		}
+	}
+}
+
 type attachmentVideoEmbedTransformer struct{}
 
 func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
@@ -1657,6 +1761,46 @@ func textMatchesURL(text string, rawURL string) bool {
 		return true
 	}
 	return false
+}
+
+var metaTagRegexp = regexp.MustCompile(`(?is)<meta\s+[^>]*>`)
+var metaAttrRegexp = regexp.MustCompile(`(?i)([a-zA-Z:-]+)\s*=\s*["']([^"']+)["']`)
+var titleTagRegexp = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+func extractMetaContent(htmlStr string, key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	if key == "" {
+		return ""
+	}
+	for _, tag := range metaTagRegexp.FindAllString(htmlStr, -1) {
+		var name string
+		var content string
+		for _, match := range metaAttrRegexp.FindAllStringSubmatch(tag, -1) {
+			if len(match) != 3 {
+				continue
+			}
+			attrName := strings.ToLower(strings.TrimSpace(match[1]))
+			attrValue := strings.TrimSpace(match[2])
+			switch attrName {
+			case "property", "name":
+				name = strings.ToLower(attrValue)
+			case "content":
+				content = attrValue
+			}
+		}
+		if name == key && content != "" {
+			return html.UnescapeString(content)
+		}
+	}
+	return ""
+}
+
+func extractTitleTag(htmlStr string) string {
+	match := titleTagRegexp.FindStringSubmatch(htmlStr)
+	if len(match) < 2 {
+		return ""
+	}
+	return html.UnescapeString(strings.TrimSpace(match[1]))
 }
 
 func isEmbedParagraphParent(parent ast.Node) bool {
@@ -1978,6 +2122,58 @@ func (r *instagramEmbedHTMLRenderer) renderInstagramEmbed(
 	return ast.WalkContinue, nil
 }
 
+type chatgptEmbedHTMLRenderer struct{}
+
+func newChatGPTEmbedHTMLRenderer() renderer.NodeRenderer {
+	return &chatgptEmbedHTMLRenderer{}
+}
+
+func (r *chatgptEmbedHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(chatgptEmbedKind, r.renderChatGPTEmbed)
+}
+
+func (r *chatgptEmbedHTMLRenderer) renderChatGPTEmbed(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*chatgptEmbed)
+	if n.OriginalURL != "" && n.Title != "" {
+		title := html.EscapeString(n.Title)
+		preview := html.EscapeString(n.Preview)
+		url := html.EscapeString(n.OriginalURL)
+		_, _ = w.WriteString(`<a class="chatgpt-card" href="`)
+		_, _ = w.WriteString(url)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">`)
+		_, _ = w.WriteString(`<div class="chatgpt-card__meta">`)
+		_, _ = w.WriteString(`<div class="chatgpt-card__title">`)
+		_, _ = w.WriteString(title)
+		_, _ = w.WriteString(`</div>`)
+		if preview != "" {
+			_, _ = w.WriteString(`<div class="chatgpt-card__preview">`)
+			_, _ = w.WriteString(preview)
+			_, _ = w.WriteString(`</div>`)
+		}
+		_, _ = w.WriteString(`<div class="chatgpt-card__host">chatgpt.com</div>`)
+		_, _ = w.WriteString(`</div></a>`)
+		return ast.WalkContinue, nil
+	}
+	if n.FallbackMessage != "" && n.OriginalURL != "" {
+		escapedURL := html.EscapeString(n.OriginalURL)
+		escapedMsg := html.EscapeString(n.FallbackMessage)
+		_, _ = w.WriteString(`<div class="chatgpt-card chatgpt-card--fallback">`)
+		_, _ = w.WriteString(`<span>`)
+		_, _ = w.WriteString(escapedMsg)
+		_, _ = w.WriteString(`</span> `)
+		_, _ = w.WriteString(`<a href="`)
+		_, _ = w.WriteString(escapedURL)
+		_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer">Open on ChatGPT</a>`)
+		_, _ = w.WriteString(`</div>`)
+	}
+	return ast.WalkContinue, nil
+}
+
 type attachmentVideoEmbedHTMLRenderer struct{}
 
 func newAttachmentVideoEmbedHTMLRenderer() renderer.NodeRenderer {
@@ -2084,6 +2280,18 @@ func instagramEmbedContext(pc parser.Context) context.Context {
 	return context.TODO()
 }
 
+func chatgptEmbedContext(pc parser.Context) context.Context {
+	if pc == nil {
+		return context.TODO()
+	}
+	if value := pc.Get(chatgptEmbedContextKey); value != nil {
+		if ctx, ok := value.(context.Context); ok && ctx != nil {
+			return ctx
+		}
+	}
+	return context.TODO()
+}
+
 type attachmentVideoEmbedContextValue struct {
 	ctx    context.Context
 	server *Server
@@ -2137,6 +2345,19 @@ func isInstagramURL(raw string) bool {
 	}
 	pathValue := strings.TrimSpace(strings.Trim(parsed.Path, "/"))
 	return pathValue != ""
+}
+
+func isChatGPTShareURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	host = strings.TrimPrefix(host, "www.")
+	if host != "chatgpt.com" {
+		return false
+	}
+	return strings.HasPrefix(parsed.Path, "/s/")
 }
 
 func attachmentVideoFromURL(raw string) (string, string, bool) {
@@ -2257,6 +2478,38 @@ func lookupInstagramEmbed(ctx context.Context, rawURL string) (instagramEmbedSta
 
 	go resolveInstagramEmbedAsync(context.WithoutCancel(ctx), rawURL)
 	return instagramEmbedStatusPending, "", "", ""
+}
+
+func lookupChatGPTEmbed(ctx context.Context, rawURL string) (chatgptEmbedStatus, string, string, string) {
+	if embedCacheStore != nil {
+		entry, ok, err := embedCacheStore.GetEmbedCache(ctx, rawURL, chatgptEmbedCacheKind)
+		if err == nil && ok {
+			if entry.Status == index.EmbedCacheStatusFound {
+				return chatgptEmbedStatusFound, entry.ErrorMsg, entry.EmbedURL, ""
+			}
+			if entry.Status == index.EmbedCacheStatusFailed {
+				message := entry.ErrorMsg
+				if message == "" {
+					message = "ChatGPT preview unavailable."
+				}
+				return chatgptEmbedStatusFailed, "", "", message
+			}
+		}
+	}
+
+	if chatgptEmbedIsInFlight(rawURL) {
+		return chatgptEmbedStatusPending, "", "", ""
+	}
+	chatgptEmbedMarkInFlight(rawURL)
+
+	if title, preview, ok := resolveChatGPTEmbedNow(rawURL, chatgptEmbedSyncTimeout); ok {
+		chatgptEmbedStoreFound(ctx, rawURL, title, preview)
+		chatgptEmbedClearInFlight(rawURL)
+		return chatgptEmbedStatusFound, title, preview, ""
+	}
+
+	go resolveChatGPTEmbedAsync(context.WithoutCancel(ctx), rawURL)
+	return chatgptEmbedStatusPending, "", "", ""
 }
 
 func lookupYouTubeEmbed(ctx context.Context, rawURL string) (youtubeEmbedStatus, string, string, string) {
@@ -2448,6 +2701,58 @@ func resolveYouTubeEmbedWithClient(rawURL string, client *http.Client) (string, 
 	return title, thumb, true
 }
 
+func resolveChatGPTEmbedNow(rawURL string, timeout time.Duration) (string, string, bool) {
+	client := &http.Client{Timeout: timeout}
+	return resolveChatGPTEmbedWithClient(rawURL, client)
+}
+
+func resolveChatGPTEmbedAsync(ctx context.Context, rawURL string) {
+	title, preview, ok := resolveChatGPTEmbedWithClient(rawURL, chatgptEmbedHTTPClient)
+	if !ok {
+		chatgptEmbedStoreFailure(ctx, rawURL, "ChatGPT preview unavailable.")
+		chatgptEmbedClearInFlight(rawURL)
+		return
+	}
+
+	chatgptEmbedStoreFound(ctx, rawURL, title, preview)
+	chatgptEmbedClearInFlight(rawURL)
+}
+
+func resolveChatGPTEmbedWithClient(rawURL string, client *http.Client) (string, string, bool) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", "", false
+	}
+	req.Header.Set("User-Agent", "gwiki")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", "", false
+	}
+	htmlStr := string(body)
+	title := extractMetaContent(htmlStr, "og:title")
+	if title == "" {
+		title = extractTitleTag(htmlStr)
+	}
+	preview := extractMetaContent(htmlStr, "og:description")
+	if preview == "" {
+		preview = extractMetaContent(htmlStr, "description")
+	}
+	title = strings.TrimSpace(title)
+	preview = strings.TrimSpace(preview)
+	if title == "" {
+		return "", "", false
+	}
+	return title, preview, true
+}
+
 func tiktokEmbedIsInFlight(rawURL string) bool {
 	return tiktokEmbedInFlight.IsActive(rawURL, time.Now())
 }
@@ -2534,6 +2839,51 @@ func instagramEmbedStoreFailure(ctx context.Context, rawURL string, message stri
 		ErrorMsg:  message,
 		UpdatedAt: now,
 		ExpiresAt: now.Add(instagramEmbedFailureTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
+}
+
+func chatgptEmbedIsInFlight(rawURL string) bool {
+	return chatgptEmbedInFlight.IsActive(rawURL, time.Now())
+}
+
+func chatgptEmbedMarkInFlight(rawURL string) {
+	chatgptEmbedInFlight.Upsert(rawURL, time.Now().Add(chatgptEmbedPendingTTL))
+}
+
+func chatgptEmbedClearInFlight(rawURL string) {
+	chatgptEmbedInFlight.Delete(rawURL)
+}
+
+func chatgptEmbedStoreFound(ctx context.Context, rawURL string, title string, preview string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      chatgptEmbedCacheKind,
+		EmbedURL:  preview,
+		Status:    index.EmbedCacheStatusFound,
+		ErrorMsg:  title,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(chatgptEmbedSuccessTTL),
+	}
+	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
+}
+
+func chatgptEmbedStoreFailure(ctx context.Context, rawURL string, message string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      chatgptEmbedCacheKind,
+		Status:    index.EmbedCacheStatusFailed,
+		ErrorMsg:  message,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(chatgptEmbedFailureTTL),
 	}
 	_ = embedCacheStore.UpsertEmbedCache(ctx, entry)
 }
@@ -5588,6 +5938,7 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	parseContext.Set(youtubeEmbedContextKey, ctx)
 	parseContext.Set(tiktokEmbedContextKey, ctx)
 	parseContext.Set(instagramEmbedContextKey, ctx)
+	parseContext.Set(chatgptEmbedContextKey, ctx)
 	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
 	if state, ok := collapsibleSectionStateFromContext(ctx); ok {
 		parseContext.Set(collapsibleSectionContextKey, state)
@@ -5608,6 +5959,7 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	parseContext.Set(youtubeEmbedContextKey, ctx)
 	parseContext.Set(tiktokEmbedContextKey, ctx)
 	parseContext.Set(instagramEmbedContextKey, ctx)
+	parseContext.Set(chatgptEmbedContextKey, ctx)
 	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
 	if state, ok := collapsibleSectionStateFromContext(ctx); ok {
 		parseContext.Set(collapsibleSectionContextKey, state)
