@@ -1342,6 +1342,29 @@
         window.history.forward();
       });
 
+      document.addEventListener("keydown", function (event) {
+        if (event.ctrlKey || event.metaKey || event.altKey) {
+          return;
+        }
+        if (event.key !== "j" && event.key !== "k" && event.key !== "y") {
+          return;
+        }
+        var target = event.target;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+          return;
+        }
+        if (launcher.classList.contains("is-open")) {
+          return;
+        }
+        event.preventDefault();
+        if (event.key === "y") {
+          window.scrollTo({top: 0, behavior: "smooth"});
+          return;
+        }
+        var delta = event.key === "j" ? 120 : -120;
+        window.scrollBy({top: delta, left: 0, behavior: "smooth"});
+      });
+
       document.addEventListener("click", function (event) {
         var target = event.target.closest(".js-quick-launcher-open");
         if (!target) {
