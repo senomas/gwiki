@@ -50,6 +50,7 @@ var (
 	wikiLinkRe       = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	taskCheckboxRe   = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
 	taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
+	taskDoneTokenRe  = regexp.MustCompile(`\s+done:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`)
 )
 
 var mdRenderer = goldmark.New(
@@ -424,7 +425,7 @@ func taskCheckboxHTML(fileID, lineNo int, hash string, checked bool) string {
 		checkedAttr = " checked"
 	}
 	return fmt.Sprintf(
-		`<input type="checkbox"%s data-task-id="%s" id="%s" hx-post="/tasks/toggle" hx-trigger="change" hx-swap="outerHTML" hx-vals='{"task_id":"%s"}'>`,
+		`<input type="checkbox"%s data-task-id="%s" id="%s" hx-post="/tasks/toggle" hx-trigger="change" hx-target="closest li" hx-swap="outerHTML" hx-vals='{"task_id":"%s"}'>`,
 		checkedAttr,
 		id,
 		id,
@@ -845,7 +846,10 @@ var (
 	whatsappLinkKind = ast.NewNodeKind("WhatsAppLink")
 )
 
-var dueTokenRe = regexp.MustCompile(`(?i)(?:@due\((\d{4}-\d{2}-\d{2})\)|due:(\d{4}-\d{2}-\d{2}))`)
+var (
+	dueTokenRe  = regexp.MustCompile(`(?i)(?:@due\((\d{4}-\d{2}-\d{2})\)|due:(\d{4}-\d{2}-\d{2}))`)
+	doneTokenRe = regexp.MustCompile(`(?i)done:(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})`)
+)
 
 type mapsEmbedStatus int
 
@@ -3979,8 +3983,7 @@ func normalizeFuzzyTerm(value string) string {
 }
 
 func applyRenderReplacements(input string) string {
-	input = replaceDueTokens(input)
-	return input
+	return replaceTaskTokens(input)
 }
 
 func replaceDueTokens(input string) string {
@@ -4003,6 +4006,45 @@ func replaceDueTokens(input string) string {
 		label := parsed.Format("2 Jan 2006")
 		return fmt.Sprintf(`<span class="due-badge">Due %s</span>`, label)
 	})
+}
+
+func replaceDoneTokens(input string) string {
+	return doneTokenRe.ReplaceAllStringFunc(input, func(match string) string {
+		parts := doneTokenRe.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		rawDate := parts[1]
+		rawTime := parts[2]
+		parsed, err := time.Parse("2006-01-02", rawDate)
+		if err != nil {
+			return match
+		}
+		label := parsed.Format("2 Jan 2006")
+		return fmt.Sprintf(`<span class="due-badge">Done %s %s</span>`, label, rawTime)
+	})
+}
+
+func replaceTaskTokens(input string) string {
+	lines := strings.Split(input, "\n")
+	for i, line := range lines {
+		if doneTokenRe.MatchString(line) {
+			isTask := strings.Contains(line, "type=\"checkbox\"")
+			isChecked := strings.Contains(line, "checked")
+			if isTask && !isChecked {
+				lines[i] = doneTokenRe.ReplaceAllString(line, "")
+				continue
+			}
+			line = dueTokenRe.ReplaceAllString(line, "")
+			line = replaceDoneTokens(line)
+			lines[i] = line
+			continue
+		}
+		line = replaceDueTokens(line)
+		line = replaceDoneTokens(line)
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fuzzyMatchTag(term string, candidate string) bool {
@@ -4702,7 +4744,13 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	if strings.ToLower(match[2]) == "x" {
 		newMark = " "
 	}
-	newLine := match[1] + newMark + match[3]
+	lineBody := taskDoneTokenRe.ReplaceAllString(match[3], "")
+	lineBody = strings.TrimRight(lineBody, " \t")
+	if newMark == "x" {
+		timestamp := time.Now().Format("2006-01-02T15:04:05")
+		lineBody = strings.TrimRight(lineBody, " \t") + " done:" + timestamp
+	}
+	newLine := match[1] + newMark + lineBody
 	lines[lineNo-1] = newLine
 	updatedBody := strings.Join(lines, "\n")
 	updatedContent := updatedBody
@@ -4726,8 +4774,33 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 	}
 	newHash := index.TaskLineHash(newLine)
+	renderedLine, err := s.renderMarkdown(r.Context(), []byte(newLine))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	renderedLine = decorateTaskCheckboxes(renderedLine, fileID, []index.Task{
+		{LineNo: lineNo, Hash: newHash, Done: strings.TrimSpace(newMark) != ""},
+	})
+	listItem := extractFirstListItem(renderedLine)
+	if listItem == "" {
+		listItem = taskCheckboxHTML(fileID, lineNo, newHash, strings.TrimSpace(newMark) != "")
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(taskCheckboxHTML(fileID, lineNo, newHash, strings.TrimSpace(newMark) != "")))
+	_, _ = w.Write([]byte(listItem))
+}
+
+func extractFirstListItem(htmlStr string) string {
+	start := strings.Index(htmlStr, "<li")
+	if start == -1 {
+		return ""
+	}
+	end := strings.Index(htmlStr[start:], "</li>")
+	if end == -1 {
+		return ""
+	}
+	end += start + len("</li>")
+	return strings.TrimSpace(htmlStr[start:end])
 }
 
 func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, activeDate string, activeSearch string, folder string, rootOnly bool) ([]NoteCard, int, bool, error) {
@@ -6447,6 +6520,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	} else {
 		mergedContent = updated
 	}
+	mergedContent = sanitizeTaskDoneTokens(mergedContent)
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
 	desiredPath := fs.EnsureMDExt(slugify(derivedTitle))
 	if folder != "" {
@@ -6621,6 +6695,31 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 	http.Redirect(w, r, targetURL, http.StatusSeeOther)
+}
+
+func sanitizeTaskDoneTokens(content string) string {
+	frontmatter := index.FrontmatterBlock(content)
+	body := content
+	if frontmatter != "" {
+		body = strings.TrimPrefix(content, frontmatter)
+		body = strings.TrimPrefix(body, "\n")
+	}
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		match := taskToggleLineRe.FindStringSubmatch(line)
+		if len(match) == 0 {
+			continue
+		}
+		if strings.ToLower(match[2]) != "x" {
+			cleaned := taskDoneTokenRe.ReplaceAllString(line, "")
+			lines[i] = strings.TrimRight(cleaned, " \t")
+		}
+	}
+	body = strings.Join(lines, "\n")
+	if frontmatter == "" {
+		return body
+	}
+	return frontmatter + "\n" + body
 }
 
 type collapsedSectionsPayload struct {
