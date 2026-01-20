@@ -87,6 +87,12 @@ func Run(ctx context.Context, repoPath string) (string, error) {
 		return output.String(), err
 	}
 	if !hasChanges {
+		if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
+			writeLine("auto-sync: rebase failed")
+			_ = trimLogFile(logFile, 1000)
+			return output.String(), nil
+		}
 		writeLine("auto-sync: no changes")
 		_ = trimLogFile(logFile, 1000)
 		return output.String(), nil
@@ -110,6 +116,7 @@ func Run(ctx context.Context, repoPath string) (string, error) {
 }
 
 func gitHasStagedChanges(ctx context.Context, dir string, env []string, writer io.Writer) (bool, error) {
+	writeCommand(writer, "git", "diff", "--cached", "--quiet")
 	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet")
 	cmd.Dir = dir
 	cmd.Env = env
@@ -118,17 +125,24 @@ func gitHasStagedChanges(ctx context.Context, dir string, env []string, writer i
 		_, _ = writer.Write(output)
 	}
 	if err == nil {
+		_, _ = fmt.Fprintln(writer, "-> ok (no changes)")
+		_, _ = fmt.Fprintln(writer)
 		return false, nil
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		if exitErr.ExitCode() == 1 {
+			_, _ = fmt.Fprintln(writer, "-> changes staged")
+			_, _ = fmt.Fprintln(writer)
 			return true, nil
 		}
 	}
+	_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+	_, _ = fmt.Fprintln(writer)
 	return false, err
 }
 
 func runGitCommand(ctx context.Context, dir string, env []string, writer io.Writer, name string, args ...string) (string, error) {
+	writeCommand(writer, name, args...)
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
@@ -136,7 +150,18 @@ func runGitCommand(ctx context.Context, dir string, env []string, writer io.Writ
 	if len(output) > 0 {
 		_, _ = writer.Write(output)
 	}
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+	} else {
+		_, _ = fmt.Fprintln(writer, "-> ok")
+	}
+	_, _ = fmt.Fprintln(writer)
 	return string(output), err
+}
+
+func writeCommand(writer io.Writer, name string, args ...string) {
+	cmd := append([]string{name}, args...)
+	_, _ = fmt.Fprintf(writer, "\n$ %s\n", strings.Join(cmd, " "))
 }
 
 func trimLogFile(path string, maxLines int) error {
