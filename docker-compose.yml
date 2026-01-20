@@ -14,6 +14,10 @@ services:
       - WIKI_REPO_PATH=/notes
       - WIKI_DATA_PATH=/data
       - TZ=${TZ:-Asia/Jakarta}
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.sync.schedule: "@every 15m"
+      ofelia.job-exec.sync.command: "/usr/local/bin/sync"
   ofelia:
     image: mcuadros/ofelia:latest
     command: daemon --docker
