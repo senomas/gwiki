@@ -785,6 +785,13 @@
               <span class="quick-launcher__hint">Jump</span>
             </span>
           </a>
+          <button class="quick-launcher__item js-list-view-action" type="button" data-label="list view" data-action="toggle-list-view">
+            <span class="quick-launcher__icon">V</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">List view</span>
+              <span class="quick-launcher__hint">Compact</span>
+            </span>
+          </button>
           <a class="quick-launcher__item" href="/notes/{{if .NoteMeta.ID}}{{.NoteMeta.ID}}{{else}}{{.NotePath}}{{end}}/edit" data-label="edit">
             <span class="quick-launcher__icon">E</span>
             <span class="quick-launcher__meta">
@@ -817,6 +824,13 @@
               <span class="quick-launcher__hint">Git</span>
             </span>
           </a>
+          <button class="quick-launcher__item js-list-view-action" type="button" data-label="list view" data-action="toggle-list-view">
+            <span class="quick-launcher__icon">V</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">List view</span>
+              <span class="quick-launcher__hint">Compact</span>
+            </span>
+          </button>
           <a class="quick-launcher__item" href="/search" data-label="search">
             <span class="quick-launcher__icon">F</span>
             <span class="quick-launcher__meta">
@@ -987,6 +1001,40 @@
 
       function buildNoteURL(path) {
         return encodeURI("/notes/" + path);
+      }
+
+      function noteListView() {
+        return localStorage.getItem("noteListView") || "compact";
+      }
+
+      function applyNoteListView(root) {
+        var mode = noteListView();
+        var container = root || document;
+        var lists = container.querySelectorAll("[data-note-list]");
+        lists.forEach(function (list) {
+          var bodies = list.querySelectorAll(".note-body");
+          bodies.forEach(function (body) {
+            if (mode === "compact") {
+              body.classList.add("note-body--short");
+            } else {
+              body.classList.remove("note-body--short");
+            }
+          });
+        });
+      }
+
+      function updateListViewAction() {
+        var actions = document.querySelectorAll(".js-list-view-action");
+        if (!actions.length) {
+          return;
+        }
+        actions.forEach(function (action) {
+          var hint = action.querySelector(".quick-launcher__hint");
+          if (!hint) {
+            return;
+          }
+          hint.textContent = noteListView() === "compact" ? "Compact" : "Full";
+        });
       }
 
       function openWikiLauncher(ref, element) {
@@ -1210,6 +1258,14 @@
           closeLauncher();
           return;
         }
+        if (target.getAttribute("data-action") === "toggle-list-view") {
+          var next = noteListView() === "compact" ? "full" : "compact";
+          localStorage.setItem("noteListView", next);
+          applyNoteListView();
+          updateListViewAction();
+          closeLauncher();
+          return;
+        }
         if (target.tagName === "BUTTON") {
           target.click();
           return;
@@ -1390,6 +1446,17 @@
         updateSubmenu(target);
       });
 
+      actionList.addEventListener("click", function (event) {
+        var target = event.target.closest(".quick-launcher__item");
+        if (!target) {
+          return;
+        }
+        if (target.getAttribute("data-action") === "toggle-list-view") {
+          event.preventDefault();
+          activateActionTarget(target);
+        }
+      });
+
       input.addEventListener("input", function (event) {
         var value = event.target.value || "";
         if (value.startsWith("#")) {
@@ -1464,6 +1531,19 @@
           activateItem(tagSuggest, 0);
         }
       });
+
+      document.body.addEventListener("htmx:afterSwap", function (event) {
+        if (event.target && event.target.matches && event.target.matches("[data-note-list]")) {
+          applyNoteListView(event.target);
+          return;
+        }
+        if (event.target && event.target.querySelector && event.target.querySelector("[data-note-list]")) {
+          applyNoteListView(event.target);
+        }
+      });
+
+      applyNoteListView();
+      updateListViewAction();
 
       document.addEventListener("click", function (event) {
         var target = event.target.closest(".js-wiki-missing");
