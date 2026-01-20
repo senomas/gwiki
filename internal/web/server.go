@@ -115,4 +115,5 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/todo", s.handleTodo)
 	s.mux.HandleFunc("/due", s.handleDue)
 	s.mux.HandleFunc("/tasks/toggle", s.handleToggleTask)
+	s.mux.HandleFunc("/rebuild", s.handleRebuild)
 }

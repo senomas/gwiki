@@ -66,6 +66,11 @@ type ViewData struct {
 	JournalYear      JournalYearNode
 	JournalMonth     JournalMonthNode
 	DueByPath        map[string]string
+	RebuildScanned   int
+	RebuildUpdated   int
+	RebuildCleaned   int
+	RebuildDuration  string
+	RebuildError     string
 }
 
 type BacklinkView struct {

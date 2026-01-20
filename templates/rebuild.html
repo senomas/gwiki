@@ -1,0 +1,48 @@
+{{define "rebuild"}}
+<div class="app-shell relative min-h-screen overflow-hidden">
+  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
+  <div class="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-8 md:flex-row md:gap-10 md:px-6 md:py-10">
+    {{template "sidebar" .}}
+
+    <section class="flex-1 space-y-6">
+      <div class="js-history-back-row flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
+        <a class="js-history-back text-slate-400 transition hover:text-slate-200" href="#" onclick="history.back(); return false;" style="display:none;">Back</a>
+      </div>
+      <header class="space-y-2">
+        <h1 class="text-2xl font-semibold text-slate-100">Rebuild index</h1>
+        <p class="text-sm text-slate-400">Rebuilt the database from the filesystem notes.</p>
+      </header>
+
+      {{if .RebuildError}}
+        <div class="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+          <div class="text-xs uppercase tracking-[0.2em] text-red-300">Rebuild failed</div>
+          <div class="mt-2">{{.RebuildError}}</div>
+        </div>
+      {{else}}
+        <div class="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+          <div class="text-xs uppercase tracking-[0.2em] text-emerald-200">Rebuild complete</div>
+          <div class="mt-2">Duration {{.RebuildDuration}}</div>
+        </div>
+      {{end}}
+
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div class="rounded-2xl border border-slate-800/70 bg-[#121417]/85 p-4">
+          <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Scanned</div>
+          <div class="mt-2 text-2xl font-semibold text-slate-100">{{.RebuildScanned}}</div>
+        </div>
+        <div class="rounded-2xl border border-slate-800/70 bg-[#121417]/85 p-4">
+          <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Updated</div>
+          <div class="mt-2 text-2xl font-semibold text-slate-100">{{.RebuildUpdated}}</div>
+        </div>
+        <div class="rounded-2xl border border-slate-800/70 bg-[#121417]/85 p-4">
+          <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Cleaned</div>
+          <div class="mt-2 text-2xl font-semibold text-slate-100">{{.RebuildCleaned}}</div>
+        </div>
+      </div>
+      <div class="text-sm text-slate-500">
+        Triggered via <a class="text-sky-300 hover:text-sky-200" href="/rebuild">/rebuild</a>.
+      </div>
+    </section>
+  </div>
+</div>
+{{end}}

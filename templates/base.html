@@ -545,8 +545,8 @@
     }
   </style>
 </head>
-<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily")}}
+<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
+{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild")}}
   {{.ContentHTML}}
 {{else}}
   <div class="mx-auto max-w-5xl px-6 py-8">

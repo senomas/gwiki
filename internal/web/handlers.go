@@ -363,6 +363,10 @@ func parseTagsParam(raw string) []string {
 		if tag == "" {
 			continue
 		}
+		tag = strings.TrimSuffix(tag, "!")
+		if tag == "" {
+			continue
+		}
 		if _, ok := seen[tag]; ok {
 			continue
 		}
@@ -4531,6 +4535,33 @@ func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
 		JournalSidebar:   journalSidebar,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleRebuild(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	start := time.Now()
+	scanned, updated, cleaned, err := s.idx.RebuildFromFSWithStats(r.Context(), s.cfg.RepoPath)
+	duration := time.Since(start).Round(time.Millisecond).String()
+	data := ViewData{
+		Title:           "Rebuild Index",
+		ContentTemplate: "rebuild",
+		RebuildScanned:  scanned,
+		RebuildUpdated:  updated,
+		RebuildCleaned:  cleaned,
+		RebuildDuration: duration,
+	}
+	if err != nil {
+		data.RebuildError = err.Error()
+		w.WriteHeader(http.StatusInternalServerError)
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
