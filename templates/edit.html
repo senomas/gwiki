@@ -95,15 +95,44 @@
           <a class="rounded-xl border border-slate-700/70 bg-[#121417] px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="{{.ReturnURL}}" data-return-link>Cancel</a>
           <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Save</button>
         </div>
-      </form>
-      <form class="mt-4 space-y-3" action="{{if .NotePath}}/notes/{{.NotePath}}/upload{{else}}/notes/new/upload{{end}}" method="post" enctype="multipart/form-data">
+  </form>
+  <form class="mt-4 space-y-3" action="{{if .NotePath}}/notes/{{.NotePath}}/upload{{else}}/notes/new/upload{{end}}" method="post" enctype="multipart/form-data">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
         <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Attachments</label>
         <div class="flex flex-wrap items-center gap-3">
           <input class="text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-200 hover:file:bg-slate-700" type="file" name="attachment" required>
           <button class="rounded-lg border border-slate-700/70 bg-[#171a1f] px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Upload</button>
         </div>
-      </form>
+  </form>
+  <div id="edit-launcher" class="quick-launcher" aria-hidden="true">
+    <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick insert">
+      <input id="edit-launcher-input" class="quick-launcher__input" type="search" placeholder="Insert..." autocomplete="off">
+      <div id="edit-launcher-actions" class="quick-launcher__list">
+        <button class="quick-launcher__item" type="button" data-action="todo" data-label="todo task">
+          <span class="quick-launcher__icon">T</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">TODO</span>
+            <span class="quick-launcher__hint">- [ ]</span>
+          </span>
+        </button>
+        <button class="quick-launcher__item" type="button" data-action="date" data-label="current date today">
+          <span class="quick-launcher__icon">D</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Current date</span>
+            <span class="quick-launcher__hint">d MMM yyyy</span>
+          </span>
+        </button>
+        <button class="quick-launcher__item" type="button" data-action="time" data-label="current time now">
+          <span class="quick-launcher__icon">H</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Current time</span>
+            <span class="quick-launcher__hint">HH:mm:ss</span>
+          </span>
+        </button>
+      </div>
+      <div id="edit-launcher-notes" class="quick-launcher__list hidden"></div>
+    </div>
+  </div>
       {{if .Attachments}}
       <div class="mt-4 rounded-2xl border border-slate-800/70 bg-[#0f1216]/80 p-4">
         <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Uploaded files</div>
@@ -192,6 +221,281 @@
         }
         event.preventDefault();
         window.location.href = cancel.getAttribute("href");
+      }
+    });
+  })();
+</script>
+<script>
+  (function () {
+    var textarea = document.getElementById("note-content");
+    var launcher = document.getElementById("edit-launcher");
+    var input = document.getElementById("edit-launcher-input");
+    var actionList = document.getElementById("edit-launcher-actions");
+    var notesList = document.getElementById("edit-launcher-notes");
+    if (!textarea || !launcher || !input || !actionList || !notesList || !window.htmx) {
+      return;
+    }
+
+    function openLauncher() {
+      launcher.classList.add("is-open");
+      launcher.setAttribute("aria-hidden", "false");
+      input.value = "";
+      notesList.classList.add("hidden");
+      notesList.innerHTML = "";
+      actionList.classList.remove("hidden");
+      filterActions("");
+      input.focus();
+    }
+
+    function closeLauncher() {
+      launcher.classList.remove("is-open");
+      launcher.setAttribute("aria-hidden", "true");
+      textarea.focus();
+    }
+
+    function listVisibleItems(list) {
+      if (!list) {
+        return [];
+      }
+      return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item"), function (item) {
+        return !item.classList.contains("hidden");
+      });
+    }
+
+    function listCombinedItems() {
+      return listVisibleItems(actionList).concat(listVisibleItems(notesList));
+    }
+
+    function activateItem(list, index) {
+      var items = listVisibleItems(list);
+      if (!items.length) {
+        return;
+      }
+      var target = items[index];
+      if (!target) {
+        return;
+      }
+      items.forEach(function (item) {
+        item.classList.toggle("is-active", item === target);
+      });
+      target.scrollIntoView({block: "nearest"});
+    }
+
+    function activateCombined(index) {
+      var items = listCombinedItems();
+      if (!items.length) {
+        return;
+      }
+      var target = items[index];
+      if (!target) {
+        return;
+      }
+      items.forEach(function (item) {
+        item.classList.toggle("is-active", item === target);
+      });
+      target.scrollIntoView({block: "nearest"});
+    }
+
+    function activeIndex(list) {
+      var items = listVisibleItems(list);
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].classList.contains("is-active")) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    function activeCombinedIndex() {
+      var items = listCombinedItems();
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].classList.contains("is-active")) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    function moveActive(list, delta) {
+      var items = listVisibleItems(list);
+      if (!items.length) {
+        return;
+      }
+      var index = activeIndex(list);
+      var nextIndex = index + delta;
+      if (index < 0) {
+        nextIndex = delta > 0 ? 0 : items.length - 1;
+      }
+      if (nextIndex < 0) {
+        nextIndex = items.length - 1;
+      }
+      if (nextIndex >= items.length) {
+        nextIndex = 0;
+      }
+      activateItem(list, nextIndex);
+    }
+
+    function moveCombined(delta) {
+      var items = listCombinedItems();
+      if (!items.length) {
+        return;
+      }
+      var index = activeCombinedIndex();
+      var nextIndex = index + delta;
+      if (index < 0) {
+        nextIndex = delta > 0 ? 0 : items.length - 1;
+      }
+      if (nextIndex < 0) {
+        nextIndex = items.length - 1;
+      }
+      if (nextIndex >= items.length) {
+        nextIndex = 0;
+      }
+      activateCombined(nextIndex);
+    }
+
+    function filterActions(value) {
+      var query = value.toLowerCase().trim();
+      var items = actionList.querySelectorAll(".quick-launcher__item");
+      items.forEach(function (item) {
+        var label = item.getAttribute("data-label") || "";
+        if (!query || label.indexOf(query) !== -1) {
+          item.classList.remove("hidden");
+        } else {
+          item.classList.add("hidden");
+        }
+      });
+    }
+
+    function insertText(insert) {
+      var start = textarea.selectionStart || 0;
+      var end = textarea.selectionEnd || 0;
+      textarea.setRangeText(insert, start, end, "end");
+      textarea.focus();
+    }
+
+    function formatDate(now) {
+      var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return now.getDate() + " " + months[now.getMonth()] + " " + now.getFullYear();
+    }
+
+    function formatTime(now) {
+      var pad = function (value) {
+        return String(value).padStart(2, "0");
+      };
+      return pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+    }
+
+    function handleAction(action) {
+      var now = new Date();
+      if (action === "todo") {
+        insertText("- [ ] ");
+      } else if (action === "date") {
+        insertText(formatDate(now));
+      } else if (action === "time") {
+        insertText(formatTime(now));
+      }
+      closeLauncher();
+    }
+
+    function handleNote(item) {
+      var path = item.getAttribute("data-note-path") || "";
+      if (path) {
+        insertText("[[" + path + "]] ");
+      }
+      closeLauncher();
+    }
+
+    textarea.addEventListener("keydown", function (event) {
+      if (!event.ctrlKey || event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (launcher.classList.contains("is-open")) {
+        closeLauncher();
+        return;
+      }
+      openLauncher();
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (!launcher.classList.contains("is-open")) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeLauncher();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        var combined = listCombinedItems();
+        var combinedIndex = activeCombinedIndex();
+        var target = combinedIndex >= 0 ? combined[combinedIndex] : combined[0];
+        if (!target) {
+          return;
+        }
+        if (notesList.contains(target)) {
+          handleNote(target);
+          return;
+        }
+        handleAction(target.getAttribute("data-action") || "");
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveCombined(1);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveCombined(-1);
+        return;
+      }
+    });
+
+    actionList.addEventListener("click", function (event) {
+      var item = event.target.closest(".quick-launcher__item");
+      if (!item) {
+        return;
+      }
+      handleAction(item.getAttribute("data-action") || "");
+    });
+
+    notesList.addEventListener("click", function (event) {
+      var item = event.target.closest(".quick-launcher__item");
+      if (!item) {
+        return;
+      }
+      handleNote(item);
+    });
+
+    input.addEventListener("input", function (event) {
+      var value = event.target.value || "";
+      if (value.trim() === "") {
+        notesList.classList.add("hidden");
+        notesList.innerHTML = "";
+        actionList.classList.remove("hidden");
+        filterActions("");
+        activateCombined(0);
+        return;
+      }
+      filterActions(value);
+      notesList.classList.remove("hidden");
+      htmx.ajax("GET", "/quick/notes?q=" + encodeURIComponent(value), "#edit-launcher-notes");
+    });
+
+    document.body.addEventListener("htmx:afterSwap", function (event) {
+      if (event.target !== notesList) {
+        return;
+      }
+      activateCombined(0);
+    });
+
+    launcher.addEventListener("click", function (event) {
+      if (event.target === launcher) {
+        closeLauncher();
       }
     });
   })();
