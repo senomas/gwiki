@@ -756,6 +756,13 @@
     <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
       <input id="quick-launcher-input" class="quick-launcher__input" type="search" placeholder="Search..." autocomplete="off">
       <div id="quick-launcher-actions" class="quick-launcher__list">
+        <a id="quick-launcher-create-note" class="quick-launcher__item hidden" href="#" data-label="create note" data-fixed="true" data-action="wiki-create">
+          <span class="quick-launcher__icon">+</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Create note</span>
+            <span class="quick-launcher__hint">New</span>
+          </span>
+        </a>
         {{if eq .ContentTemplate "view"}}
           <a class="quick-launcher__item" href="/notes/new" data-label="new note">
             <span class="quick-launcher__icon">+</span>
@@ -904,6 +911,7 @@
       var actionList = document.getElementById("quick-launcher-actions");
       var notesList = document.getElementById("quick-launcher-notes");
       var submenu = document.getElementById("quick-launcher-submenu-modal");
+      var createNote = document.getElementById("quick-launcher-create-note");
       var noteOpen = document.getElementById("quick-note-open");
       var noteEdit = document.getElementById("quick-note-edit");
       var noteDelete = document.getElementById("quick-note-delete");
@@ -911,11 +919,19 @@
       var actionDelete = document.getElementById("quick-action-delete");
       var tagWrap = document.getElementById("quick-launcher-tags");
       var tagSuggest = document.getElementById("quick-tag-suggest");
-      if (!launcher || !input || !actionList || !notesList || !submenu || !noteOpen || !noteEdit || !noteDelete || !submenuPanel || !tagWrap || !tagSuggest) {
+      if (!launcher || !input || !actionList || !notesList || !submenu || !noteOpen || !noteEdit || !noteDelete || !submenuPanel || !tagWrap || !tagSuggest || !createNote) {
         return;
       }
 
+      var wikiLinkMode = false;
+      var wikiLinkRef = "";
+      var wikiLinkElement = null;
+      var wikiLinkNotePath = "";
+
       function openLauncher() {
+        if (!wikiLinkMode) {
+          resetWikiLinkMode();
+        }
         launcher.classList.add("is-open");
         launcher.setAttribute("aria-hidden", "false");
         input.value = "";
@@ -932,12 +948,68 @@
       function closeLauncher() {
         launcher.classList.remove("is-open");
         launcher.setAttribute("aria-hidden", "true");
+        resetWikiLinkMode();
+      }
+
+      function resetWikiLinkMode() {
+        wikiLinkMode = false;
+        wikiLinkRef = "";
+        wikiLinkElement = null;
+        wikiLinkNotePath = "";
+        createNote.classList.add("hidden");
+        createNote.removeAttribute("href");
+      }
+
+      function ensureNotePath(raw) {
+        var value = (raw || "").trim();
+        if (!value) {
+          return value;
+        }
+        if (!/\.md$/i.test(value)) {
+          value += ".md";
+        }
+        return value;
+      }
+
+      function buildNoteURL(path) {
+        return encodeURI("/notes/" + path);
+      }
+
+      function openWikiLauncher(ref, element) {
+        wikiLinkMode = true;
+        wikiLinkRef = ref;
+        wikiLinkElement = element;
+        var body = element ? element.closest(".note-body") : null;
+        wikiLinkNotePath = body ? (body.getAttribute("data-note-path") || "") : "";
+        var targetPath = ensureNotePath(ref);
+        createNote.classList.remove("hidden");
+        createNote.setAttribute("href", "/notes/new?path=" + encodeURIComponent(targetPath));
+        openLauncher();
+        input.value = ref;
+        input.dispatchEvent(new Event("input", {bubbles: true}));
+        activateCombined(0);
       }
 
       function filterActions(value) {
         var query = value.toLowerCase().trim();
         var items = actionList.querySelectorAll(".quick-launcher__item");
         items.forEach(function (item) {
+          if (item.getAttribute("data-fixed") === "true") {
+            if (!wikiLinkMode && item === createNote) {
+              item.classList.add("hidden");
+              return;
+            }
+            if (wikiLinkMode && item !== createNote) {
+              item.classList.add("hidden");
+              return;
+            }
+            item.classList.remove("hidden");
+            return;
+          }
+          if (wikiLinkMode) {
+            item.classList.add("hidden");
+            return;
+          }
           var label = item.getAttribute("data-label") || "";
           if (!query || label.indexOf(query) !== -1) {
             item.classList.remove("hidden");
@@ -1107,6 +1179,13 @@
         if (!target) {
           return;
         }
+        if (target.getAttribute("data-action") === "wiki-create") {
+          var href = target.getAttribute("href");
+          if (href) {
+            window.location.href = href;
+          }
+          return;
+        }
         var tag = target.getAttribute("data-tag");
         if (tag) {
           window.location.href = "/?t=" + encodeURIComponent(tag);
@@ -1128,6 +1207,9 @@
         if (!item) {
           submenu.classList.remove("is-open");
           submenu.setAttribute("aria-hidden", "true");
+          return;
+        }
+        if (wikiLinkMode) {
           return;
         }
         var path = item.getAttribute("data-note-path");
@@ -1231,7 +1313,11 @@
             var combinedIndex = activeCombinedIndex();
             var combinedTarget = combinedIndex >= 0 ? combined[combinedIndex] : combined[0];
             if (notesList.contains(combinedTarget)) {
-              updateSubmenu(combinedTarget);
+              if (wikiLinkMode) {
+                applyWikiLinkSelection(combinedTarget);
+              } else {
+                updateSubmenu(combinedTarget);
+              }
             } else {
               activateActionTarget(combinedTarget);
             }
@@ -1283,6 +1369,10 @@
         clearActive(actionList);
         clearActive(notesList);
         target.classList.add("is-active");
+        if (wikiLinkMode) {
+          applyWikiLinkSelection(target);
+          return;
+        }
         updateSubmenu(target);
       });
 
@@ -1360,6 +1450,72 @@
           activateItem(tagSuggest, 0);
         }
       });
+
+      document.addEventListener("click", function (event) {
+        var target = event.target.closest(".js-wiki-missing");
+        var ref = "";
+        if (!target) {
+          var link = event.target.closest('a[href^="/__missing__?ref="]');
+          if (!link) {
+            return;
+          }
+          target = link;
+          var href = link.getAttribute("href") || "";
+          try {
+            var url = new URL(href, window.location.origin);
+            ref = url.searchParams.get("ref") || "";
+          } catch (err) {
+            ref = "";
+          }
+        }
+        event.preventDefault();
+        if (!ref) {
+          ref = target.getAttribute("data-wiki-ref") || target.textContent || "";
+        }
+        ref = ref.trim();
+        if (!ref) {
+          return;
+        }
+        openWikiLauncher(ref, target);
+      });
+
+      function applyWikiLinkSelection(item) {
+        if (!wikiLinkMode || !item) {
+          return;
+        }
+        var path = item.getAttribute("data-note-path") || "";
+        if (!path || !wikiLinkNotePath || !wikiLinkRef) {
+          return;
+        }
+        var payload = {
+          from: wikiLinkRef,
+          to: path,
+        };
+        fetch(buildNoteURL(wikiLinkNotePath) + "/wikilink", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        })
+          .then(function (resp) {
+            if (!resp.ok) {
+              throw new Error("update failed");
+            }
+            return resp.json();
+          })
+          .then(function (data) {
+            if (wikiLinkElement) {
+              var label = data.title || item.getAttribute("data-note-title") || path;
+              wikiLinkElement.textContent = label;
+              wikiLinkElement.setAttribute("href", "/notes/" + data.path);
+              wikiLinkElement.classList.remove("js-wiki-missing");
+              wikiLinkElement.removeAttribute("data-wiki-ref");
+            }
+            closeLauncher();
+          })
+          .catch(function () {
+            closeLauncher();
+          });
+      }
     })();
   </script>
   <script>

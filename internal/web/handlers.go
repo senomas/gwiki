@@ -5348,6 +5348,16 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteNote(w, r, resolved)
 		return
 	}
+	if strings.HasSuffix(pathPart, "/wikilink") {
+		base := strings.TrimSuffix(pathPart, "/wikilink")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleUpdateWikiLink(w, r, resolved)
+		return
+	}
 	if strings.HasSuffix(pathPart, "/collapsed") {
 		base := strings.TrimSuffix(pathPart, "/collapsed")
 		resolved, err := s.resolveNotePath(r.Context(), base)
@@ -5879,6 +5889,105 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	}
 	_ = s.idx.RemoveNoteByPath(ctx, notePath)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, notePath string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	var payload struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		payload.From = r.Form.Get("from")
+		payload.To = r.Form.Get("to")
+	}
+	from := strings.TrimSpace(payload.From)
+	to := strings.TrimSpace(payload.To)
+	if from == "" || to == "" {
+		http.Error(w, "missing wiki link", http.StatusBadRequest)
+		return
+	}
+	to = strings.TrimPrefix(to, "/notes/")
+	to = strings.TrimPrefix(to, "notes/")
+	to = strings.TrimPrefix(to, "/")
+	normalized, err := fs.NormalizeNotePath(to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !strings.HasSuffix(strings.ToLower(normalized), ".md") {
+		normalized = normalized + ".md"
+	}
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	contentBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	content := normalizeLineEndings(string(contentBytes))
+	frontmatter := index.FrontmatterBlock(content)
+	body := index.StripFrontmatter(content)
+	re := regexp.MustCompile(`\[\[\s*` + regexp.QuoteMeta(from) + `\s*\]\]`)
+	updatedBody := re.ReplaceAllString(body, "[["+normalized+"]]")
+	if updatedBody == body {
+		http.Error(w, "wiki link not found", http.StatusConflict)
+		return
+	}
+	mergedContent := updatedBody
+	if frontmatter != "" {
+		mergedContent = frontmatter + "\n" + updatedBody
+	}
+	mergedContent = normalizeLineEndings(mergedContent)
+	mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, "", historyUser(r.Context()))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeLock, err := s.acquireNoteWriteLock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer writeLock.Release()
+	if err := commitRepoIfDirty(r.Context(), s.cfg.RepoPath, "auto: backup before edit", fullPath); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	unlock := s.locker.Lock(notePath)
+	if err := fs.WriteFileAtomic(fullPath, []byte(mergedContent), 0o644); err != nil {
+		unlock()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	unlock()
+	if info, err := os.Stat(fullPath); err == nil {
+		_ = s.idx.IndexNote(r.Context(), notePath, []byte(mergedContent), info.ModTime(), info.Size())
+	}
+	title := ""
+	if note, err := s.idx.NoteSummaryByPath(r.Context(), normalized); err == nil {
+		title = note.Title
+	}
+	resp := map[string]string{"path": normalized, "title": title}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, notePath string) {
@@ -7065,13 +7174,13 @@ func (s *Server) expandWikiLinks(ctx context.Context, input string) string {
 			return match
 		}
 		target, label, err := s.resolveWikiLink(ctx, trimmed)
-		if err != nil || target == "" {
-			target = fs.EnsureMDExt(slugify(trimmed))
-		}
 		if label == "" {
 			label = trimmed
 		}
-		return fmt.Sprintf("[%s](/notes/%s)", label, target)
+		if err == nil && target != "" {
+			return fmt.Sprintf("[%s](/notes/%s)", label, target)
+		}
+		return fmt.Sprintf("[%s](/__missing__?ref=%s)", label, url.QueryEscape(trimmed))
 	})
 }
 
