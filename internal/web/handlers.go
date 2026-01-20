@@ -5347,6 +5347,7 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	s.attachViewData(r, &data)
+	data.Short = true
 	s.views.RenderTemplate(w, "note_detail", data)
 }
 

@@ -18,31 +18,6 @@
         </div>
       </div>
       {{if and $.AuthEnabled $.IsAuthenticated}}
-      <div>
-        <input id="delete-modal-{{safeID .Path}}-{{safeID .Meta.ID}}" class="peer hidden" type="checkbox">
-        <details class="relative">
-        <summary class="list-none cursor-pointer rounded-full border border-slate-700/70 bg-[#15181c] p-2 text-slate-300 transition hover:border-slate-500 hover:text-slate-200">
-          &#8942;
-        </summary>
-        <div class="absolute right-0 z-10 mt-2 w-36 rounded-xl border border-slate-800/80 bg-[#101317] py-2 text-xs text-slate-200 shadow-[0_20px_60px_-40px_rgba(0,0,0,0.9)]">
-          <a class="block px-3 py-2 hover:bg-[#1a1f26]" href="/notes/{{.Path}}">Open</a>
-          <a class="block px-3 py-2 hover:bg-[#1a1f26]" href="/notes/{{if .Meta.ID}}{{.Meta.ID}}{{else}}{{.Path}}{{end}}/edit">Edit</a>
-          <label class="block cursor-pointer px-3 py-2 text-left text-rose-300 hover:bg-[#1a1f26]" for="delete-modal-{{safeID .Path}}-{{safeID .Meta.ID}}">Delete</label>
-        </div>
-      </details>
-        <div class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/70 px-4 peer-checked:flex">
-          <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
-            <div class="text-sm font-semibold text-slate-900">Delete note?</div>
-            <div class="mt-2 text-sm text-slate-600">This action cannot be undone.</div>
-            <div class="mt-4 flex flex-wrap justify-end gap-2">
-              <label class="cursor-pointer rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" for="delete-modal-{{safeID .Path}}-{{safeID .Meta.ID}}">Cancel</label>
-              <form action="/notes/{{if .Meta.ID}}{{.Meta.ID}}{{else}}{{.Path}}{{end}}/delete" method="post">
-                <button class="rounded-md bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700" type="submit">Delete</button>
-              </form>
-            </div>
-          </div>
-        </div>
-      </div>
       {{end}}
     </div>
   </div>

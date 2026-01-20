@@ -16,6 +16,7 @@ type ViewData struct {
 	NotePath         string
 	NoteTitle        string
 	NoteFileName     string
+	Short            bool
 	RawContent       string
 	FrontmatterBlock string
 	SaveAction       string

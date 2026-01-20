@@ -3,9 +3,9 @@
   {{if .NotePath}}
     <h1 class="text-2xl font-semibold text-slate-100">
       {{if .NoteURL}}
-        <a class="text-sky-300 hover:text-sky-200" href="{{.NoteURL}}">{{.NoteTitle}}</a>
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}">{{.NoteTitle}}</a>
       {{else}}
-        <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.NotePath}}">{{.NoteTitle}}</a>
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="/notes/{{.NotePath}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="/notes/{{.NotePath}}">{{.NoteTitle}}</a>
       {{end}}
     </h1>
   {{else}}
@@ -48,7 +48,7 @@
       </div>
     </details>
   {{end}}
-  <div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="{{.NoteMeta.ID}}" data-note-path="{{.NotePath}}">
+  <div class="note-body text-sm leading-relaxed text-slate-200{{if .Short}} note-body--short{{end}}" data-note-id="{{.NoteMeta.ID}}" data-note-path="{{.NotePath}}">
     {{if .RenderedHTML}}{{.RenderedHTML}}{{else}}{{template "note_content" .}}{{end}}
   </div>
 </div>
@@ -59,11 +59,11 @@
   {{if .NotePath}}
     <h1 class="text-2xl font-semibold text-slate-100">
       {{if .NoteURL}}
-        <a class="text-sky-300 hover:text-sky-200" href="{{.NoteURL}}">
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}">
           {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
         </a>
       {{else}}
-      <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.NotePath}}">
+      <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="/notes/{{.NotePath}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="/notes/{{.NotePath}}">
         {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
       </a>
       {{end}}

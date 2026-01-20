@@ -526,6 +526,10 @@
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
+    .note-body--short {
+      max-height: 18rem;
+      overflow: hidden;
+    }
     .note-skeleton-line {
       height: 12px;
       border-radius: 999px;
@@ -666,10 +670,25 @@
       flex-direction: column;
       gap: 0.4rem;
     }
-    #quick-note-delete {
+    .note-actions-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 23, 0.6);
+      backdrop-filter: blur(8px);
+      z-index: 70;
+    }
+    .note-actions-modal.is-open {
+      display: flex;
+    }
+    #quick-note-delete,
+    #note-action-delete {
       width: 100%;
     }
-    #quick-note-delete .quick-launcher__item {
+    #quick-note-delete .quick-launcher__item,
+    #note-action-delete .quick-launcher__item {
       width: 100%;
     }
     .quick-launcher__item--danger {
@@ -847,6 +866,33 @@
           </button>
         </form>
       </div>
+    </div>
+  </div>
+  <div id="note-actions-modal" class="note-actions-modal" aria-hidden="true">
+    <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
+      <a id="note-action-open" class="quick-launcher__item" href="#">
+        <span class="quick-launcher__icon">O</span>
+        <span class="quick-launcher__meta">
+          <span class="quick-launcher__label">Open</span>
+          <span class="quick-launcher__hint">View</span>
+        </span>
+      </a>
+      <a id="note-action-edit" class="quick-launcher__item" href="#">
+        <span class="quick-launcher__icon">E</span>
+        <span class="quick-launcher__meta">
+          <span class="quick-launcher__label">Edit</span>
+          <span class="quick-launcher__hint">Modify</span>
+        </span>
+      </a>
+      <form id="note-action-delete" method="post">
+        <button class="quick-launcher__item quick-launcher__item--danger" type="submit">
+          <span class="quick-launcher__icon">D</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Delete</span>
+            <span class="quick-launcher__hint">Remove</span>
+          </span>
+        </button>
+      </form>
     </div>
   </div>
   <script>
@@ -1286,6 +1332,115 @@
         }
         if (event.target === tagSuggest) {
           activateItem(tagSuggest, 0);
+        }
+      });
+    })();
+  </script>
+  <script>
+    (function () {
+      var modal = document.getElementById("note-actions-modal");
+      var openLink = document.getElementById("note-action-open");
+      var editLink = document.getElementById("note-action-edit");
+      var deleteForm = document.getElementById("note-action-delete");
+      if (!modal || !openLink || !editLink || !deleteForm) {
+        return;
+      }
+
+      function closeModal() {
+        modal.classList.remove("is-open");
+        modal.setAttribute("aria-hidden", "true");
+      }
+
+      function openModal(notePath, noteID, noteURL) {
+        var editTarget = noteID || notePath;
+        openLink.setAttribute("href", noteURL || ("/notes/" + notePath));
+        editLink.setAttribute("href", "/notes/" + editTarget + "/edit");
+        deleteForm.setAttribute("action", "/notes/" + editTarget + "/delete");
+        modal.classList.add("is-open");
+        modal.setAttribute("aria-hidden", "false");
+        openLink.focus({preventScroll: true});
+      }
+
+      function closestElement(target, selector) {
+        if (!target) {
+          return null;
+        }
+        var el = target.nodeType === 1 ? target : target.parentElement;
+        if (!el || !el.closest) {
+          return null;
+        }
+        return el.closest(selector);
+      }
+
+      document.addEventListener("click", function (event) {
+        var target = closestElement(event.target, ".js-note-actions");
+        if (!target) {
+          return;
+        }
+        var inFeed = document.getElementById("notes-feed");
+        if (!inFeed) {
+          return;
+        }
+        var notePath = target.getAttribute("data-note-path");
+        if (!notePath) {
+          return;
+        }
+        event.preventDefault();
+        openModal(notePath, target.getAttribute("data-note-id") || "", target.getAttribute("data-note-url") || "");
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") {
+          return;
+        }
+        var active = document.activeElement;
+        if (!active) {
+          return;
+        }
+        var target = closestElement(active, ".js-note-actions");
+        if (!target) {
+          return;
+        }
+        var inFeed = document.getElementById("notes-feed");
+        if (!inFeed) {
+          return;
+        }
+        var notePath = target.getAttribute("data-note-path");
+        if (!notePath) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        openModal(notePath, target.getAttribute("data-note-id") || "", target.getAttribute("data-note-url") || "");
+      });
+
+      deleteForm.addEventListener("submit", function (event) {
+        if (!confirm("Delete this note?")) {
+          event.preventDefault();
+        }
+      });
+
+      modal.addEventListener("click", function (event) {
+        if (event.target === modal) {
+          closeModal();
+        }
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (!modal.classList.contains("is-open")) {
+          return;
+        }
+        if (event.defaultPrevented) {
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeModal();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          openLink.click();
         }
       });
     })();
