@@ -6756,6 +6756,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		targetURL = returnURL
 	}
 	if isHTMX(r) {
+		w.Header().Set("X-Redirect-Location", targetURL)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -6808,22 +6809,25 @@ func commitRepoIfDirty(ctx context.Context, repoPath string, message string, pat
 	}
 	statusCmd := exec.CommandContext(ctx, "git", statusArgs...)
 	statusCmd.Dir = repoPath
-	statusOut, err := statusCmd.Output()
+	statusOut, err := statusCmd.CombinedOutput()
 	if err != nil {
-		return err
+		msg := strings.TrimSpace(string(statusOut))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git status failed: %s", msg)
 	}
 	if len(bytes.TrimSpace(statusOut)) == 0 {
 		return nil
 	}
-	addArgs := []string{"add", "-A"}
-	if len(pathspecs) > 0 {
-		addArgs = append(addArgs, "--")
-		addArgs = append(addArgs, pathspecs...)
-	}
-	addCmd := exec.CommandContext(ctx, "git", addArgs...)
+	addCmd := exec.CommandContext(ctx, "git", "add", "-A")
 	addCmd.Dir = repoPath
-	if err := addCmd.Run(); err != nil {
-		return err
+	if output, err := addCmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git add failed: %s", msg)
 	}
 	commitCmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
 	commitCmd.Dir = repoPath
@@ -6847,6 +6851,12 @@ func gitPathspecs(repoPath string, paths []string) ([]string, error) {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
 		}
 		rel, err := filepath.Rel(repoPath, p)
 		if err != nil {
@@ -6941,6 +6951,14 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {
+	if status >= http.StatusInternalServerError || data.ErrorMessage != "" {
+		slog.Error(
+			"edit error",
+			"path", r.URL.Path,
+			"status", status,
+			"error", data.ErrorMessage,
+		)
+	}
 	w.WriteHeader(status)
 	if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
 		data.NoteMeta = index.FrontmatterAttributes(data.FrontmatterBlock)
@@ -7110,7 +7128,11 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 				return "", "", err
 			}
 			if exists {
-				return variant, "", nil
+				note, err := s.idx.NoteSummaryByPath(ctx, variant)
+				if err != nil {
+					return "", "", err
+				}
+				return variant, note.Title, nil
 			}
 		}
 	}
