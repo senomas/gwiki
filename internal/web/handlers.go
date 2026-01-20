@@ -4578,6 +4578,13 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 	output, err := syncer.Run(r.Context(), s.cfg.RepoPath)
+	if err == nil {
+		scanned, updated, cleaned, recheckErr := s.idx.RecheckFromFS(r.Context(), s.cfg.RepoPath)
+		output += fmt.Sprintf("\nindex: recheck scanned=%d updated=%d cleaned=%d", scanned, updated, cleaned)
+		if recheckErr != nil {
+			err = recheckErr
+		}
+	}
 	duration := time.Since(start).Round(time.Millisecond).String()
 	data := ViewData{
 		Title:           "Git Sync",
