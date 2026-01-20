@@ -2,6 +2,10 @@
 
 Minimal wiki server for a notes repo.
 
+## Docs
+
+- Usage guide: `docs/usage.md`
+
 ## Requirements
 
 - Docker (recommended)
@@ -43,15 +47,6 @@ Optional Compose envs:
 
 - `TZ` (default: `Asia/Jakarta`)
 - `UID` and `GID` (default: `1000`, container runs as this user)
-
-### Make targets
-
-```bash
-make docker-build
-WIKI_REPO_PATH=/path/to/your/wiki/repo WIKI_DATA_PATH=/path/to/your/wiki/.wiki make docker-run
-make run
-WIKI_REPO_PATH=/path/to/your/wiki/repo make run
-```
 
 ## Run (Local)
 
@@ -97,21 +92,4 @@ The command writes to `WIKI_AUTH_FILE` when set, otherwise to
 
 ## Note format
 
-gwiki supports a few wiki-style extensions in Markdown:
-
-- Wiki links: `[[My Note]]` renders as a link to `/notes/my-note.md`.
-- Wiki links by id: `[[file-id]]` resolves to the note with matching frontmatter `id`.
-- Nested tags with `/`: `#travel/food` expands to tags `travel` and `travel/food`.
-- Embedded maps: a `https://maps.app.goo.gl/...` link auto-renders as an iframe.
-
-Example:
-
-```markdown
-# Staycation
-
-Planning #travel/food and #travel/japan
-
-[[Ama Awa Resort]]
-
-https://maps.app.goo.gl/FiNsEb1Q9CSfmT1SA
-```
+See `docs/usage.md` for supported Markdown and tips.
