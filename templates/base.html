@@ -110,6 +110,11 @@
       border-bottom: 2px solid rgba(15, 23, 42, 0.95);
       transform: rotate(45deg);
     }
+    .note-body li:has(input[type="checkbox"]:focus-visible) {
+      outline: 1px solid rgba(125, 211, 252, 0.6);
+      outline-offset: 4px;
+      border-radius: 0.6rem;
+    }
     .note-body input[type="checkbox"] {
       appearance: none;
       -webkit-appearance: none;
