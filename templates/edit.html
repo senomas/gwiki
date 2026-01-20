@@ -2,9 +2,14 @@
 <div class="app-shell relative min-h-screen overflow-hidden">
   <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
   <div class="relative mx-auto min-h-screen max-w-4xl px-4 py-8 md:px-6 md:py-10">
-    <div class="js-history-back-row flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
-      <a class="js-history-back text-slate-400 transition hover:text-slate-200" href="#" onclick="history.back(); return false;" style="display:none;">Back</a>
-      <span class="text-slate-400">Edit</span>
+    <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
+      <div class="flex items-center gap-2">
+        {{if and .AuthEnabled .IsAuthenticated}}
+          <a class="js-quick-launcher-open rounded-xl border border-slate-800/80 bg-[#15181c] px-2.5 py-1 text-[10px] text-slate-300" href="#">{{.CurrentUser.Name}}</a>
+        {{else if .AuthEnabled}}
+          <a class="text-slate-400 transition hover:text-slate-200" href="/login">Login</a>
+        {{end}}
+      </div>
     </div>
     <article class="mt-6 rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
       <h1 class="text-2xl font-semibold text-slate-100">Edit {{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>

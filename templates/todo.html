@@ -5,14 +5,20 @@
     {{template "sidebar" .}}
 
     <section class="flex-1 space-y-6">
-      <div class="js-history-back-row flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
-        <a class="js-history-back text-slate-400 transition hover:text-slate-200" href="#" onclick="history.back(); return false;" style="display:none;">Back</a>
+      <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
+        <div class="flex items-center gap-2">
+          {{if and .AuthEnabled .IsAuthenticated}}
+            <a class="js-quick-launcher-open rounded-xl border border-slate-800/80 bg-[#15181c] px-2.5 py-1 text-[10px] text-slate-300" href="#">{{.CurrentUser.Name}}</a>
+          {{else if .AuthEnabled}}
+            <a class="text-slate-400 transition hover:text-slate-200" href="/login">Login</a>
+          {{end}}
+        </div>
       </div>
       <header>
         <h1 class="text-2xl font-semibold text-slate-100">Todo</h1>
         <p class="text-sm text-slate-400">Unchecked tasks.</p>
       </header>
-      <div class="space-y-4">
+      <div class="space-y-4" data-note-list>
         {{if not .TodoNotes}}
           <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
             No open tasks.

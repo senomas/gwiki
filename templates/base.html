@@ -683,6 +683,9 @@
     .note-actions-modal.is-open {
       display: flex;
     }
+    .note-actions-modal .quick-launcher__item.hidden {
+      display: none;
+    }
     #quick-note-delete,
     #note-action-delete {
       width: 100%;
@@ -737,8 +740,7 @@
       </form>
       {{if and .AuthEnabled .IsAuthenticated}}
         <div class="flex items-center gap-2 text-sm">
-          <span class="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-slate-700">{{.CurrentUser.Name}}</span>
-          <a class="rounded-md border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50" href="/logout">Logout</a>
+          <a class="js-quick-launcher-open rounded-md border border-slate-300 bg-white px-2.5 py-1 text-slate-700" href="#">{{.CurrentUser.Name}}</a>
         </div>
       {{else if .AuthEnabled}}
         <a class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" href="/login">Login</a>
@@ -895,25 +897,6 @@
       </form>
     </div>
   </div>
-  <script>
-    (function () {
-      var links = document.querySelectorAll(".js-history-back");
-      var rows = document.querySelectorAll(".js-history-back-row");
-      if (!links.length && !rows.length) {
-        return;
-      }
-      if (window.history.length > 1) {
-        links.forEach(function (link) {
-          link.style.display = "";
-        });
-        return;
-      }
-      rows.forEach(function (row) {
-        row.classList.remove("justify-between");
-        row.classList.add("justify-end");
-      });
-    })();
-  </script>
   <script>
     (function () {
       var launcher = document.getElementById("quick-launcher");
@@ -1173,6 +1156,15 @@
         openLauncher();
       });
 
+      document.addEventListener("click", function (event) {
+        var target = event.target.closest(".js-quick-launcher-open");
+        if (!target) {
+          return;
+        }
+        event.preventDefault();
+        openLauncher();
+      });
+
       document.addEventListener("keydown", function (event) {
         if (!launcher.classList.contains("is-open")) {
           return;
@@ -1342,6 +1334,7 @@
       var openLink = document.getElementById("note-action-open");
       var editLink = document.getElementById("note-action-edit");
       var deleteForm = document.getElementById("note-action-delete");
+      var defaultAction = null;
       if (!modal || !openLink || !editLink || !deleteForm) {
         return;
       }
@@ -1349,16 +1342,42 @@
       function closeModal() {
         modal.classList.remove("is-open");
         modal.setAttribute("aria-hidden", "true");
+        openLink.classList.remove("hidden");
+        defaultAction = null;
       }
 
-      function openModal(notePath, noteID, noteURL) {
+      function openModal(notePath, noteID, noteURL, showOpen) {
         var editTarget = noteID || notePath;
         openLink.setAttribute("href", noteURL || ("/notes/" + notePath));
         editLink.setAttribute("href", "/notes/" + editTarget + "/edit");
         deleteForm.setAttribute("action", "/notes/" + editTarget + "/delete");
+        if (showOpen) {
+          openLink.classList.remove("hidden");
+          defaultAction = openLink;
+        } else {
+          openLink.classList.add("hidden");
+          defaultAction = editLink;
+        }
         modal.classList.add("is-open");
         modal.setAttribute("aria-hidden", "false");
-        openLink.focus({preventScroll: true});
+        if (defaultAction) {
+          defaultAction.focus({preventScroll: true});
+        }
+      }
+
+      function isInNoteList(target) {
+        var list = document.querySelector("[data-note-list]");
+        if (!list || !target) {
+          return false;
+        }
+        var el = target;
+        while (el) {
+          if (el === list) {
+            return true;
+          }
+          el = el.parentElement;
+        }
+        return false;
       }
 
       function closestElement(target, selector) {
@@ -1377,16 +1396,12 @@
         if (!target) {
           return;
         }
-        var inFeed = document.getElementById("notes-feed");
-        if (!inFeed) {
-          return;
-        }
         var notePath = target.getAttribute("data-note-path");
         if (!notePath) {
           return;
         }
         event.preventDefault();
-        openModal(notePath, target.getAttribute("data-note-id") || "", target.getAttribute("data-note-url") || "");
+        openModal(notePath, target.getAttribute("data-note-id") || "", target.getAttribute("data-note-url") || "", isInNoteList(target));
       });
 
       document.addEventListener("keydown", function (event) {
@@ -1401,17 +1416,13 @@
         if (!target) {
           return;
         }
-        var inFeed = document.getElementById("notes-feed");
-        if (!inFeed) {
-          return;
-        }
         var notePath = target.getAttribute("data-note-path");
         if (!notePath) {
           return;
         }
         event.preventDefault();
         event.stopPropagation();
-        openModal(notePath, target.getAttribute("data-note-id") || "", target.getAttribute("data-note-url") || "");
+        openModal(notePath, target.getAttribute("data-note-id") || "", target.getAttribute("data-note-url") || "", isInNoteList(target));
       });
 
       deleteForm.addEventListener("submit", function (event) {
@@ -1440,7 +1451,14 @@
         }
         if (event.key === "Enter") {
           event.preventDefault();
-          openLink.click();
+          var active = document.activeElement;
+          if (active && modal.contains(active) && typeof active.click === "function") {
+            active.click();
+            return;
+          }
+          if (defaultAction) {
+            defaultAction.click();
+          }
         }
       });
     })();
