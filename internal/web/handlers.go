@@ -5833,6 +5833,14 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 			attachmentPath = s.noteAttachmentsDir(meta.ID)
 		}
 	}
+	commitPaths := []string{fullPath}
+	if attachmentPath != "" {
+		commitPaths = append(commitPaths, attachmentPath)
+	}
+	if err := commitRepoIfDirty(ctx, s.cfg.RepoPath, "auto: backup before delete", commitPaths...); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	unlock := s.locker.Lock(notePath)
 	defer unlock()
 
@@ -6650,6 +6658,25 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusInternalServerError)
 		return
 	}
+	metaAttrs := index.FrontmatterAttributes(mergedContent)
+	commitPaths := []string{fullPath}
+	if metaAttrs.ID != "" {
+		commitPaths = append(commitPaths, s.noteAttachmentsDir(metaAttrs.ID))
+	}
+	if err := commitRepoIfDirty(ctx, s.cfg.RepoPath, "auto: backup before edit", commitPaths...); err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         targetPath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+			ReturnURL:        returnURL,
+		}, http.StatusInternalServerError)
+		return
+	}
 	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
@@ -6720,6 +6747,84 @@ func sanitizeTaskDoneTokens(content string) string {
 		return body
 	}
 	return frontmatter + "\n" + body
+}
+
+func commitRepoIfDirty(ctx context.Context, repoPath string, message string, paths ...string) error {
+	if repoPath == "" {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	pathspecs, err := gitPathspecs(repoPath, paths)
+	if err != nil {
+		return err
+	}
+	statusArgs := []string{"status", "--porcelain"}
+	if len(pathspecs) > 0 {
+		statusArgs = append(statusArgs, "--")
+		statusArgs = append(statusArgs, pathspecs...)
+	}
+	statusCmd := exec.CommandContext(ctx, "git", statusArgs...)
+	statusCmd.Dir = repoPath
+	statusOut, err := statusCmd.Output()
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(statusOut)) == 0 {
+		return nil
+	}
+	addArgs := []string{"add", "-A"}
+	if len(pathspecs) > 0 {
+		addArgs = append(addArgs, "--")
+		addArgs = append(addArgs, pathspecs...)
+	}
+	addCmd := exec.CommandContext(ctx, "git", addArgs...)
+	addCmd.Dir = repoPath
+	if err := addCmd.Run(); err != nil {
+		return err
+	}
+	commitCmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
+	commitCmd.Dir = repoPath
+	if output, err := commitCmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git commit failed: %s", msg)
+	}
+	return nil
+}
+
+func gitPathspecs(repoPath string, paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	seen := map[string]struct{}{}
+	pathspecs := make([]string, 0, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		rel, err := filepath.Rel(repoPath, p)
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(rel, "..") || rel == "." {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		pathspecs = append(pathspecs, rel)
+	}
+	return pathspecs, nil
 }
 
 type collapsedSectionsPayload struct {
