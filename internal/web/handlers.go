@@ -1395,10 +1395,35 @@ func (t *youtubeEmbedTransformer) Transform(node *ast.Document, reader text.Read
 			// Skip paragraphs already replaced during link processing.
 			continue
 		}
-		urlText, ok := blockOnlyURL(block, source)
+		if urlText, ok := blockOnlyURL(block, source); ok {
+			if !isYouTubeURL(urlText) {
+				continue
+			}
+			status, title, thumb, errMsg := lookupYouTubeEmbed(ctx, urlText)
+			embed := &youtubeEmbed{
+				Title:        title,
+				ThumbnailURL: thumb,
+				OriginalURL:  urlText,
+			}
+			switch status {
+			case youtubeEmbedStatusFailed:
+				embed.Title = ""
+				embed.ThumbnailURL = ""
+				embed.FallbackMessage = errMsg
+			case youtubeEmbedStatusPending:
+				embed.Title = ""
+				embed.ThumbnailURL = ""
+				embed.FallbackMessage = "YouTube preview loading. Reload to display the card."
+			}
+			parent := block.Parent()
+			replaceBlockWithEmbed(parent, block, embed)
+			continue
+		}
+		urlText, hasTextBefore, _, linkNode, ok := blockSingleLinkWithText(block, source)
 		if !ok || !isYouTubeURL(urlText) {
 			continue
 		}
+		block.RemoveChild(block, linkNode)
 		status, title, thumb, errMsg := lookupYouTubeEmbed(ctx, urlText)
 		embed := &youtubeEmbed{
 			Title:        title,
@@ -1416,7 +1441,15 @@ func (t *youtubeEmbedTransformer) Transform(node *ast.Document, reader text.Read
 			embed.FallbackMessage = "YouTube preview loading. Reload to display the card."
 		}
 		parent := block.Parent()
-		replaceBlockWithEmbed(parent, block, embed)
+		if parent == nil {
+			continue
+		}
+		if hasTextBefore {
+			parent.InsertAfter(parent, block, embed)
+			continue
+		}
+		parent.ReplaceChild(parent, block, embed)
+		parent.InsertAfter(parent, embed, block)
 	}
 }
 
@@ -1443,10 +1476,35 @@ func (t *tiktokEmbedTransformer) Transform(node *ast.Document, reader text.Reade
 		if !isEmbedParagraphParent(block.Parent()) {
 			continue
 		}
-		urlText, ok := blockOnlyURL(block, source)
+		if urlText, ok := blockOnlyURL(block, source); ok {
+			if !isTikTokURL(urlText) {
+				continue
+			}
+			status, title, thumb, errMsg := lookupTikTokEmbed(ctx, urlText)
+			embed := &tiktokEmbed{
+				Title:        title,
+				ThumbnailURL: thumb,
+				OriginalURL:  urlText,
+			}
+			switch status {
+			case tiktokEmbedStatusFailed:
+				embed.Title = ""
+				embed.ThumbnailURL = ""
+				embed.FallbackMessage = errMsg
+			case tiktokEmbedStatusPending:
+				embed.Title = ""
+				embed.ThumbnailURL = ""
+				embed.FallbackMessage = "TikTok preview loading. Reload to display the card."
+			}
+			parent := block.Parent()
+			replaceBlockWithEmbed(parent, block, embed)
+			continue
+		}
+		urlText, hasTextBefore, _, linkNode, ok := blockSingleLinkWithText(block, source)
 		if !ok || !isTikTokURL(urlText) {
 			continue
 		}
+		block.RemoveChild(block, linkNode)
 		status, title, thumb, errMsg := lookupTikTokEmbed(ctx, urlText)
 		embed := &tiktokEmbed{
 			Title:        title,
@@ -1464,7 +1522,15 @@ func (t *tiktokEmbedTransformer) Transform(node *ast.Document, reader text.Reade
 			embed.FallbackMessage = "TikTok preview loading. Reload to display the card."
 		}
 		parent := block.Parent()
-		replaceBlockWithEmbed(parent, block, embed)
+		if parent == nil {
+			continue
+		}
+		if hasTextBefore {
+			parent.InsertAfter(parent, block, embed)
+			continue
+		}
+		parent.ReplaceChild(parent, block, embed)
+		parent.InsertAfter(parent, embed, block)
 	}
 }
 
@@ -1491,10 +1557,35 @@ func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Re
 		if !isEmbedParagraphParent(block.Parent()) {
 			continue
 		}
-		urlText, ok := blockOnlyURL(block, source)
+		if urlText, ok := blockOnlyURL(block, source); ok {
+			if !isInstagramURL(urlText) {
+				continue
+			}
+			status, title, thumb, errMsg := lookupInstagramEmbed(ctx, urlText)
+			embed := &instagramEmbed{
+				Title:        title,
+				ThumbnailURL: thumb,
+				OriginalURL:  urlText,
+			}
+			switch status {
+			case instagramEmbedStatusFailed:
+				embed.Title = ""
+				embed.ThumbnailURL = ""
+				embed.FallbackMessage = errMsg
+			case instagramEmbedStatusPending:
+				embed.Title = ""
+				embed.ThumbnailURL = ""
+				embed.FallbackMessage = "Instagram preview loading. Reload to display the card."
+			}
+			parent := block.Parent()
+			replaceBlockWithEmbed(parent, block, embed)
+			continue
+		}
+		urlText, hasTextBefore, _, linkNode, ok := blockSingleLinkWithText(block, source)
 		if !ok || !isInstagramURL(urlText) {
 			continue
 		}
+		block.RemoveChild(block, linkNode)
 		status, title, thumb, errMsg := lookupInstagramEmbed(ctx, urlText)
 		embed := &instagramEmbed{
 			Title:        title,
@@ -1512,7 +1603,15 @@ func (t *instagramEmbedTransformer) Transform(node *ast.Document, reader text.Re
 			embed.FallbackMessage = "Instagram preview loading. Reload to display the card."
 		}
 		parent := block.Parent()
-		replaceBlockWithEmbed(parent, block, embed)
+		if parent == nil {
+			continue
+		}
+		if hasTextBefore {
+			parent.InsertAfter(parent, block, embed)
+			continue
+		}
+		parent.ReplaceChild(parent, block, embed)
+		parent.InsertAfter(parent, embed, block)
 	}
 }
 
@@ -1539,10 +1638,35 @@ func (t *chatgptEmbedTransformer) Transform(node *ast.Document, reader text.Read
 		if !isEmbedParagraphParent(block.Parent()) {
 			continue
 		}
-		urlText, ok := blockOnlyURL(block, source)
+		if urlText, ok := blockOnlyURL(block, source); ok {
+			if !isChatGPTShareURL(urlText) {
+				continue
+			}
+			status, title, preview, errMsg := lookupChatGPTEmbed(ctx, urlText)
+			embed := &chatgptEmbed{
+				Title:       title,
+				Preview:     preview,
+				OriginalURL: urlText,
+			}
+			switch status {
+			case chatgptEmbedStatusFailed:
+				embed.Title = ""
+				embed.Preview = ""
+				embed.FallbackMessage = errMsg
+			case chatgptEmbedStatusPending:
+				embed.Title = ""
+				embed.Preview = ""
+				embed.FallbackMessage = "ChatGPT preview loading. Reload to display the card."
+			}
+			parent := block.Parent()
+			replaceBlockWithEmbed(parent, block, embed)
+			continue
+		}
+		urlText, hasTextBefore, _, linkNode, ok := blockSingleLinkWithText(block, source)
 		if !ok || !isChatGPTShareURL(urlText) {
 			continue
 		}
+		block.RemoveChild(block, linkNode)
 		status, title, preview, errMsg := lookupChatGPTEmbed(ctx, urlText)
 		embed := &chatgptEmbed{
 			Title:       title,
@@ -1560,7 +1684,15 @@ func (t *chatgptEmbedTransformer) Transform(node *ast.Document, reader text.Read
 			embed.FallbackMessage = "ChatGPT preview loading. Reload to display the card."
 		}
 		parent := block.Parent()
-		replaceBlockWithEmbed(parent, block, embed)
+		if parent == nil {
+			continue
+		}
+		if hasTextBefore {
+			parent.InsertAfter(parent, block, embed)
+			continue
+		}
+		parent.ReplaceChild(parent, block, embed)
+		parent.InsertAfter(parent, embed, block)
 	}
 }
 
@@ -1830,12 +1962,13 @@ func blockOnlyURL(block ast.Node, source []byte) (string, bool) {
 	hasTask := blockHasTaskCheckbox(block)
 	var b strings.Builder
 	hasLink := false
+	hasURLText := false
 	for child := block.FirstChild(); child != nil; child = child.NextSibling() {
 		switch node := child.(type) {
 		case *extensionast.TaskCheckBox:
 			continue
 		case *ast.Link:
-			if hasLink {
+			if hasLink || hasURLText {
 				return "", false
 			}
 			hasLink = true
@@ -1845,7 +1978,7 @@ func blockOnlyURL(block ast.Node, source []byte) (string, bool) {
 			if node.AutoLinkType != ast.AutoLinkURL {
 				return "", false
 			}
-			if hasLink {
+			if hasLink || hasURLText {
 				return "", false
 			}
 			hasLink = true
@@ -1865,19 +1998,113 @@ func blockOnlyURL(block ast.Node, source []byte) (string, bool) {
 				}
 				return "", false
 			}
-			if b.Len() > 0 {
+			if !linkifyURLRegexp.MatchString(text) {
 				return "", false
 			}
+			if hasURLText {
+				return "", false
+			}
+			hasURLText = true
+			b.Reset()
+			b.WriteString(text)
+		case *ast.String:
+			text := strings.TrimSpace(string(node.Value))
+			if text == "" {
+				continue
+			}
+			if hasTask && isTaskMarkerText(text) {
+				continue
+			}
+			if hasLink {
+				if textMatchesURL(text, b.String()) {
+					continue
+				}
+				return "", false
+			}
+			if !linkifyURLRegexp.MatchString(text) {
+				return "", false
+			}
+			if hasURLText {
+				return "", false
+			}
+			hasURLText = true
+			b.Reset()
 			b.WriteString(text)
 		default:
 			return "", false
 		}
 	}
 	value := strings.TrimSpace(string(b.String()))
-	if value == "" {
+	if value == "" || (!hasLink && !hasURLText) {
 		return "", false
 	}
 	return strings.Trim(value, "<>"), true
+}
+
+func blockSingleLinkWithText(block ast.Node, source []byte) (string, bool, bool, ast.Node, bool) {
+	hasTask := blockHasTaskCheckbox(block)
+	var (
+		foundLink     bool
+		urlText       string
+		linkNode      ast.Node
+		hasTextBefore bool
+		hasTextAfter  bool
+	)
+	for child := block.FirstChild(); child != nil; child = child.NextSibling() {
+		switch node := child.(type) {
+		case *extensionast.TaskCheckBox:
+			continue
+		case *ast.Link:
+			if foundLink {
+				return "", false, false, nil, false
+			}
+			foundLink = true
+			urlText = strings.TrimSpace(string(node.Destination))
+			linkNode = node
+		case *ast.AutoLink:
+			if node.AutoLinkType != ast.AutoLinkURL {
+				return "", false, false, nil, false
+			}
+			if foundLink {
+				return "", false, false, nil, false
+			}
+			foundLink = true
+			urlText = strings.TrimSpace(string(node.URL(source)))
+			linkNode = node
+		case *ast.Text:
+			text := strings.TrimSpace(string(node.Segment.Value(source)))
+			if text == "" {
+				continue
+			}
+			if hasTask && isTaskMarkerText(text) {
+				continue
+			}
+			if !foundLink {
+				hasTextBefore = true
+				continue
+			}
+			hasTextAfter = true
+		case *ast.String:
+			text := strings.TrimSpace(string(node.Value))
+			if text == "" {
+				continue
+			}
+			if hasTask && isTaskMarkerText(text) {
+				continue
+			}
+			if !foundLink {
+				hasTextBefore = true
+				continue
+			}
+			hasTextAfter = true
+		default:
+			return "", false, false, nil, false
+		}
+	}
+	if !foundLink || strings.TrimSpace(urlText) == "" || (!hasTextBefore && !hasTextAfter) {
+		return "", false, false, nil, false
+	}
+	return strings.Trim(urlText, "<>"), hasTextBefore, hasTextAfter, linkNode, true
 }
 
 func paragraphOnlyLink(para *ast.Paragraph, source []byte) (string, string, bool) {

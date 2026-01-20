@@ -176,6 +176,40 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 		t.Fatalf("expected youtube card for task, got %s", html)
 	}
 
+	inlineAfter := youtubeURL + " random text\n"
+	html, err = srv.renderMarkdown(ctx, []byte(inlineAfter))
+	if err != nil {
+		t.Fatalf("render youtube inline text: %v", err)
+	}
+	if !strings.Contains(html, `class="youtube-card"`) {
+		t.Fatalf("expected youtube card for inline text, got %s", html)
+	}
+	if !strings.Contains(html, "random text") {
+		t.Fatalf("expected inline text to remain, got %s", html)
+	}
+	cardIndex := strings.Index(html, `class="youtube-card"`)
+	textIndex := strings.Index(html, "random text")
+	if cardIndex == -1 || textIndex == -1 || cardIndex > textIndex {
+		t.Fatalf("expected inline text after embed card, got %s", html)
+	}
+
+	inlineBefore := "random text " + youtubeURL + "\n"
+	html, err = srv.renderMarkdown(ctx, []byte(inlineBefore))
+	if err != nil {
+		t.Fatalf("render youtube inline text before: %v", err)
+	}
+	if !strings.Contains(html, `class="youtube-card"`) {
+		t.Fatalf("expected youtube card for inline text before, got %s", html)
+	}
+	if !strings.Contains(html, "random text") {
+		t.Fatalf("expected inline text to remain before embed, got %s", html)
+	}
+	cardIndex = strings.Index(html, `class="youtube-card"`)
+	textIndex = strings.Index(html, "random text")
+	if cardIndex == -1 || textIndex == -1 || textIndex > cardIndex {
+		t.Fatalf("expected inline text before embed card, got %s", html)
+	}
+
 	html, err = srv.renderMarkdown(ctx, []byte(mapsURL))
 	if err != nil {
 		t.Fatalf("render maps: %v", err)

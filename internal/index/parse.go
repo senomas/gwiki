@@ -36,7 +36,7 @@ var (
 	mdLinkRe   = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 	tagRe      = regexp.MustCompile(`#([A-Za-z0-9_/-]+)`)
 	taskRe     = regexp.MustCompile(`^\s*- \[( |x|X)\] (.+)$`)
-	dueRe      = regexp.MustCompile(`(?:@due\((\d{4}-\d{2}-\d{2})\)|due:(\d{4}-\d{2}-\d{2}))`)
+	dueRe      = regexp.MustCompile(`(?i)(?:@due\((\d{4}-\d{2}-\d{2})\)|due:(\d{4}-\d{2}-\d{2}))`)
 )
 
 func ParseContent(input string) Metadata {
