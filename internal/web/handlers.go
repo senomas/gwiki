@@ -352,6 +352,22 @@ func (s *Server) assetsRoot() string {
 	return filepath.Join(s.cfg.DataPath, "assets")
 }
 
+func (s *Server) acquireNoteWriteLock() (*fs.FileLock, error) {
+	lockRoot := s.cfg.DataPath
+	if lockRoot == "" && s.cfg.RepoPath != "" {
+		lockRoot = filepath.Join(s.cfg.RepoPath, ".wiki")
+	}
+	if lockRoot == "" {
+		return nil, fmt.Errorf("missing data path for lock")
+	}
+	lockPath := filepath.Join(lockRoot, "locks", "note-write.lock")
+	timeout := s.cfg.NoteLockTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	return fs.AcquireFileLockWithTimeout(lockPath, timeout)
+}
+
 func parseTagsParam(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -5833,6 +5849,12 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 			attachmentPath = s.noteAttachmentsDir(meta.ID)
 		}
 	}
+	writeLock, err := s.acquireNoteWriteLock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer writeLock.Release()
 	commitPaths := []string{fullPath}
 	if attachmentPath != "" {
 		commitPaths = append(commitPaths, attachmentPath)
@@ -6658,6 +6680,22 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusInternalServerError)
 		return
 	}
+	writeLock, err := s.acquireNoteWriteLock()
+	if err != nil {
+		s.renderEditError(w, r, ViewData{
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         targetPath,
+			NoteTitle:        derivedTitle,
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+			ReturnURL:        returnURL,
+		}, http.StatusInternalServerError)
+		return
+	}
+	defer writeLock.Release()
 	metaAttrs := index.FrontmatterAttributes(mergedContent)
 	commitPaths := []string{fullPath}
 	if metaAttrs.ID != "" {
