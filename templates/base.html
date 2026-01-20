@@ -1156,6 +1156,40 @@
         openLauncher();
       });
 
+      document.addEventListener("keydown", function (event) {
+        if (!event.ctrlKey) {
+          return;
+        }
+        if (event.key === "y") {
+          var target = event.target;
+          if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+            return;
+          }
+          if (launcher.classList.contains("is-open")) {
+            return;
+          }
+          event.preventDefault();
+          window.location.href = "/";
+          return;
+        }
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "h" && event.key !== "l") {
+          return;
+        }
+        if (launcher.classList.contains("is-open")) {
+          return;
+        }
+        var target = event.target;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+          return;
+        }
+        event.preventDefault();
+        if (event.key === "ArrowLeft" || event.key === "h") {
+          window.history.back();
+          return;
+        }
+        window.history.forward();
+      });
+
       document.addEventListener("click", function (event) {
         var target = event.target.closest(".js-quick-launcher-open");
         if (!target) {
@@ -1559,7 +1593,12 @@
         if (!event.ctrlKey) {
           return;
         }
-        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+        var direction = 0;
+        if (event.key === "ArrowDown" || event.key === "j") {
+          direction = 1;
+        } else if (event.key === "ArrowUp" || event.key === "k") {
+          direction = -1;
+        } else {
           return;
         }
         if (!getNoteBody() && !getNotesFeed()) {
@@ -1569,7 +1608,7 @@
           return;
         }
         event.preventDefault();
-        moveFocus(event.key === "ArrowDown" ? 1 : -1);
+        moveFocus(direction);
       }, true);
 
     })();
