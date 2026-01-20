@@ -11,6 +11,7 @@ services:
     environment:
       - HOME=/home/gwiki
       - GIT_CONFIG_GLOBAL=/git-home/.gitconfig
+      - GIT_CREDENTIALS_FILE=/git-home/.git-credentials
       - WIKI_REPO_PATH=/notes
       - WIKI_DATA_PATH=/data
       - TZ=${TZ:-Asia/Jakarta}
