@@ -543,6 +543,160 @@
       0% { background-position: 0% 0; }
       100% { background-position: -200% 0; }
     }
+    .quick-launcher {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      background: rgba(2, 6, 23, 0.7);
+      backdrop-filter: blur(10px);
+    }
+    .quick-launcher.is-open {
+      display: flex;
+    }
+    .quick-launcher__panel {
+      width: min(540px, 90vw);
+      border-radius: 1.25rem;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      background: rgba(15, 18, 28, 0.92);
+      box-shadow: 0 40px 80px -60px rgba(15, 23, 42, 0.95);
+      padding: 1.25rem;
+    }
+    .quick-launcher__input {
+      width: 100%;
+      border-radius: 0.9rem;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: rgba(15, 23, 42, 0.65);
+      padding: 0.7rem 1rem;
+      font-size: 0.95rem;
+      color: #e2e8f0;
+      outline: none;
+    }
+    .quick-launcher__input::placeholder {
+      color: rgba(148, 163, 184, 0.7);
+    }
+    .quick-launcher__list {
+      margin-top: 0.9rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .quick-launcher__entry,
+    .quick-launcher__item,
+    #quick-tag-suggest button {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      border-radius: 0.9rem;
+      padding: 0.65rem 0.8rem;
+      color: #cbd5f5;
+      text-decoration: none;
+      border: 1px solid transparent;
+      transition: border 0.2s ease, background 0.2s ease, color 0.2s ease;
+      background: rgba(15, 23, 42, 0.65);
+    }
+    .quick-launcher__item:hover,
+    .quick-launcher__item.is-active,
+    #quick-tag-suggest button:hover {
+      border-color: rgba(125, 211, 252, 0.5);
+      background: rgba(30, 41, 59, 0.6);
+      color: #e2e8f0;
+    }
+    .quick-launcher__icon {
+      width: 2rem;
+      height: 2rem;
+      border-radius: 0.75rem;
+      background: rgba(56, 189, 248, 0.15);
+      display: grid;
+      place-items: center;
+      font-size: 0.85rem;
+      color: #7dd3fc;
+      border: 1px solid rgba(125, 211, 252, 0.3);
+      flex: 0 0 auto;
+    }
+    .quick-launcher__meta {
+      display: flex;
+      flex-direction: column;
+      gap: 0.1rem;
+    }
+    .quick-launcher__label {
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .quick-launcher__hint {
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: rgba(148, 163, 184, 0.6);
+    }
+    .quick-launcher__tags {
+      margin-top: 0.75rem;
+    }
+    .quick-launcher__note-row {
+      margin-top: 0.9rem;
+    }
+    .quick-launcher__submenu-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 23, 0.6);
+      backdrop-filter: blur(8px);
+      z-index: 60;
+    }
+    .quick-launcher__submenu-modal.is-open {
+      display: flex;
+    }
+    .quick-launcher__submenu-panel {
+      width: min(360px, 88vw);
+      padding: 0.9rem;
+      border-radius: 1rem;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: rgba(12, 15, 24, 0.95);
+      box-shadow: 0 30px 80px -50px rgba(15, 23, 42, 0.9);
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    #quick-note-delete {
+      width: 100%;
+    }
+    #quick-note-delete .quick-launcher__item {
+      width: 100%;
+    }
+    .quick-launcher__item--danger {
+      color: #fca5a5;
+      border-color: rgba(248, 113, 113, 0.35);
+      background: rgba(153, 27, 27, 0.2);
+    }
+    .quick-launcher__item--danger:hover {
+      border-color: rgba(248, 113, 113, 0.6);
+      background: rgba(127, 29, 29, 0.4);
+      color: #fecaca;
+    }
+    .quick-launcher__action-form {
+      width: 100%;
+    }
+    .quick-launcher__action-form .quick-launcher__item {
+      width: 100%;
+    }
+    #quick-tag-suggest > div {
+      flex-direction: column;
+      gap: 0.5rem;
+      border: none;
+      background: transparent;
+      padding: 0;
+    }
+    #quick-tag-suggest button {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+      font-size: 0.9rem;
+      border-color: rgba(148, 163, 184, 0.25);
+    }
   </style>
 </head>
 <body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
@@ -572,6 +726,124 @@
     </main>
   </div>
 {{end}}
+  <div id="quick-launcher" class="quick-launcher" aria-hidden="true">
+    <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
+      <input id="quick-launcher-input" class="quick-launcher__input" type="search" placeholder="Search..." autocomplete="off">
+      <div id="quick-launcher-actions" class="quick-launcher__list">
+        {{if eq .ContentTemplate "view"}}
+          <a class="quick-launcher__item" href="/notes/new" data-label="new note">
+            <span class="quick-launcher__icon">+</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">New note</span>
+              <span class="quick-launcher__hint">Create</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="/" data-label="home">
+            <span class="quick-launcher__icon">H</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Home</span>
+              <span class="quick-launcher__hint">Index</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="#top" data-label="scroll to top" data-action="scroll-top">
+            <span class="quick-launcher__icon">T</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Scroll to top</span>
+              <span class="quick-launcher__hint">Jump</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="/notes/{{if .NoteMeta.ID}}{{.NoteMeta.ID}}{{else}}{{.NotePath}}{{end}}/edit" data-label="edit">
+            <span class="quick-launcher__icon">E</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Edit</span>
+              <span class="quick-launcher__hint">Modify</span>
+            </span>
+          </a>
+          <form id="quick-action-delete" class="quick-launcher__action-form" action="/notes/{{if .NoteMeta.ID}}{{.NoteMeta.ID}}{{else}}{{.NotePath}}{{end}}/delete" method="post">
+            <button class="quick-launcher__item quick-launcher__item--danger" type="submit" data-label="delete">
+              <span class="quick-launcher__icon">D</span>
+              <span class="quick-launcher__meta">
+                <span class="quick-launcher__label">Delete</span>
+                <span class="quick-launcher__hint">Remove</span>
+              </span>
+            </button>
+          </form>
+        {{else}}
+          {{if and .AuthEnabled .IsAuthenticated}}
+            <a class="quick-launcher__item" href="/notes/new" data-label="new note">
+              <span class="quick-launcher__icon">+</span>
+              <span class="quick-launcher__meta">
+                <span class="quick-launcher__label">New note</span>
+                <span class="quick-launcher__hint">Create</span>
+              </span>
+            </a>
+          <a class="quick-launcher__item" href="/sync" data-label="sync">
+            <span class="quick-launcher__icon">S</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Sync</span>
+              <span class="quick-launcher__hint">Git</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="#top" data-label="scroll to top" data-action="scroll-top">
+            <span class="quick-launcher__icon">T</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Scroll to top</span>
+              <span class="quick-launcher__hint">Jump</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="/logout" data-label="logout">
+            <span class="quick-launcher__icon">L</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Logout</span>
+                <span class="quick-launcher__hint">Session</span>
+              </span>
+            </a>
+          {{else if .AuthEnabled}}
+            <a class="quick-launcher__item" href="/login" data-label="login">
+              <span class="quick-launcher__icon">I</span>
+              <span class="quick-launcher__meta">
+                <span class="quick-launcher__label">Login</span>
+                <span class="quick-launcher__hint">Session</span>
+              </span>
+            </a>
+          {{end}}
+        {{end}}
+      </div>
+      <div id="quick-launcher-note-row" class="quick-launcher__note-row">
+        <div id="quick-launcher-notes" class="quick-launcher__list hidden"></div>
+      </div>
+      <div id="quick-launcher-tags" class="quick-launcher__tags hidden">
+        <div id="quick-tag-suggest"></div>
+      </div>
+    </div>
+    <div id="quick-launcher-submenu-modal" class="quick-launcher__submenu-modal" aria-hidden="true">
+      <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
+        <a id="quick-note-open" class="quick-launcher__item" href="#">
+          <span class="quick-launcher__icon">O</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Open</span>
+            <span class="quick-launcher__hint">View</span>
+          </span>
+        </a>
+        <a id="quick-note-edit" class="quick-launcher__item" href="#">
+          <span class="quick-launcher__icon">E</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Edit</span>
+            <span class="quick-launcher__hint">Modify</span>
+          </span>
+        </a>
+        <form id="quick-note-delete" method="post">
+          <button class="quick-launcher__item quick-launcher__item--danger" type="submit">
+            <span class="quick-launcher__icon">D</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Delete</span>
+              <span class="quick-launcher__hint">Remove</span>
+            </span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
   <script>
     (function () {
       var links = document.querySelectorAll(".js-history-back");
@@ -589,6 +861,510 @@
         row.classList.remove("justify-between");
         row.classList.add("justify-end");
       });
+    })();
+  </script>
+  <script>
+    (function () {
+      var launcher = document.getElementById("quick-launcher");
+      var input = document.getElementById("quick-launcher-input");
+      var actionList = document.getElementById("quick-launcher-actions");
+      var notesList = document.getElementById("quick-launcher-notes");
+      var submenu = document.getElementById("quick-launcher-submenu-modal");
+      var noteOpen = document.getElementById("quick-note-open");
+      var noteEdit = document.getElementById("quick-note-edit");
+      var noteDelete = document.getElementById("quick-note-delete");
+      var submenuPanel = submenu.querySelector(".quick-launcher__submenu-panel");
+      var actionDelete = document.getElementById("quick-action-delete");
+      var tagWrap = document.getElementById("quick-launcher-tags");
+      var tagSuggest = document.getElementById("quick-tag-suggest");
+      if (!launcher || !input || !actionList || !notesList || !submenu || !noteOpen || !noteEdit || !noteDelete || !submenuPanel || !tagWrap || !tagSuggest) {
+        return;
+      }
+
+      function openLauncher() {
+        launcher.classList.add("is-open");
+        launcher.setAttribute("aria-hidden", "false");
+        input.value = "";
+        notesList.classList.add("hidden");
+        notesList.innerHTML = "";
+        submenu.classList.remove("is-open");
+        submenu.setAttribute("aria-hidden", "true");
+        tagWrap.classList.add("hidden");
+        actionList.classList.remove("hidden");
+        filterActions("");
+        input.focus();
+      }
+
+      function closeLauncher() {
+        launcher.classList.remove("is-open");
+        launcher.setAttribute("aria-hidden", "true");
+      }
+
+      function filterActions(value) {
+        var query = value.toLowerCase().trim();
+        var items = actionList.querySelectorAll(".quick-launcher__item");
+        items.forEach(function (item) {
+          var label = item.getAttribute("data-label") || "";
+          if (!query || label.indexOf(query) !== -1) {
+            item.classList.remove("hidden");
+          } else {
+            item.classList.add("hidden");
+          }
+        });
+      }
+
+      function listVisibleItems(list) {
+        if (!list) {
+          return [];
+        }
+        return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item, button[data-tag]"), function (item) {
+          return !item.classList.contains("hidden");
+        });
+      }
+
+      function listCombinedItems() {
+        return listVisibleItems(actionList).concat(listVisibleItems(notesList));
+      }
+
+      function clearActive(list) {
+        listVisibleItems(list).forEach(function (item) {
+          item.classList.remove("is-active");
+        });
+      }
+
+      function activateItem(list, index) {
+        var items = listVisibleItems(list);
+        if (!items.length) {
+          return;
+        }
+        var target = items[index];
+        if (!target) {
+          return;
+        }
+        items.forEach(function (item) {
+          item.classList.toggle("is-active", item === target);
+        });
+        target.scrollIntoView({block: "nearest"});
+      }
+
+      function activateCombined(index) {
+        var items = listCombinedItems();
+        if (!items.length) {
+          return;
+        }
+        var target = items[index];
+        if (!target) {
+          return;
+        }
+        items.forEach(function (item) {
+          item.classList.toggle("is-active", item === target);
+        });
+        target.scrollIntoView({block: "nearest"});
+      }
+
+      function activeIndex(list) {
+        var items = listVisibleItems(list);
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].classList.contains("is-active")) {
+            return i;
+          }
+        }
+        return -1;
+      }
+
+      function activeCombinedIndex() {
+        var items = listCombinedItems();
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].classList.contains("is-active")) {
+            return i;
+          }
+        }
+        return -1;
+      }
+
+      function moveActive(list, delta) {
+        var items = listVisibleItems(list);
+        if (!items.length) {
+          return;
+        }
+        var index = activeIndex(list);
+        var nextIndex = index + delta;
+        if (index < 0) {
+          nextIndex = delta > 0 ? 0 : items.length - 1;
+        }
+        if (nextIndex < 0) {
+          nextIndex = items.length - 1;
+        }
+        if (nextIndex >= items.length) {
+          nextIndex = 0;
+        }
+        activateItem(list, nextIndex);
+        if (list === notesList) {
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+        }
+      }
+
+      function moveCombined(delta) {
+        var items = listCombinedItems();
+        if (!items.length) {
+          return;
+        }
+        var index = activeCombinedIndex();
+        var nextIndex = index + delta;
+        if (index < 0) {
+          nextIndex = delta > 0 ? 0 : items.length - 1;
+        }
+        if (nextIndex < 0) {
+          nextIndex = items.length - 1;
+        }
+        if (nextIndex >= items.length) {
+          nextIndex = 0;
+        }
+        activateCombined(nextIndex);
+        submenu.classList.remove("is-open");
+        submenu.setAttribute("aria-hidden", "true");
+      }
+
+      function handleTagSuggest(term) {
+        var query = term.replace(/^#/, "");
+        htmx.ajax("GET", "/tags/suggest?q=" + encodeURIComponent(query), "#quick-tag-suggest");
+      }
+
+      function activateFirstAction() {
+        var item = actionList.querySelector(".quick-launcher__item:not(.hidden)");
+        if (!item) {
+          return;
+        }
+        window.location.href = item.getAttribute("href");
+      }
+
+      function activateFirstTag() {
+        var tagButton = tagSuggest.querySelector("[data-tag]");
+        if (!tagButton) {
+          return;
+        }
+        var tag = tagButton.getAttribute("data-tag");
+        window.location.href = "/?t=" + encodeURIComponent(tag);
+      }
+
+      function activateFirstNote() {
+        var item = notesList.querySelector(".quick-launcher__item");
+        if (!item) {
+          return;
+        }
+        window.location.href = item.getAttribute("href");
+      }
+
+      function activateSelected(list, fallback) {
+        var items = listVisibleItems(list);
+        if (!items.length) {
+          if (fallback) {
+            fallback();
+          }
+          return;
+        }
+        var index = activeIndex(list);
+        var target = index >= 0 ? items[index] : items[0];
+        activateActionTarget(target);
+      }
+
+      function activateActionTarget(target) {
+        if (!target) {
+          return;
+        }
+        var tag = target.getAttribute("data-tag");
+        if (tag) {
+          window.location.href = "/?t=" + encodeURIComponent(tag);
+          return;
+        }
+        if (target.getAttribute("data-action") === "scroll-top") {
+          window.scrollTo({top: 0, behavior: "smooth"});
+          closeLauncher();
+          return;
+        }
+        if (target.tagName === "BUTTON") {
+          target.click();
+          return;
+        }
+        window.location.href = target.getAttribute("href");
+      }
+
+      function updateSubmenu(item) {
+        if (!item) {
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+          return;
+        }
+        var path = item.getAttribute("data-note-path");
+        if (!path) {
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+          return;
+        }
+        noteOpen.setAttribute("href", "/notes/" + path);
+        noteEdit.setAttribute("href", "/notes/" + path + "/edit");
+        noteDelete.setAttribute("action", "/notes/" + path + "/delete");
+        submenu.classList.add("is-open");
+        submenu.setAttribute("aria-hidden", "false");
+        activateItem(submenuPanel, 0);
+      }
+
+      document.addEventListener("keydown", function (event) {
+        if (!event.ctrlKey || event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        if (launcher.classList.contains("is-open")) {
+          closeLauncher();
+          return;
+        }
+        openLauncher();
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (!launcher.classList.contains("is-open")) {
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          if (submenu.classList.contains("is-open")) {
+            submenu.classList.remove("is-open");
+            submenu.setAttribute("aria-hidden", "true");
+            return;
+          }
+          closeLauncher();
+          return;
+        }
+        if (event.key === "Enter") {
+          if (!tagWrap.classList.contains("hidden")) {
+            activateSelected(tagSuggest, activateFirstTag);
+          } else if (submenu.classList.contains("is-open")) {
+            var items = listVisibleItems(submenuPanel);
+            if (items.length) {
+              var index = activeIndex(submenuPanel);
+              var target = index >= 0 ? items[index] : items[0];
+              target.click();
+            }
+          } else if (!notesList.classList.contains("hidden")) {
+            var combined = listCombinedItems();
+            if (!combined.length) {
+              return;
+            }
+            var combinedIndex = activeCombinedIndex();
+            var combinedTarget = combinedIndex >= 0 ? combined[combinedIndex] : combined[0];
+            if (notesList.contains(combinedTarget)) {
+              updateSubmenu(combinedTarget);
+            } else {
+              activateActionTarget(combinedTarget);
+            }
+          } else {
+            activateSelected(actionList, activateFirstAction);
+          }
+          return;
+        }
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          if (!tagWrap.classList.contains("hidden")) {
+            moveActive(tagSuggest, 1);
+          } else if (submenu.classList.contains("is-open")) {
+            moveActive(submenuPanel, 1);
+          } else if (!notesList.classList.contains("hidden")) {
+            moveCombined(1);
+          } else {
+            moveActive(actionList, 1);
+          }
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          if (!tagWrap.classList.contains("hidden")) {
+            moveActive(tagSuggest, -1);
+          } else if (submenu.classList.contains("is-open")) {
+            moveActive(submenuPanel, -1);
+          } else if (!notesList.classList.contains("hidden")) {
+            moveCombined(-1);
+          } else {
+            moveActive(actionList, -1);
+          }
+          return;
+        }
+      });
+
+      launcher.addEventListener("click", function (event) {
+        if (event.target === launcher) {
+          closeLauncher();
+        }
+      });
+
+      notesList.addEventListener("click", function (event) {
+        var target = event.target.closest(".quick-launcher__item");
+        if (!target) {
+          return;
+        }
+        event.preventDefault();
+        clearActive(actionList);
+        clearActive(notesList);
+        target.classList.add("is-active");
+        updateSubmenu(target);
+      });
+
+      input.addEventListener("input", function (event) {
+        var value = event.target.value || "";
+        if (value.startsWith("#")) {
+          actionList.classList.remove("hidden");
+          filterActions("");
+          notesList.classList.add("hidden");
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+          tagWrap.classList.remove("hidden");
+          clearActive(tagSuggest);
+          handleTagSuggest(value);
+          return;
+        }
+        if (value.trim() === "") {
+          tagWrap.classList.add("hidden");
+          notesList.classList.add("hidden");
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+          actionList.classList.remove("hidden");
+          clearActive(actionList);
+          filterActions(value);
+          return;
+        }
+        actionList.classList.remove("hidden");
+        tagWrap.classList.add("hidden");
+        notesList.classList.remove("hidden");
+        submenu.classList.remove("is-open");
+        submenu.setAttribute("aria-hidden", "true");
+        clearActive(notesList);
+        clearActive(actionList);
+        filterActions(value);
+        htmx.ajax("GET", "/quick/notes?q=" + encodeURIComponent(value), "#quick-launcher-notes");
+      });
+
+      tagSuggest.addEventListener("click", function (event) {
+        var target = event.target.closest("[data-tag]");
+        if (!target) {
+          return;
+        }
+        var tag = target.getAttribute("data-tag");
+        window.location.href = "/?t=" + encodeURIComponent(tag);
+      });
+
+      noteDelete.addEventListener("submit", function (event) {
+        if (!confirm("Delete this note?")) {
+          event.preventDefault();
+        }
+      });
+      if (actionDelete) {
+        actionDelete.addEventListener("submit", function (event) {
+          if (!confirm("Delete this note?")) {
+            event.preventDefault();
+          }
+        });
+      }
+
+      submenu.addEventListener("click", function (event) {
+        if (event.target === submenu) {
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+        }
+      });
+
+      document.body.addEventListener("htmx:afterSwap", function (event) {
+        if (!launcher.classList.contains("is-open")) {
+          return;
+        }
+        if (event.target === notesList) {
+          activateCombined(0);
+        }
+        if (event.target === tagSuggest) {
+          activateItem(tagSuggest, 0);
+        }
+      });
+    })();
+  </script>
+  <script>
+    (function () {
+      var launcher = document.getElementById("quick-launcher");
+      function getNoteBody() {
+        return document.querySelector(".note-body[data-note-id][data-note-path]");
+      }
+      function noteFocusables() {
+        var noteBody = getNoteBody();
+        if (!noteBody) {
+          return [];
+        }
+        var summaries = noteBody.querySelectorAll("summary");
+        summaries.forEach(function (summary) {
+          if (!summary.hasAttribute("tabindex")) {
+            summary.setAttribute("tabindex", "0");
+          }
+        });
+        var items = noteBody.querySelectorAll("a[href], button, input, textarea, select, summary");
+        return Array.prototype.filter.call(items, function (item) {
+          if (item.hasAttribute("disabled")) {
+            return false;
+          }
+          if (item.getAttribute("tabindex") === "-1") {
+            return false;
+          }
+          var details = item.closest("details");
+          if (details && !details.open && item.tagName !== "SUMMARY") {
+            return false;
+          }
+          return item.getClientRects().length > 0;
+        });
+      }
+
+      function currentIndex(items) {
+        var active = document.activeElement;
+        for (var i = 0; i < items.length; i++) {
+          if (items[i] === active) {
+            return i;
+          }
+        }
+        return -1;
+      }
+
+      function moveFocus(delta) {
+        var items = noteFocusables();
+        if (!items.length) {
+          return;
+        }
+        var index = currentIndex(items);
+        var next = index + delta;
+        if (index < 0) {
+          next = delta > 0 ? 0 : items.length - 1;
+        }
+        if (next < 0) {
+          next = items.length - 1;
+        }
+        if (next >= items.length) {
+          next = 0;
+        }
+        items[next].focus({preventScroll: true});
+        items[next].scrollIntoView({block: "nearest"});
+      }
+
+      document.addEventListener("keydown", function (event) {
+        if (!event.ctrlKey) {
+          return;
+        }
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+          return;
+        }
+        if (!getNoteBody()) {
+          return;
+        }
+        if (launcher && launcher.classList.contains("is-open")) {
+          return;
+        }
+        event.preventDefault();
+        moveFocus(event.key === "ArrowDown" ? 1 : -1);
+      }, true);
+
     })();
   </script>
   <script>

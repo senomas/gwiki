@@ -3936,6 +3936,38 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions})
 }
 
+func (s *Server) handleQuickNotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		s.views.RenderTemplate(w, "quick_notes", ViewData{})
+		return
+	}
+	notes, err := s.idx.NoteList(r.Context(), index.NoteListFilter{Limit: 200})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	normalized := normalizeFuzzyTerm(strings.ToLower(query))
+	matches := make([]index.NoteSummary, 0, 10)
+	for _, note := range notes {
+		if !fuzzyMatchNote(normalized, note.Title, note.Path) {
+			continue
+		}
+		matches = append(matches, note)
+		if len(matches) >= 10 {
+			break
+		}
+	}
+	s.views.RenderTemplate(w, "quick_notes", ViewData{RecentNotes: matches})
+}
+
 func normalizeFuzzyTerm(value string) string {
 	var b strings.Builder
 	for _, r := range value {
@@ -3992,6 +4024,18 @@ func fuzzyMatchTag(term string, candidate string) bool {
 		initials.WriteByte(part[0])
 	}
 	return fuzzySubsequence(term, initials.String())
+}
+
+func fuzzyMatchNote(term string, title string, notePath string) bool {
+	if term == "" {
+		return true
+	}
+	candidate := strings.ToLower(title + " " + notePath)
+	candidateNormalized := normalizeFuzzyTerm(candidate)
+	if fuzzySubsequence(term, candidateNormalized) {
+		return true
+	}
+	return strings.Contains(candidate, term)
 }
 
 func fuzzySubsequence(term string, candidate string) bool {
