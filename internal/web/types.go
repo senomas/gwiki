@@ -75,9 +75,22 @@ type ViewData struct {
 	SyncOutput       string
 	SyncError        string
 	SyncDuration     string
+	BrokenLinks      []BrokenLinkGroup
 }
 
 type BacklinkView struct {
+	FromPath  string
+	FromTitle string
+	LineNo    int
+	LineHTML  template.HTML
+}
+
+type BrokenLinkGroup struct {
+	Ref   string
+	Items []BrokenLinkItem
+}
+
+type BrokenLinkItem struct {
 	FromPath  string
 	FromTitle string
 	LineNo    int

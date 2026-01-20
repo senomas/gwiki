@@ -1,14 +1,19 @@
 {{define "search_results"}}
-<h1 class="text-2xl font-semibold">Search</h1>
-{{if .SearchQuery}}<p class="mt-2 text-sm text-slate-600">Results for <strong class="text-slate-900">{{.SearchQuery}}</strong></p>{{end}}
-<ul class="mt-4 space-y-4">
+{{if .SearchQuery}}
+  <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Results for {{.SearchQuery}}</div>
+{{end}}
+<div class="space-y-4">
   {{range .SearchResults}}
-    <li>
-      <a class="text-emerald-600 hover:text-emerald-700" href="/notes/{{.Path}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a>
-      <div class="mt-1 text-sm text-slate-700">{{.Snippet}}</div>
-    </li>
+    <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+      <h2 class="text-lg font-semibold text-slate-100">
+        <a class="js-search-result text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a>
+      </h2>
+      {{if .Snippet}}<div class="mt-2 text-sm text-slate-300">{{.Snippet}}</div>{{end}}
+    </article>
   {{else}}
-    <li class="text-slate-500">No results.</li>
+    <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+      No results.
+    </div>
   {{end}}
-</ul>
+</div>
 {{end}}

@@ -160,11 +160,14 @@ SQLite index implementation (notes, tags, tasks, links, history).
 - `CountNotesWithDueTasks`: counts notes with due tasks
 - `CountNotesWithDueTasksByDate`: counts notes with due tasks by date
 - `Backlinks`: helper for backlinks
+- `BrokenLinks`: helper for broken links
 - `backlinkCandidates`: helper for backlink candidates
 - `loadFileRecords`: loads file records
 - `removeMissingRecords`: helper for remove missing records
 - `nullIfEmpty`: helper for null if empty
+- `nullIfZero`: helper for null if zero
 - `NoteExists`: helper for note exists
+- `resolveLinkTargetID`: helper for resolve link target id
 - `FileIDByPath`: helper for file idby path
 - `PathByFileID`: helper for path by file id
 - `PathByUID`: helper for path by uid

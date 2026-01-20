@@ -3915,8 +3915,82 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := ""
+	activeDate := ""
+	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	isAuth := IsAuthenticated(r.Context())
+	if !isAuth {
+		activeTodo = false
+		activeDue = false
+		activeTags = noteTags
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allowed := map[string]struct{}{}
+	todoCount := 0
+	dueCount := 0
+	if isAuth {
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+	}
+	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagQuery := buildTagsQuery(activeTags)
+	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	folders, hasRoot, err := s.idx.ListFolders(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	data.Title = "Search"
-	data.ContentTemplate = "search_results"
+	data.ContentTemplate = "search"
+	data.Tags = tags
+	data.TagLinks = tagLinks
+	data.TodoCount = todoCount
+	data.DueCount = dueCount
+	data.ActiveTags = activeTags
+	data.TagQuery = tagQuery
+	data.FolderTree = folderTree
+	data.ActiveFolder = activeFolder
+	data.FolderQuery = buildFolderQuery(activeFolder, activeRoot)
+	data.FilterQuery = filterQuery
+	data.HomeURL = buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	data.ActiveDate = activeDate
+	data.DateQuery = buildDateQuery(activeDate)
+	data.SearchQueryParam = buildSearchQuery(activeSearch)
+	data.UpdateDays = updateDays
+	data.CalendarMonth = calendar
+	data.JournalSidebar = journalSidebar
 	s.views.RenderPage(w, data)
 }
 
@@ -4638,6 +4712,50 @@ func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
 		JournalSidebar:   journalSidebar,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleBroken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	links, err := s.idx.BrokenLinks(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	groups := make([]BrokenLinkGroup, 0)
+	var current *BrokenLinkGroup
+	for _, link := range links {
+		if current == nil || current.Ref != link.ToRef {
+			groups = append(groups, BrokenLinkGroup{Ref: link.ToRef})
+			current = &groups[len(groups)-1]
+		}
+		title := link.FromTitle
+		if title == "" {
+			title = filepath.Base(link.FromPath)
+		}
+		lineHTML, err := s.renderLineMarkdown(r.Context(), link.Line)
+		if err != nil {
+			lineHTML = template.HTML(template.HTMLEscapeString(link.Line))
+		}
+		current.Items = append(current.Items, BrokenLinkItem{
+			FromPath:  link.FromPath,
+			FromTitle: title,
+			LineNo:    link.LineNo,
+			LineHTML:  lineHTML,
+		})
+	}
+	data := ViewData{
+		Title:           "Broken Links",
+		ContentTemplate: "broken",
+		BrokenLinks:     groups,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -7152,6 +7270,7 @@ func (s *Server) renderLineMarkdown(ctx context.Context, line string) (template.
 	if strings.TrimSpace(line) == "" {
 		return template.HTML(""), nil
 	}
+	line = s.expandWikiLinks(ctx, line)
 	htmlStr, err := s.renderMarkdown(ctx, []byte(line))
 	if err != nil {
 		return "", err

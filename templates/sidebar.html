@@ -15,41 +15,6 @@
   {{template "sidebar_content" .}}
 </aside>
 {{end}} {{define "sidebar_content"}}
-<form action="/" method="get">
-  <div
-    class="flex items-center gap-2 rounded-full border border-slate-700/70 bg-[#111317] px-3 py-2 text-sm text-slate-300 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.6)]"
-  >
-    <svg
-      class="h-4 w-4 text-slate-500"
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-    >
-      <circle cx="9" cy="9" r="6"></circle>
-      <path d="M14 14l4 4"></path>
-    </svg>
-    <input
-      class="w-full bg-transparent text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none"
-      type="search"
-      name="s"
-      placeholder="Search notes..."
-      value="{{.SearchQuery}}"
-    />
-    <svg
-      class="h-4 w-4 text-slate-600"
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-    >
-      <path d="M6 6h8M8 10h4M9 14h2"></path>
-    </svg>
-  </div>
-  {{if .TagQuery}}<input type="hidden" name="t" value="{{.TagQuery}}">{{end}}
-  {{if .FolderQuery}}<input type="hidden" name="f" value="{{.FolderQuery}}">{{end}}
-</form>
-
 <div>
   <div
     class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-500"

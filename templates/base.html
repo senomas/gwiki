@@ -726,8 +726,8 @@
     }
   </style>
 </head>
-<body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync")}}
+  <body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
+{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search")}}
   {{.ContentHTML}}
 {{else}}
   <div class="mx-auto max-w-5xl px-6 py-8">
@@ -815,6 +815,20 @@
             <span class="quick-launcher__meta">
               <span class="quick-launcher__label">Sync</span>
               <span class="quick-launcher__hint">Git</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="/search" data-label="search">
+            <span class="quick-launcher__icon">F</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Search</span>
+              <span class="quick-launcher__hint">Find</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="/broken" data-label="broken links">
+            <span class="quick-launcher__icon">B</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Broken links</span>
+              <span class="quick-launcher__hint">Fix</span>
             </span>
           </a>
           <a class="quick-launcher__item" href="#top" data-label="scroll to top" data-action="scroll-top">
@@ -1669,6 +1683,12 @@
       function getNotesFeed() {
         return document.getElementById("notes-feed");
       }
+      function getSearchInput() {
+        return document.getElementById("search-page-input");
+      }
+      function getSearchResults() {
+        return document.getElementById("search-results");
+      }
       function noteFocusables(noteBody) {
         var summaries = noteBody.querySelectorAll("summary");
         summaries.forEach(function (summary) {
@@ -1703,7 +1723,34 @@
           return item.getClientRects().length > 0;
         });
       }
+      function searchTargets() {
+        var input = getSearchInput();
+        var results = getSearchResults();
+        var items = [];
+        if (input) {
+          items.push(input);
+        }
+        if (results) {
+          var links = results.querySelectorAll("a.js-search-result");
+          Array.prototype.forEach.call(links, function (item) {
+            if (item.hasAttribute("disabled")) {
+              return;
+            }
+            if (item.getAttribute("tabindex") === "-1") {
+              return;
+            }
+            if (item.getClientRects().length === 0) {
+              return;
+            }
+            items.push(item);
+          });
+        }
+        return items;
+      }
       function navigationTargets() {
+        if (getSearchInput()) {
+          return searchTargets();
+        }
         var noteBody = getNoteBody();
         if (noteBody) {
           return noteFocusables(noteBody);
@@ -1757,7 +1804,7 @@
         } else {
           return;
         }
-        if (!getNoteBody() && !getNotesFeed()) {
+        if (!getNoteBody() && !getNotesFeed() && !getSearchInput()) {
           return;
         }
         if (launcher && launcher.classList.contains("is-open")) {

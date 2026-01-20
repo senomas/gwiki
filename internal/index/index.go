@@ -92,6 +92,15 @@ type Backlink struct {
 	Kind      string
 }
 
+type BrokenLink struct {
+	ToRef     string
+	FromPath  string
+	FromTitle string
+	LineNo    int
+	Line      string
+	Kind      string
+}
+
 type fileRecord struct {
 	ID        int
 	Hash      string
@@ -430,6 +439,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 16
+		case 16:
+			slog.Info("schema migration", "from", 16, "to", 17)
+			if err := i.migrate16To17(ctx); err != nil {
+				return err
+			}
+			version = 17
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -528,6 +543,22 @@ func (i *Index) migrate14To15(ctx context.Context) error {
 
 func (i *Index) migrate15To16(ctx context.Context) error {
 	return i.ensureColumn(ctx, "file_tags", "is_exclusive", "INTEGER NOT NULL DEFAULT 0")
+}
+
+func (i *Index) migrate16To17(ctx context.Context) error {
+	if _, err := i.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS broken_links (
+			id INTEGER PRIMARY KEY,
+			from_file_id INTEGER NOT NULL,
+			to_ref TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			line_no INTEGER NOT NULL,
+			line TEXT NOT NULL
+		)`); err != nil {
+		return err
+	}
+	_, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS broken_links_by_file ON broken_links(from_file_id)")
+	return err
 }
 
 func (i *Index) ensureColumn(ctx context.Context, table string, column string, ddl string) error {
@@ -783,6 +814,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE from_file_id=?", existingID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM broken_links WHERE from_file_id=?", existingID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE file_id=?", existingID); err != nil {
 		return err
 	}
@@ -836,8 +870,17 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if link.Ref == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO links(from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, NULL, ?, ?, ?)", existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
+		toFileID, err := i.resolveLinkTargetID(ctx, tx, link.Ref)
+		if err != nil {
 			return err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO links(from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?)", existingID, link.Ref, nullIfZero(toFileID), link.Kind, link.LineNo, link.Line); err != nil {
+			return err
+		}
+		if link.Kind == "wikilink" && toFileID == 0 {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO broken_links(from_file_id, to_ref, kind, line_no, line) VALUES(?, ?, ?, ?, ?)", existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -3064,6 +3107,35 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string, ui
 	return backlinks, rows.Err()
 }
 
+func (i *Index) BrokenLinks(ctx context.Context) ([]BrokenLink, error) {
+	visibilityClause := ""
+	args := []any{}
+	if publicOnly(ctx) {
+		visibilityClause = " AND files.visibility = ?"
+		args = append(args, "public")
+	}
+	rows, err := i.db.QueryContext(ctx, `
+		SELECT broken_links.to_ref, files.path, files.title, broken_links.line_no, broken_links.line, broken_links.kind
+		FROM broken_links
+		JOIN files ON files.id = broken_links.from_file_id
+		WHERE 1=1`+visibilityClause+`
+		ORDER BY lower(broken_links.to_ref), lower(files.title), broken_links.line_no
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BrokenLink
+	for rows.Next() {
+		var link BrokenLink
+		if err := rows.Scan(&link.ToRef, &link.FromPath, &link.FromTitle, &link.LineNo, &link.Line, &link.Kind); err != nil {
+			return nil, err
+		}
+		out = append(out, link)
+	}
+	return out, rows.Err()
+}
+
 func backlinkCandidates(notePath string, title string, uid string) []string {
 	notePath = strings.TrimSpace(notePath)
 	title = strings.TrimSpace(title)
@@ -3182,6 +3254,13 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
+func nullIfZero(value int) any {
+	if value == 0 {
+		return nil
+	}
+	return value
+}
+
 func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	var id int
 	query := "SELECT id FROM files WHERE path=?"
@@ -3198,6 +3277,51 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+type queryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, ref string) (int, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return 0, nil
+	}
+	var id int
+	err := q.QueryRowContext(ctx, "SELECT id FROM files WHERE uid=? LIMIT 1", ref).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	path := strings.TrimPrefix(ref, "/notes/")
+	path = strings.TrimPrefix(path, "notes/")
+	path = strings.TrimPrefix(path, "/")
+	if path != "" {
+		candidates := []string{path}
+		if !strings.HasSuffix(strings.ToLower(path), ".md") {
+			candidates = append(candidates, path+".md")
+		}
+		for _, candidate := range candidates {
+			err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE lower(path)=lower(?) LIMIT 1", candidate).Scan(&id)
+			if err == nil {
+				return id, nil
+			}
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return 0, err
+			}
+		}
+	}
+	err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE lower(title)=lower(?) LIMIT 1", ref).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	return 0, nil
 }
 
 func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) {
