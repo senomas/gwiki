@@ -510,7 +510,11 @@
         return;
       }
       if (event.detail.elt && event.detail.elt.closest && event.detail.elt.closest("[data-edit-save]")) {
-        window.history.go(-1);
+        var redirect = event.detail.xhr.getResponseHeader("X-Redirect-Location");
+        if (redirect) {
+          window.location.replace(redirect);
+          return;
+        }
         return;
       }
     });
