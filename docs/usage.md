@@ -10,6 +10,8 @@ This page covers everyday use of gwiki: keyboard navigation, quick launcher, and
 - `Ctrl+H` / `Ctrl+ArrowLeft`: history back (disabled inside inputs).
 - `Ctrl+L` / `Ctrl+ArrowRight`: history forward (disabled inside inputs).
 - `Ctrl+Y`: go to index (disabled inside inputs).
+- `Ctrl+Enter`: save on the edit page.
+- `Ctrl+Esc`: cancel on the edit page.
 
 Tip: on index/todo/due pages, navigation focuses note titles. On note pages it focuses note content links, checkboxes, and section toggles.
 

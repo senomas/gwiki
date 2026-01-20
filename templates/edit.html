@@ -167,6 +167,37 @@
 </script>
 <script>
   (function () {
+    var textarea = document.getElementById("note-content");
+    var form = document.getElementById("note-edit-form");
+    var cancel = document.querySelector("[data-return-link]");
+    if (textarea) {
+      window.setTimeout(function () {
+        textarea.focus();
+        textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+      }, 0);
+    }
+    document.addEventListener("keydown", function (event) {
+      if (!event.ctrlKey) {
+        return;
+      }
+      if (event.key === "Enter") {
+        if (!form) {
+          return;
+        }
+        event.preventDefault();
+        form.requestSubmit();
+      } else if (event.key === "Escape") {
+        if (!cancel) {
+          return;
+        }
+        event.preventDefault();
+        window.location.href = cancel.getAttribute("href");
+      }
+    });
+  })();
+</script>
+<script>
+  (function () {
     if (!window.htmx) {
       return;
     }
