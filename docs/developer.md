@@ -19,6 +19,9 @@ Main entrypoint for the gwiki web server CLI.
 - `parseLogLevel`: parses log level
 - `selectLogWriter`: helper for select log writer
 
+## `scripts/auto-sync.sh`
+Auto-sync helper for git notes commits/pushes (used by ofelia sidecar).
+
 ## `internal/auth/auth.go`
 Authentication helpers and password verification.
 
