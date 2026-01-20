@@ -6,29 +6,14 @@ services:
     volumes:
       - "${WIKI_REPO_PATH_HOST:-.}:/notes"
       - "${WIKI_DATA_PATH_HOST:-./.wiki}:/data"
-    user: "${UID:-1000}:${GID:-1000}"
-    environment:
-      - WIKI_REPO_PATH=/notes
-      - WIKI_DATA_PATH=/data
-      - TZ=${TZ:-Asia/Jakarta}
-  git-sync:
-    image: docker.senomas.com/gwiki-sync:latest
-    volumes:
-      - "${WIKI_REPO_PATH_HOST:-.}:/notes"
       - "${GIT_CONFIG_HOST:-$HOME/.gitconfig}:/home/gwiki/.gitconfig:ro"
       - "${GIT_CREDENTIALS_HOST:-$HOME/.git-credentials}:/home/gwiki/.git-credentials:ro"
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       - HOME=/home/gwiki
-      - REPO_DIR=/notes
-      - "COMMIT_MESSAGE=auto: notes"
-      - MAIN_BRANCH=master
-      - PUSH_BRANCH=gwiki
-    labels:
-      ofelia.enabled: "true"
-      ofelia.job-exec.git-sync.schedule: "@every 15m"
-      ofelia.job-exec.git-sync.command: "/usr/local/bin/auto-sync.sh"
-
+      - WIKI_REPO_PATH=/notes
+      - WIKI_DATA_PATH=/data
+      - TZ=${TZ:-Asia/Jakarta}
   ofelia:
     image: mcuadros/ofelia:latest
     command: daemon --docker

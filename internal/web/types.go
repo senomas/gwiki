@@ -71,6 +71,9 @@ type ViewData struct {
 	RebuildCleaned   int
 	RebuildDuration  string
 	RebuildError     string
+	SyncOutput       string
+	SyncError        string
+	SyncDuration     string
 }
 
 type BacklinkView struct {
