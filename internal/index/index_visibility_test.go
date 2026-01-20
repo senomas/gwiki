@@ -69,7 +69,7 @@ Secret bananas with #privatetag.
 		t.Fatalf("expected no private search results, got %+v", results)
 	}
 
-	tags, err := idx.ListTags(publicCtx, 100, "", false)
+	tags, err := idx.ListTags(publicCtx, 100, "", false, false)
 	if err != nil {
 		t.Fatalf("list tags: %v", err)
 	}

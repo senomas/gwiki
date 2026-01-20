@@ -32,14 +32,15 @@ type NoteSummary struct {
 }
 
 type NoteListFilter struct {
-	Tags       []string
-	Date       string
-	Query      string
-	Folder     string
-	Root       bool
-	ExcludeUID string
-	Limit      int
-	Offset     int
+	Tags        []string
+	Date        string
+	Query       string
+	Folder      string
+	Root        bool
+	JournalOnly bool
+	ExcludeUID  string
+	Limit       int
+	Offset      int
 }
 
 type SearchResult struct {
@@ -59,12 +60,13 @@ type UpdateDaySummary struct {
 }
 
 type TaskCountFilter struct {
-	Tags    []string
-	Date    string
-	Folder  string
-	Root    bool
-	DueOnly bool
-	DueDate string
+	Tags        []string
+	Date        string
+	Folder      string
+	Root        bool
+	JournalOnly bool
+	DueOnly     bool
+	DueDate     string
 }
 
 type NoteHistorySummary struct {
@@ -1052,6 +1054,9 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		}
 		groupBy = true
 	}
+	if filter.JournalOnly {
+		clauses = append(clauses, "files.is_journal = 1")
+	}
 	if strings.TrimSpace(filter.ExcludeUID) != "" {
 		clauses = append(clauses, "(files.uid IS NULL OR files.uid != ?)")
 		args = append(args, filter.ExcludeUID)
@@ -1099,7 +1104,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	return notes, rows.Err()
 }
 
-func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool) ([]TaskItem, error) {
+func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool, journalOnly bool) ([]TaskItem, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -1123,6 +1128,9 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			args := []interface{}{dueDate}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if journalOnly {
+				query += " AND files.is_journal = 1"
+			}
 			if folderClause != "" {
 				query += " AND " + folderClause
 				args = append(args, folderArgs...)
@@ -1143,6 +1151,9 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			args := []interface{}{}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if journalOnly {
+				query += " AND files.is_journal = 1"
+			}
 			if folderClause != "" {
 				query += " AND " + folderClause
 				args = append(args, folderArgs...)
@@ -1166,6 +1177,9 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 		`
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
 		base += " AND " + exclusiveClause
+		if journalOnly {
+			base += " AND files.is_journal = 1"
+		}
 		if folderClause != "" {
 			base += " AND " + folderClause
 		}
@@ -1216,7 +1230,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 	return out, rows.Err()
 }
 
-func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, activityDate string, folder string, rootOnly bool) ([]TaskItem, error) {
+func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, activityDate string, folder string, rootOnly bool, journalOnly bool) ([]TaskItem, error) {
 	if activityDate == "" {
 		return nil, fmt.Errorf("activity date required")
 	}
@@ -1254,6 +1268,9 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 			args = []interface{}{day, dueDate}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if journalOnly {
+				query += " AND files.is_journal = 1"
+			}
 			if folderClause != "" {
 				query += " AND " + folderClause
 				args = append(args, folderArgs...)
@@ -1279,6 +1296,9 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 			args = []interface{}{day}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if journalOnly {
+				query += " AND files.is_journal = 1"
+			}
 			if folderClause != "" {
 				query += " AND " + folderClause
 				args = append(args, folderArgs...)
@@ -1309,6 +1329,9 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 			JOIN files ON files.id = tasks.file_id
 			JOIN matching_files ON matching_files.id = files.id
 			WHERE tasks.checked = 0`
+		if journalOnly {
+			base += " AND files.is_journal = 1"
+		}
 		if folderClause != "" {
 			base += " AND " + folderClause
 		}
@@ -1759,7 +1782,7 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	return results, rows.Err()
 }
 
-func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
+func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly bool, journalOnly bool) ([]TagSummary, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -1776,6 +1799,9 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 			JOIN files ON files.id = file_tags.file_id
 			WHERE files.visibility = ?`
 		args := []interface{}{"public"}
+		if journalOnly {
+			query += " AND files.is_journal = 1"
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1793,6 +1819,9 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 			LEFT JOIN file_tags ON tags.id = file_tags.tag_id
 			LEFT JOIN files ON files.id = file_tags.file_id`
 		args := []interface{}{}
+		if journalOnly {
+			query += " WHERE files.is_journal = 1"
+		}
 		if folderClause != "" {
 			if len(args) == 0 {
 				query += " WHERE " + folderClause
@@ -1824,9 +1853,9 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
+func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int, folder string, rootOnly bool, journalOnly bool) ([]TagSummary, error) {
 	if len(active) == 0 {
-		return i.ListTags(ctx, limit, folder, rootOnly)
+		return i.ListTags(ctx, limit, folder, rootOnly, journalOnly)
 	}
 	if limit <= 0 {
 		limit = 100
@@ -1836,6 +1865,10 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	visibilityClause := ""
 	if publicOnly(ctx) {
 		visibilityClause = " AND files.visibility = ?"
+	}
+	journalClause := ""
+	if journalOnly {
+		journalClause = " AND files.is_journal = 1"
 	}
 	folderClause := ""
 	if rootOnly {
@@ -1850,7 +1883,7 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 			FROM files
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + ` AND ` + exclusiveClause + `
+			WHERE tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + journalClause + ` AND ` + exclusiveClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -1895,7 +1928,7 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	return tags, rows.Err()
 }
 
-func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, activityDate string, limit int, folder string, rootOnly bool) ([]TagSummary, error) {
+func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, activityDate string, limit int, folder string, rootOnly bool, journalOnly bool) ([]TagSummary, error) {
 	if activityDate == "" {
 		return nil, fmt.Errorf("activity date required")
 	}
@@ -1920,6 +1953,9 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 					WHERE file_histories.action_date = ? AND files.visibility = ? AND ` + exclusiveClause
 			args := []interface{}{day, "public"}
 			args = append(args, exclusiveArgs...)
+			if journalOnly {
+				query += " AND files.is_journal = 1"
+			}
 			if folderClause != "" {
 				query += " AND " + folderClause
 				args = append(args, folderArgs...)
@@ -1944,6 +1980,9 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 					WHERE file_histories.action_date = ? AND ` + exclusiveClause
 			args := []interface{}{day}
 			args = append(args, exclusiveArgs...)
+			if journalOnly {
+				query += " AND files.is_journal = 1"
+			}
 			if folderClause != "" {
 				query += " AND " + folderClause
 				args = append(args, folderArgs...)
@@ -1983,6 +2022,10 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	if publicOnly(ctx) {
 		visibilityClause = " AND files.visibility = ?"
 	}
+	journalClause := ""
+	if journalOnly {
+		journalClause = " AND files.is_journal = 1"
+	}
 	folderClause := ""
 	if rootOnly {
 		folderClause = " AND files.path NOT LIKE ?"
@@ -1997,7 +2040,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + ` AND ` + exclusiveClause + `
+			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + journalClause + ` AND ` + exclusiveClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -2792,6 +2835,25 @@ func (i *Index) JournalDates(ctx context.Context) ([]time.Time, error) {
 	return dates, rows.Err()
 }
 
+func (i *Index) CountJournalNotes(ctx context.Context, folder string, rootOnly bool) (int, error) {
+	query := "SELECT COUNT(*) FROM files WHERE is_journal = 1"
+	args := []interface{}{}
+	if publicOnly(ctx) {
+		query += " AND visibility = ?"
+		args = append(args, "public")
+	}
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	if folderClause != "" {
+		query += " AND " + folderClause
+		args = append(args, folderArgs...)
+	}
+	var count int
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string, activityDate string, folder string, rootOnly bool) (int, error) {
 	if activityDate == "" {
 		return 0, fmt.Errorf("activity date required")
@@ -2888,6 +2950,12 @@ func (i *Index) CountTasks(ctx context.Context, filter TaskCountFilter) (int, er
 		for _, tag := range filter.Tags {
 			args = append(args, tag)
 		}
+	}
+	if filter.JournalOnly {
+		clauses = append(clauses, "files.is_journal = 1")
+	}
+	if filter.JournalOnly {
+		clauses = append(clauses, "files.is_journal = 1")
 	}
 
 	if clause, clauseArgs := exclusiveTagFilterClause(filter.Tags, "files"); clause != "" {

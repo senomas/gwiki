@@ -200,11 +200,16 @@ func (s *Server) buildJournalSidebar(ctx context.Context, now time.Time) (Journa
 func buildJournalFilterQuery(r *http.Request) string {
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
-	_, _, noteTags := splitSpecialTags(activeTags)
+	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
 	if !IsAuthenticated(r.Context()) {
+		activeJournal = false
 		activeTags = noteTags
 	}
-	return buildFilterQuery(activeTags, "", "", activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	return buildFilterQuery(urlTags, "", "", activeFolder, activeRoot)
 }
 
 func historyUser(ctx context.Context) string {
@@ -420,12 +425,26 @@ func parseDateParam(raw string) string {
 	return raw
 }
 
-func splitSpecialTags(tags []string) (bool, bool, []string) {
+const journalTagName = "JOURNAL"
+
+func splitSpecialTags(tags []string) (bool, bool, bool, []string) {
 	out := make([]string, 0, len(tags))
+	activeTodo := false
+	activeDue := false
+	activeJournal := false
 	for _, tag := range tags {
-		out = append(out, tag)
+		switch {
+		case strings.EqualFold(tag, "todo"):
+			activeTodo = true
+		case strings.EqualFold(tag, "due"):
+			activeDue = true
+		case strings.EqualFold(tag, journalTagName):
+			activeJournal = true
+		default:
+			out = append(out, tag)
+		}
 	}
-	return false, false, out
+	return activeTodo, activeDue, activeJournal, out
 }
 
 const taskIDPrefix = "task-"
@@ -534,6 +553,23 @@ func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]
 		})
 	}
 	return links
+}
+
+func appendJournalTagLink(links []TagLink, activeJournal bool, journalCount int, basePath string, noteTags []string, activeDate string, activeSearch string, activeFolder string, activeRoot bool) []TagLink {
+	targetTags := append([]string{}, noteTags...)
+	if !activeJournal {
+		targetTags = append(targetTags, journalTagName)
+	}
+	link := TagLink{
+		Name:   journalTagName,
+		Count:  journalCount,
+		URL:    buildTagsURL(basePath, targetTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		Active: activeJournal,
+	}
+	if activeJournal {
+		link.URL = buildTagsURL(basePath, noteTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	}
+	return append([]TagLink{link}, links...)
 }
 
 func buildTagsQuery(tags []string) string {
@@ -728,24 +764,26 @@ func buildFolderTree(folders []string, hasRoot bool, activeFolder string, active
 	return out
 }
 
-func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool) (int, int, error) {
+func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool) (int, int, error) {
 	_ = activeTodo
 	_ = activeDue
 	todoCount, err := s.idx.CountTasks(r.Context(), index.TaskCountFilter{
-		Tags:   noteTags,
-		Date:   activeDate,
-		Folder: folder,
-		Root:   rootOnly,
+		Tags:        noteTags,
+		Date:        activeDate,
+		Folder:      folder,
+		Root:        rootOnly,
+		JournalOnly: journalOnly,
 	})
 	if err != nil {
 		return 0, 0, err
 	}
 	dueCount, err := s.idx.CountTasks(r.Context(), index.TaskCountFilter{
-		Tags:    noteTags,
-		Date:    activeDate,
-		Folder:  folder,
-		Root:    rootOnly,
-		DueOnly: true,
+		Tags:        noteTags,
+		Date:        activeDate,
+		Folder:      folder,
+		Root:        rootOnly,
+		JournalOnly: journalOnly,
+		DueOnly:     true,
 	})
 	if err != nil {
 		return 0, 0, err
@@ -753,13 +791,13 @@ func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, active
 	return todoCount, dueCount, nil
 }
 
-func (s *Server) loadFilteredTags(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool) ([]index.TagSummary, error) {
+func (s *Server) loadFilteredTags(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool) ([]index.TagSummary, error) {
 	_ = activeTodo
 	_ = activeDue
 	if activeDate != "" {
-		return s.idx.ListTagsFilteredByDate(r.Context(), noteTags, activeDate, 100, folder, rootOnly)
+		return s.idx.ListTagsFilteredByDate(r.Context(), noteTags, activeDate, 100, folder, rootOnly, journalOnly)
 	}
-	return s.idx.ListTagsFiltered(r.Context(), noteTags, 100, folder, rootOnly)
+	return s.idx.ListTagsFiltered(r.Context(), noteTags, 100, folder, rootOnly, journalOnly)
 }
 
 const mapsAppShortLinkPrefix = "https://maps.app.goo.gl/"
@@ -3591,14 +3629,19 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
 		activeTodo = false
 		activeDue = false
+		activeJournal = false
 		activeTags = noteTags
 	}
-	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3607,14 +3650,14 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -3624,16 +3667,22 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = dueCount
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(urlTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, "/", noteTags, activeDate, activeSearch, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagQuery := buildTagsQuery(activeTags)
-	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, noteTags, activeDate, activeSearch, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3643,7 +3692,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", urlTags, activeDate, activeSearch)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3659,13 +3708,13 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
 		DueCount:         dueCount,
-		ActiveTags:       activeTags,
+		ActiveTags:       urlTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
-		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		HomeURL:          buildTagsURL("/", urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -3712,14 +3761,19 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	activeDate := ""
 	calendarDate := date
 	dailyBase := "/daily/" + date
-	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
 		activeTodo = false
 		activeDue = false
+		activeJournal = false
 		activeTags = noteTags
 	}
-	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3728,14 +3782,14 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -3746,14 +3800,15 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		_ = dueCount
 	}
 	notes, err := s.idx.NoteList(r.Context(), index.NoteListFilter{
-		Tags:       activeTags,
-		Date:       date,
-		Query:      activeSearch,
-		Folder:     activeFolder,
-		Root:       activeRoot,
-		ExcludeUID: excludeUID,
-		Limit:      200,
-		Offset:     0,
+		Tags:        noteTags,
+		Date:        date,
+		Query:       activeSearch,
+		Folder:      activeFolder,
+		Root:        activeRoot,
+		JournalOnly: activeJournal,
+		ExcludeUID:  excludeUID,
+		Limit:       200,
+		Offset:      0,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3768,21 +3823,27 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		}
 		noteCards = append(noteCards, card)
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, dailyBase, todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(urlTags, tags, allowed, dailyBase, todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, dailyBase, noteTags, activeDate, activeSearch, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagQuery := buildTagsQuery(activeTags)
-	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(parsedDate, updateDays, "/", tagQuery, calendarDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, dailyBase, activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, dailyBase, urlTags, activeDate, activeSearch)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), parsedDate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3798,13 +3859,13 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
 		DueCount:         dueCount,
-		ActiveTags:       activeTags,
+		ActiveTags:       urlTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
-		HomeURL:          buildTagsURL(dailyBase, activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		HomeURL:          buildTagsURL(dailyBase, urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -3919,14 +3980,19 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := ""
 	activeDate := ""
-	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
 		activeTodo = false
 		activeDue = false
+		activeJournal = false
 		activeTags = noteTags
 	}
-	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -3935,14 +4001,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -3951,21 +4017,27 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			allowed[tag.Name] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(urlTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, "/", noteTags, activeDate, activeSearch, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagQuery := buildTagsQuery(activeTags)
-	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", urlTags, activeDate, activeSearch)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3978,13 +4050,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	data.TagLinks = tagLinks
 	data.TodoCount = todoCount
 	data.DueCount = dueCount
-	data.ActiveTags = activeTags
+	data.ActiveTags = urlTags
 	data.TagQuery = tagQuery
 	data.FolderTree = folderTree
 	data.ActiveFolder = activeFolder
 	data.FolderQuery = buildFolderQuery(activeFolder, activeRoot)
 	data.FilterQuery = filterQuery
-	data.HomeURL = buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	data.HomeURL = buildTagsURL("/", urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	data.ActiveDate = activeDate
 	data.DateQuery = buildDateQuery(activeDate)
 	data.SearchQueryParam = buildSearchQuery(activeSearch)
@@ -4003,7 +4075,7 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	tags, err := s.idx.ListTags(r.Context(), 200, "", false)
+	tags, err := s.idx.ListTags(r.Context(), 200, "", false, false)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -4025,6 +4097,12 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 		suggestions = append(suggestions, tag.Name)
 		if len(suggestions) >= maxSuggestions {
 			break
+		}
+	}
+	if len(suggestions) < maxSuggestions {
+		journalLower := strings.ToLower(journalTagName)
+		if _, ok := seen[journalTagName]; !ok && fuzzyMatchTag(queryNormalized, journalLower) {
+			suggestions = append(suggestions, journalTagName)
 		}
 	}
 	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions})
@@ -4280,11 +4358,16 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	_, _, noteTags := splitSpecialTags(activeTags)
+	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
 	if !IsAuthenticated(r.Context()) {
+		activeJournal = false
 		activeTags = noteTags
 	}
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, noteTags, activeDate, activeSearch, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -4293,11 +4376,11 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		HomeNotes:        homeNotes,
 		HomeHasMore:      hasMore,
 		NextHomeOffset:   nextOffset,
-		ActiveTags:       activeTags,
-		TagQuery:         buildTagsQuery(activeTags),
+		ActiveTags:       urlTags,
+		TagQuery:         buildTagsQuery(urlTags),
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:      buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot),
-		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		FilterQuery:      buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot),
+		HomeURL:          buildTagsURL("/", urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -4319,31 +4402,35 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	dueDate := ""
 	if activeDue {
 		dueDate = time.Now().Format("2006-01-02")
 	}
 	var tasks []index.TaskItem
 	var err error
-	tasks, err = s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot)
+	tasks, err = s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if len(activeTags) > 0 || activeDate != "" {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -4353,21 +4440,27 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = dueCount
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/tasks", todoCount, dueCount, activeDate, activeSearch, true, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(urlTags, tags, allowed, "/tasks", todoCount, dueCount, activeDate, activeSearch, true, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, "/tasks", noteTags, activeDate, activeSearch, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagQuery := buildTagsQuery(activeTags)
-	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/tasks", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/tasks", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/tasks", urlTags, activeDate, activeSearch)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4381,13 +4474,13 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
 		DueCount:         dueCount,
-		ActiveTags:       activeTags,
+		ActiveTags:       urlTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
-		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		HomeURL:          buildTagsURL("/", urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -4412,29 +4505,33 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	dueDate := ""
 	if activeDue {
 		dueDate = time.Now().Format("2006-01-02")
 	}
-	tasks, err := s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot)
+	tasks, err := s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if len(activeTags) > 0 || activeDate != "" {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -4444,21 +4541,27 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = dueCount
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/todo", todoCount, dueCount, activeDate, activeSearch, true, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(urlTags, tags, allowed, "/todo", todoCount, dueCount, activeDate, activeSearch, true, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, "/todo", noteTags, activeDate, activeSearch, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagQuery := buildTagsQuery(activeTags)
-	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/todo", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/todo", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/todo", urlTags, activeDate, activeSearch)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4532,13 +4635,13 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
 		DueCount:         dueCount,
-		ActiveTags:       activeTags,
+		ActiveTags:       urlTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
-		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		HomeURL:          buildTagsURL("/", urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -4563,25 +4666,29 @@ func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	_, _, noteTags := splitSpecialTags(activeTags)
-	tasks, err := s.idx.OpenTasks(r.Context(), noteTags, 300, false, "", activeFolder, activeRoot)
+	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
+	tasks, err := s.idx.OpenTasks(r.Context(), noteTags, 300, false, "", activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, false, false, activeDate, activeFolder, activeRoot)
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, false, false, activeDate, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if len(activeTags) > 0 || activeDate != "" {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, false, false, activeDate, activeFolder, activeRoot)
+		filteredTags, err := s.loadFilteredTags(r, noteTags, false, false, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -4590,21 +4697,27 @@ func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
 			allowed[tag.Name] = struct{}{}
 		}
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/due", todoCount, 0, activeDate, activeSearch, true, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(urlTags, tags, allowed, "/due", todoCount, 0, activeDate, activeSearch, true, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, "/due", noteTags, activeDate, activeSearch, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tagQuery := buildTagsQuery(activeTags)
-	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/due", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	folders, hasRoot, err := s.idx.ListFolders(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/due", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/due", urlTags, activeDate, activeSearch)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4698,13 +4811,13 @@ func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
 		DueCount:         dueCount,
-		ActiveTags:       activeTags,
+		ActiveTags:       urlTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
-		HomeURL:          buildTagsURL("/due", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		HomeURL:          buildTagsURL("/due", urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
@@ -4937,15 +5050,16 @@ func extractFirstListItem(htmlStr string) string {
 	return strings.TrimSpace(htmlStr[start:end])
 }
 
-func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, activeDate string, activeSearch string, folder string, rootOnly bool) ([]NoteCard, int, bool, error) {
+func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, activeDate string, activeSearch string, folder string, rootOnly bool, journalOnly bool) ([]NoteCard, int, bool, error) {
 	notes, err := s.idx.NoteList(ctx, index.NoteListFilter{
-		Tags:   tags,
-		Date:   activeDate,
-		Query:  activeSearch,
-		Folder: folder,
-		Root:   rootOnly,
-		Limit:  homeNotesPageSize + 1,
-		Offset: offset,
+		Tags:        tags,
+		Date:        activeDate,
+		Query:       activeSearch,
+		Folder:      folder,
+		Root:        rootOnly,
+		JournalOnly: journalOnly,
+		Limit:       homeNotesPageSize + 1,
+		Offset:      offset,
 	})
 	if err != nil {
 		return nil, offset, false, err
@@ -5658,14 +5772,19 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	activeTodo, activeDue, noteTags := splitSpecialTags(activeTags)
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
 		activeTodo = false
 		activeDue = false
+		activeJournal = false
 		activeTags = noteTags
 	}
-	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot)
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
@@ -5673,13 +5792,13 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			return ViewData{}, http.StatusInternalServerError, err
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
-		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot)
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
 		if err != nil {
 			return ViewData{}, http.StatusInternalServerError, err
 		}
@@ -5688,13 +5807,18 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		}
 		_ = dueCount
 	}
-	tagLinks := buildTagLinks(activeTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	tagLinks := buildTagLinks(urlTags, tags, allowed, "/", todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, "/", noteTags, activeDate, activeSearch, activeFolder, activeRoot)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
-	tagQuery := buildTagsQuery(activeTags)
-	filterQuery := buildFilterQuery(activeTags, activeDate, activeSearch, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
 	calendar := buildCalendarMonth(time.Now(), updateDays, "/", tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
 	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title, noteMeta.ID)
 	if err != nil {
@@ -5718,7 +5842,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
-	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", activeTags, activeDate, activeSearch)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, "/", urlTags, activeDate, activeSearch)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
@@ -5735,13 +5859,13 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		TagLinks:         tagLinks,
 		TodoCount:        todoCount,
 		DueCount:         dueCount,
-		ActiveTags:       activeTags,
+		ActiveTags:       urlTags,
 		TagQuery:         tagQuery,
 		FolderTree:       folderTree,
 		ActiveFolder:     activeFolder,
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      filterQuery,
-		HomeURL:          buildTagsURL("/", activeTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
+		HomeURL:          buildTagsURL("/", urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot)),
 		ActiveDate:       activeDate,
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,

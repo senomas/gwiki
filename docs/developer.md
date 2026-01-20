@@ -168,6 +168,7 @@ SQLite index implementation (notes, tags, tasks, links, history).
 - `nullIfZero`: helper for null if zero
 - `NoteExists`: helper for note exists
 - `resolveLinkTargetID`: helper for resolve link target id
+- `CountJournalNotes`: helper for count journal notes
 - `FileIDByPath`: helper for file idby path
 - `PathByFileID`: helper for path by file id
 - `PathByUID`: helper for path by uid
