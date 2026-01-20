@@ -1294,13 +1294,19 @@
     (function () {
       var launcher = document.getElementById("quick-launcher");
       function getNoteBody() {
-        return document.querySelector(".note-body[data-note-id][data-note-path]");
-      }
-      function noteFocusables() {
-        var noteBody = getNoteBody();
-        if (!noteBody) {
-          return [];
+        var body = document.querySelector(".note-body[data-note-id][data-note-path]");
+        if (!body) {
+          return null;
         }
+        if (body.closest("#notes-feed")) {
+          return null;
+        }
+        return body;
+      }
+      function getNotesFeed() {
+        return document.getElementById("notes-feed");
+      }
+      function noteFocusables(noteBody) {
         var summaries = noteBody.querySelectorAll("summary");
         summaries.forEach(function (summary) {
           if (!summary.hasAttribute("tabindex")) {
@@ -1322,6 +1328,29 @@
           return item.getClientRects().length > 0;
         });
       }
+      function feedFocusables(feed) {
+        var items = feed.querySelectorAll("h1 a[href]");
+        return Array.prototype.filter.call(items, function (item) {
+          if (item.hasAttribute("disabled")) {
+            return false;
+          }
+          if (item.getAttribute("tabindex") === "-1") {
+            return false;
+          }
+          return item.getClientRects().length > 0;
+        });
+      }
+      function navigationTargets() {
+        var noteBody = getNoteBody();
+        if (noteBody) {
+          return noteFocusables(noteBody);
+        }
+        var feed = getNotesFeed();
+        if (feed) {
+          return feedFocusables(feed);
+        }
+        return [];
+      }
 
       function currentIndex(items) {
         var active = document.activeElement;
@@ -1334,7 +1363,7 @@
       }
 
       function moveFocus(delta) {
-        var items = noteFocusables();
+        var items = navigationTargets();
         if (!items.length) {
           return;
         }
@@ -1360,7 +1389,7 @@
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
           return;
         }
-        if (!getNoteBody()) {
+        if (!getNoteBody() && !getNotesFeed()) {
           return;
         }
         if (launcher && launcher.classList.contains("is-open")) {
