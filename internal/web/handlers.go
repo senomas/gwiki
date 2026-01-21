@@ -5000,6 +5000,23 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	data := ViewData{
+		Title:           "Git Sync",
+		ContentTemplate: "sync",
+		SyncPending:     true,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
 	start := time.Now()
 	output, err := syncer.Run(r.Context(), s.cfg.RepoPath)
 	if err == nil {
@@ -5016,17 +5033,15 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	duration := time.Since(start).Round(time.Millisecond).String()
 	data := ViewData{
-		Title:           "Git Sync",
-		ContentTemplate: "sync",
-		SyncOutput:      output,
-		SyncDuration:    duration,
+		SyncOutput:   output,
+		SyncDuration: duration,
 	}
 	if err != nil {
 		data.SyncError = err.Error()
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 	s.attachViewData(r, &data)
-	s.views.RenderPage(w, data)
+	s.views.RenderTemplate(w, "sync_result", data)
 }
 
 func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {

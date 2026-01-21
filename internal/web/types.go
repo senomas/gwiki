@@ -75,6 +75,7 @@ type ViewData struct {
 	SyncOutput       string
 	SyncError        string
 	SyncDuration     string
+	SyncPending      bool
 	BrokenLinks      []BrokenLinkGroup
 	BuildVersion     string
 }
