@@ -8,6 +8,11 @@ BUILD_TAG := $(shell git show -s --format=%cd --date=format:%Y%m%d%H%M%S)
 IMAGE := docker.senomas.com/gwiki
 
 build: css htmx
+	@for f in .env*; do \
+		if [ -f "$$f" ] && rg -q '^GWIKI_IMAGE=' "$$f"; then \
+			sed -i 's|^GWIKI_IMAGE=.*|GWIKI_IMAGE=$(IMAGE):$(BUILD_TAG)|' "$$f"; \
+		fi; \
+	done
 	docker build -t $(IMAGE):$(BUILD_TAG) .
 	docker tag $(IMAGE):$(BUILD_TAG) $(IMAGE):latest
 	docker push $(IMAGE):$(BUILD_TAG)

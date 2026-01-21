@@ -4,3 +4,5 @@ notes
 tmp/
 attachments/
 attachments/
+.env.truenas
+truenas-compose.yml
