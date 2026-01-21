@@ -6,3 +6,5 @@ attachments/
 attachments/
 .env.truenas
 truenas-compose.yml
+static/css/app.css
+static/js/htmx.min.js

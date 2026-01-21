@@ -28,6 +28,9 @@ Build the image:
 docker build -t gwiki .
 ```
 
+The Docker build downloads HTMX and compiles Tailwind CSS in a build stage, then
+copies the generated assets into the final image.
+
 Run with a mounted repo:
 
 ```bash
