@@ -29,8 +29,11 @@ NODE_IMAGE ?= node:20-alpine
 TAILWIND_CONFIG ?= tailwind.config.js
 TAILWIND_INPUT ?= assets/tailwind.css
 TAILWIND_OUTPUT ?= static/css/app.css
+TAILWIND_SOURCES := $(shell find templates internal -type f -name '*.html' -o -name '*.go')
 
-css:
+css: $(TAILWIND_OUTPUT)
+
+$(TAILWIND_OUTPUT): $(TAILWIND_INPUT) $(TAILWIND_CONFIG) $(TAILWIND_SOURCES)
 	docker run --rm -v "$$(pwd)":/work -w /work $(NODE_IMAGE) \
 		sh -lc "mkdir -p $$(dirname $(TAILWIND_OUTPUT)) && BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss -c $(TAILWIND_CONFIG) -i $(TAILWIND_INPUT) -o $(TAILWIND_OUTPUT)"
 
@@ -38,6 +41,12 @@ css-watch:
 	docker run --rm -it -v "$$(pwd)":/work -w /work $(NODE_IMAGE) \
 		sh -lc "mkdir -p $$(dirname $(TAILWIND_OUTPUT)) && BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss -c $(TAILWIND_CONFIG) -i $(TAILWIND_INPUT) -o $(TAILWIND_OUTPUT) --watch"
 
-htmx:
-	mkdir -p static/js
-	curl -fsSL -o static/js/htmx.min.js https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js
+HTMX_VERSION ?= 1.9.12
+HTMX_URL ?= https://unpkg.com/htmx.org@$(HTMX_VERSION)/dist/htmx.min.js
+HTMX_OUTPUT ?= static/js/htmx.min.js
+
+htmx: $(HTMX_OUTPUT)
+
+$(HTMX_OUTPUT):
+	mkdir -p $$(dirname $(HTMX_OUTPUT))
+	curl -fsSL -o $(HTMX_OUTPUT) $(HTMX_URL)
