@@ -120,6 +120,82 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	}
 }
 
+func currentUserName(ctx context.Context) string {
+	if user, ok := CurrentUser(ctx); ok {
+		return strings.TrimSpace(user.Name)
+	}
+	return ""
+}
+
+func (s *Server) ownerOptionsForUser(ctx context.Context) ([]OwnerOption, string, error) {
+	userName := currentUserName(ctx)
+	if userName == "" {
+		return nil, "", nil
+	}
+	options := []OwnerOption{{Name: userName, Label: "Personal"}}
+	groups, err := s.idx.WritableGroupsForUser(ctx, userName)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, group := range groups {
+		options = append(options, OwnerOption{Name: group, Label: group})
+	}
+	return options, userName, nil
+}
+
+func (s *Server) ownerRepoPath(owner string) string {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return ""
+	}
+	return filepath.Join(s.cfg.RepoPath, owner)
+}
+
+func (s *Server) ownerFromNotePath(notePath string) (string, string, error) {
+	return fs.SplitOwnerNotePath(notePath)
+}
+
+func (s *Server) ownerFromNoteID(ctx context.Context, noteID string) (string, string, error) {
+	if noteID == "" {
+		return "", "", fmt.Errorf("note id required")
+	}
+	notePath, err := s.idx.PathByUID(ctx, noteID)
+	if err != nil {
+		return "", "", err
+	}
+	return fs.SplitOwnerNotePath(notePath)
+}
+
+func (s *Server) requireWriteAccess(w http.ResponseWriter, r *http.Request, ownerName string) bool {
+	if !s.requireAuth(w, r) {
+		return false
+	}
+	userName := currentUserName(r.Context())
+	if userName == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	canWrite, err := s.idx.CanWriteOwner(r.Context(), ownerName, userName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	if !canWrite {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func (s *Server) requireWriteAccessForPath(w http.ResponseWriter, r *http.Request, notePath string) bool {
+	owner, _, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return s.requireWriteAccess(w, r, owner)
+}
+
 func buildJournalIndex(dates []time.Time) map[int]map[time.Month]map[int]struct{} {
 	index := map[int]map[time.Month]map[int]struct{}{}
 	for _, dt := range dates {
@@ -310,6 +386,9 @@ func normalizeFolderPath(input string) (string, error) {
 }
 
 func isJournalNotePath(notePath string) bool {
+	if _, rel, err := fs.SplitOwnerNotePath(notePath); err == nil {
+		notePath = rel
+	}
 	return journalNoteRE.MatchString(strings.TrimPrefix(notePath, "/"))
 }
 
@@ -333,16 +412,25 @@ func listAttachmentNames(dir string) []string {
 	return names
 }
 
-func (s *Server) attachmentsRoot() string {
-	return filepath.Join(s.cfg.RepoPath, "notes", "attachments")
+func (s *Server) attachmentsRoot(owner string) string {
+	return filepath.Join(s.cfg.RepoPath, owner, "notes", "attachments")
 }
 
-func (s *Server) tempAttachmentsDir(token string) string {
-	return filepath.Join(s.attachmentsRoot(), ".tmp", token)
+func (s *Server) ensureOwnerNotesDir(owner string) error {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("owner required")
+	}
+	notesRoot := filepath.Join(s.cfg.RepoPath, owner, "notes")
+	return os.MkdirAll(notesRoot, 0o755)
 }
 
-func (s *Server) noteAttachmentsDir(noteID string) string {
-	return filepath.Join(s.attachmentsRoot(), noteID)
+func (s *Server) tempAttachmentsDir(owner, token string) string {
+	return filepath.Join(s.attachmentsRoot(owner), ".tmp", token)
+}
+
+func (s *Server) noteAttachmentsDir(owner, noteID string) string {
+	return filepath.Join(s.attachmentsRoot(owner), noteID)
 }
 
 func (s *Server) assetsRoot() string {
@@ -1815,7 +1903,7 @@ func (t *whatsappLinkTransformer) Transform(node *ast.Document, reader text.Read
 type attachmentVideoEmbedTransformer struct{}
 
 func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
-	_, srv := attachmentVideoEmbedContext(pc)
+	ctx, srv := attachmentVideoEmbedContext(pc)
 	if srv == nil {
 		return
 	}
@@ -1843,7 +1931,7 @@ func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader t
 		if !ok {
 			continue
 		}
-		thumbURL, ok := srv.ensureVideoThumbnail(noteID, relPath)
+		thumbURL, ok := srv.ensureVideoThumbnail(ctx, noteID, relPath)
 		title := strings.TrimSpace(label)
 		if title == "" {
 			title = path.Base(relPath)
@@ -1910,11 +1998,15 @@ func filterFutureJournalTasks(tasks []index.TaskItem, now time.Time) []index.Tas
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	filtered := make([]index.TaskItem, 0, len(tasks))
 	for _, task := range tasks {
-		if !journalNoteRE.MatchString(task.Path) {
+		taskPath := task.Path
+		if _, rel, err := fs.SplitOwnerNotePath(task.Path); err == nil {
+			taskPath = rel
+		}
+		if !journalNoteRE.MatchString(taskPath) {
 			filtered = append(filtered, task)
 			continue
 		}
-		trimmed := strings.TrimSuffix(task.Path, ".md")
+		trimmed := strings.TrimSuffix(taskPath, ".md")
 		parts := strings.Split(trimmed, "/")
 		if len(parts) != 2 {
 			filtered = append(filtered, task)
@@ -4993,10 +5085,14 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	ownerRepo := s.ownerRepoPath(currentUserName(r.Context()))
+	if ownerRepo == "" {
+		ownerRepo = s.cfg.RepoPath
+	}
 	start := time.Now()
-	output, err := syncer.Run(r.Context(), s.cfg.RepoPath)
+	output, err := syncer.Run(r.Context(), ownerRepo)
 	if err == nil {
-		logOutput, logErr := syncer.LogGraph(r.Context(), s.cfg.RepoPath, 10)
+		logOutput, logErr := syncer.LogGraph(r.Context(), ownerRepo, 10)
 		output += logOutput
 		if logErr != nil {
 			err = logErr
@@ -5045,6 +5141,9 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !s.requireWriteAccessForPath(w, r, notePath) {
 		return
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
@@ -5189,23 +5288,75 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
+		ownerOptions, defaultOwner, err := s.ownerOptionsForUser(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		selectedOwner := strings.TrimSpace(r.URL.Query().Get("owner"))
+		if selectedOwner == "" {
+			selectedOwner = defaultOwner
+		}
+		if selectedOwner == "" && len(ownerOptions) > 0 {
+			selectedOwner = ownerOptions[0].Name
+		}
+		if selectedOwner != "" && len(ownerOptions) > 0 {
+			found := false
+			for _, option := range ownerOptions {
+				if option.Name == selectedOwner {
+					found = true
+					break
+				}
+			}
+			if !found {
+				selectedOwner = defaultOwner
+			}
+		}
 		uploadToken := strings.TrimSpace(r.URL.Query().Get("upload_token"))
 		if uploadToken == "" {
 			uploadToken = uuid.NewString()
 		} else if _, err := uuid.Parse(uploadToken); err != nil {
 			uploadToken = uuid.NewString()
 		}
+		rawRef := strings.TrimSpace(r.URL.Query().Get("path"))
+		presetTitle := ""
+		presetFolder := ""
+		if rawRef != "" {
+			rawRef = strings.ReplaceAll(rawRef, "\\", "/")
+			clean := path.Clean(rawRef)
+			if clean != "." && !strings.HasPrefix(clean, "..") && !strings.HasPrefix(clean, "/") && !strings.Contains(clean, "/../") {
+				dir := path.Dir(clean)
+				if dir != "." {
+					presetFolder = dir
+				}
+				base := path.Base(clean)
+				if ext := path.Ext(base); ext != "" {
+					base = strings.TrimSuffix(base, ext)
+				}
+				presetTitle = strings.TrimSpace(base)
+			}
+		}
+		rawContent := ""
+		noteMeta := index.FrontmatterAttrs{Priority: "10"}
+		if presetFolder != "" {
+			noteMeta.Folder = presetFolder
+		}
+		if presetTitle != "" {
+			rawContent = "# " + presetTitle + "\n\n"
+		}
 		data := ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
-			NoteTitle:        "",
-			RawContent:       "",
+			NoteTitle:        presetTitle,
+			RawContent:       rawContent,
 			FrontmatterBlock: "",
-			NoteMeta:         index.FrontmatterAttrs{Priority: "10"},
+			NoteMeta:         noteMeta,
 			FolderOptions:    s.folderOptions(r.Context()),
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    selectedOwner,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(selectedOwner, uploadToken)),
 		}
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
@@ -5217,14 +5368,28 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseForm(); err != nil {
 		uploadToken := r.Form.Get("upload_token")
+		ownerName := strings.TrimSpace(r.Form.Get("owner"))
+		if ownerName == "" {
+			ownerName = currentUserName(r.Context())
+		}
+		ownerOptions, defaultOwner, optionsErr := s.ownerOptionsForUser(r.Context())
+		if optionsErr != nil {
+			http.Error(w, optionsErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if ownerName == "" {
+			ownerName = defaultOwner
+		}
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       r.Form.Get("content"),
 			FrontmatterBlock: r.Form.Get("frontmatter"),
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -5233,18 +5398,49 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	uploadToken := r.Form.Get("upload_token")
+	ownerName := strings.TrimSpace(r.Form.Get("owner"))
+	if ownerName == "" {
+		ownerName = currentUserName(r.Context())
+	}
+	if ownerName == "" {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireWriteAccess(w, r, ownerName) {
+		return
+	}
+	if err := s.ensureOwnerNotesDir(ownerName); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+		s.renderEditError(w, r, ViewData{
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
+			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
+		}, http.StatusInternalServerError)
+		return
+	}
 	visibility := strings.TrimSpace(r.Form.Get("visibility"))
 	folderInput := r.Form.Get("folder")
 	priorityInput := strings.TrimSpace(r.Form.Get("priority"))
 	if content == "" {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       "",
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     "content required",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -5287,17 +5483,21 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		journalDate := journalDay.Format("2 Jan 2006")
 		journalTime := now.Format("15:04")
 		journalEntry := "## " + journalTime + "\n\n" + strings.TrimSpace(content) + "\n"
-		notePath := filepath.ToSlash(filepath.Join(journalDay.Format("2006-01"), journalDay.Format("02")+".md"))
+		journalRel := filepath.ToSlash(filepath.Join(journalDay.Format("2006-01"), journalDay.Format("02")+".md"))
+		notePath := filepath.ToSlash(filepath.Join(ownerName, journalRel))
 		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 		if err != nil {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 			s.renderEditError(w, r, ViewData{
 				Title:            "New note",
 				ContentTemplate:  "edit",
 				RawContent:       content,
 				FrontmatterBlock: frontmatter,
+				OwnerOptions:     ownerOptions,
+				SelectedOwner:    ownerName,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+				Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -5312,14 +5512,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			}
 			updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 			if err != nil {
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 				s.renderEditError(w, r, ViewData{
 					Title:            "New note",
 					ContentTemplate:  "edit",
 					RawContent:       content,
 					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+					Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -5328,29 +5531,35 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			unlock := s.locker.Lock(notePath)
 			if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
 				unlock()
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 				s.renderEditError(w, r, ViewData{
 					Title:            "New note",
 					ContentTemplate:  "edit",
 					RawContent:       content,
 					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+					Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
 				return
 			}
 			unlock()
-			if err := s.promoteTempAttachments(uploadToken, updatedContent); err != nil {
+			if err := s.promoteTempAttachments(ownerName, uploadToken, updatedContent); err != nil {
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 				s.renderEditError(w, r, ViewData{
 					Title:            "New note",
 					ContentTemplate:  "edit",
 					RawContent:       content,
 					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+					Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -5368,14 +5577,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, targetURL, http.StatusSeeOther)
 			return
 		} else if err != nil && !os.IsNotExist(err) {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 			s.renderEditError(w, r, ViewData{
 				Title:            "New note",
 				ContentTemplate:  "edit",
 				RawContent:       content,
 				FrontmatterBlock: frontmatter,
+				OwnerOptions:     ownerOptions,
+				SelectedOwner:    ownerName,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+				Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusInternalServerError)
@@ -5396,14 +5608,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 
 	mergedContent, err := index.EnsureFrontmatterWithTitleAndUser(mergedContent, now, s.cfg.UpdatedHistoryMax, title, historyUser(r.Context()))
 	if err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -5411,14 +5626,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	folder, err := normalizeFolderPath(folderInput)
 	if err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     "invalid folder",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -5428,14 +5646,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if priorityInput != "" {
 		val, err := strconv.Atoi(priorityInput)
 		if err != nil || val <= 0 {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 			s.renderEditError(w, r, ViewData{
 				Title:            "New note",
 				ContentTemplate:  "edit",
 				RawContent:       content,
 				FrontmatterBlock: frontmatter,
+				OwnerOptions:     ownerOptions,
+				SelectedOwner:    ownerName,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+				Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 				ErrorMessage:     "invalid priority",
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -5444,14 +5665,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		priority = strconv.Itoa(val)
 	}
 	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -5460,14 +5684,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		mergedContent = updated
 	}
 	if updated, err := index.SetPriority(mergedContent, priority); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -5476,14 +5703,17 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		mergedContent = updated
 	}
 	if updated, err := index.SetFolder(mergedContent, folder); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -5494,52 +5724,63 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 
 	var notePath string
 	if journalMode {
-		notePath = filepath.ToSlash(filepath.Join(folder, journalDay.Format("02")+".md"))
+		relPath := filepath.ToSlash(filepath.Join(folder, journalDay.Format("02")+".md"))
+		notePath = filepath.ToSlash(filepath.Join(ownerName, relPath))
 	} else {
 		slug := slugify(title)
 		notePath = fs.EnsureMDExt(slug)
 		if folder != "" {
 			notePath = filepath.ToSlash(filepath.Join(folder, notePath))
 		}
+		notePath = filepath.ToSlash(filepath.Join(ownerName, notePath))
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
 		return
 	}
 	if _, err := os.Stat(fullPath); err == nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     "note already exists",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusConflict)
 		return
 	}
 	if err != nil && !os.IsNotExist(err) {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -5547,42 +5788,51 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
 		return
 	}
 	if err := fs.WriteFileAtomic(fullPath, []byte(mergedContent), 0o644); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
 		return
 	}
-	if err := s.promoteTempAttachments(uploadToken, mergedContent); err != nil {
+	if err := s.promoteTempAttachments(ownerName, uploadToken, mergedContent); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(uploadToken)),
+			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -6084,7 +6334,12 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireWriteAccessForPath(w, r, notePath) {
+		return
+	}
+	ownerName, _, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
@@ -6135,7 +6390,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	metaAttrs := index.FrontmatterAttributes(string(content))
 	attachmentBase := ""
 	if metaAttrs.ID != "" {
-		attachments = listAttachmentNames(s.noteAttachmentsDir(metaAttrs.ID))
+		attachments = listAttachmentNames(s.noteAttachmentsDir(ownerName, metaAttrs.ID))
 		attachmentBase = "/" + filepath.ToSlash(filepath.Join("attachments", metaAttrs.ID))
 	}
 	returnURL := sanitizeReturnURL(r, r.URL.Query().Get("return"))
@@ -6167,10 +6422,15 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireWriteAccessForPath(w, r, notePath) {
 		return
 	}
 	ctx := r.Context()
+	ownerName, _, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -6185,7 +6445,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	if err == nil {
 		meta := index.FrontmatterAttributes(string(content))
 		if meta.ID != "" {
-			attachmentPath = s.noteAttachmentsDir(meta.ID)
+			attachmentPath = s.noteAttachmentsDir(ownerName, meta.ID)
 		}
 	}
 	writeLock, err := s.acquireNoteWriteLock()
@@ -6198,7 +6458,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	if attachmentPath != "" {
 		commitPaths = append(commitPaths, attachmentPath)
 	}
-	if err := commitRepoIfDirty(ctx, s.cfg.RepoPath, "auto: backup before delete", commitPaths...); err != nil {
+	if err := commitRepoIfDirty(ctx, s.ownerRepoPath(ownerName), "auto: backup before delete", commitPaths...); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -6225,7 +6485,12 @@ func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, no
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireWriteAccessForPath(w, r, notePath) {
+		return
+	}
+	ownerName, _, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	var payload struct {
@@ -6296,7 +6561,7 @@ func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, no
 		return
 	}
 	defer writeLock.Release()
-	if err := commitRepoIfDirty(r.Context(), s.cfg.RepoPath, "auto: backup before edit", fullPath); err != nil {
+	if err := commitRepoIfDirty(r.Context(), s.ownerRepoPath(ownerName), "auto: backup before edit", fullPath); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -6324,7 +6589,12 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireWriteAccessForPath(w, r, notePath) {
+		return
+	}
+	ownerName, _, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := r.ParseMultipartForm(16 << 20); err != nil {
@@ -6364,7 +6634,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	attachmentsDir := s.noteAttachmentsDir(meta.ID)
+	attachmentsDir := s.noteAttachmentsDir(ownerName, meta.ID)
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -6408,6 +6678,17 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	ownerName := strings.TrimSpace(r.FormValue("owner"))
+	if ownerName == "" {
+		ownerName = currentUserName(r.Context())
+	}
+	if ownerName == "" {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireWriteAccess(w, r, ownerName) {
+		return
+	}
 	token := strings.TrimSpace(r.FormValue("upload_token"))
 	if token == "" {
 		http.Error(w, "upload token required", http.StatusBadRequest)
@@ -6435,7 +6716,7 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	attachmentsDir := s.tempAttachmentsDir(token)
+	attachmentsDir := s.tempAttachmentsDir(ownerName, token)
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -6469,7 +6750,11 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	http.Redirect(w, r, "/notes/new?upload_token="+url.QueryEscape(token), http.StatusSeeOther)
+	redirectURL := "/notes/new?upload_token=" + url.QueryEscape(token)
+	if ownerName != "" {
+		redirectURL += "&owner=" + url.QueryEscape(ownerName)
+	}
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Request) {
@@ -6482,6 +6767,17 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ownerName := strings.TrimSpace(r.FormValue("owner"))
+	if ownerName == "" {
+		ownerName = currentUserName(r.Context())
+	}
+	if ownerName == "" {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireWriteAccess(w, r, ownerName) {
 		return
 	}
 	token := strings.TrimSpace(r.FormValue("upload_token"))
@@ -6504,12 +6800,16 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	targetPath := filepath.Join(s.tempAttachmentsDir(token), name)
+	targetPath := filepath.Join(s.tempAttachmentsDir(ownerName, token), name)
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/notes/new?upload_token="+url.QueryEscape(token), http.StatusSeeOther)
+	redirectURL := "/notes/new?upload_token=" + url.QueryEscape(token)
+	if ownerName != "" {
+		redirectURL += "&owner=" + url.QueryEscape(ownerName)
+	}
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, notePath string) {
@@ -6517,7 +6817,12 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireWriteAccessForPath(w, r, notePath) {
+		return
+	}
+	ownerName, _, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -6555,7 +6860,7 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	targetPath := filepath.Join(s.noteAttachmentsDir(meta.ID), name)
+	targetPath := filepath.Join(s.noteAttachmentsDir(ownerName, meta.ID), name)
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -6582,14 +6887,19 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	attachmentsRoot := filepath.Clean(s.attachmentsRoot())
-	fullPath := filepath.Clean(filepath.Join(attachmentsRoot, clean))
-	if !strings.HasPrefix(fullPath, attachmentsRoot+string(filepath.Separator)) && fullPath != attachmentsRoot {
+	noteID, ok := firstPathSegment(clean)
+	if !ok || !s.noteIDAccessible(r.Context(), noteID) {
 		http.NotFound(w, r)
 		return
 	}
-	noteID, ok := firstPathSegment(clean)
-	if !ok || !s.noteIDAccessible(r.Context(), noteID) {
+	ownerName, _, err := s.ownerFromNoteID(r.Context(), noteID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	attachmentsRoot := filepath.Clean(s.attachmentsRoot(ownerName))
+	fullPath := filepath.Clean(filepath.Join(attachmentsRoot, clean))
+	if !strings.HasPrefix(fullPath, attachmentsRoot+string(filepath.Separator)) && fullPath != attachmentsRoot {
 		http.NotFound(w, r)
 		return
 	}
@@ -6704,15 +7014,19 @@ func (s *Server) noteIDAccessible(ctx context.Context, noteID string) bool {
 	return true
 }
 
-func (s *Server) ensureVideoThumbnail(noteID, relPath string) (string, bool) {
+func (s *Server) ensureVideoThumbnail(ctx context.Context, noteID, relPath string) (string, bool) {
 	if noteID == "" || relPath == "" {
+		return "", false
+	}
+	ownerName, _, err := s.ownerFromNoteID(ctx, noteID)
+	if err != nil {
 		return "", false
 	}
 	assetsRoot := s.assetsRoot()
 	if assetsRoot == "" {
 		return "", false
 	}
-	videoPath := filepath.Join(s.noteAttachmentsDir(noteID), filepath.FromSlash(relPath))
+	videoPath := filepath.Join(s.noteAttachmentsDir(ownerName, noteID), filepath.FromSlash(relPath))
 	videoInfo, err := os.Stat(videoPath)
 	if err != nil || videoInfo.IsDir() {
 		return "", false
@@ -6766,7 +7080,7 @@ func generateVideoThumbnail(videoPath, thumbPath string) error {
 	return nil
 }
 
-func (s *Server) promoteTempAttachments(token, content string) error {
+func (s *Server) promoteTempAttachments(owner, token, content string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil
@@ -6778,7 +7092,11 @@ func (s *Server) promoteTempAttachments(token, content string) error {
 	if meta.ID == "" {
 		return errors.New("note id missing")
 	}
-	tempDir := s.tempAttachmentsDir(token)
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("owner required")
+	}
+	tempDir := s.tempAttachmentsDir(owner, token)
 	entries, err := os.ReadDir(tempDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -6790,7 +7108,7 @@ func (s *Server) promoteTempAttachments(token, content string) error {
 		return os.RemoveAll(tempDir)
 	}
 
-	attachmentsDir := s.noteAttachmentsDir(meta.ID)
+	attachmentsDir := s.noteAttachmentsDir(owner, meta.ID)
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		return err
 	}
@@ -6819,10 +7137,15 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireWriteAccessForPath(w, r, notePath) {
 		return
 	}
 	ctx := r.Context()
+	ownerName, _, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
 		s.renderEditError(w, r, ViewData{
@@ -6834,6 +7157,20 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			ErrorReturnURL:  "/notes/" + notePath + "/edit",
 			ReturnURL:       returnURL,
 		}, http.StatusBadRequest)
+		return
+	}
+	if err := s.ensureOwnerNotesDir(ownerName); err != nil {
+		returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
+		s.renderEditError(w, r, ViewData{
+			Title:            "Edit note",
+			ContentTemplate:  "edit",
+			NotePath:         notePath,
+			RawContent:       r.Form.Get("content"),
+			FrontmatterBlock: normalizeLineEndings(r.Form.Get("frontmatter")),
+			ReturnURL:        returnURL,
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+		}, http.StatusInternalServerError)
 		return
 	}
 	returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
@@ -7014,10 +7351,11 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	mergedContent = sanitizeTaskDoneTokens(mergedContent)
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
-	desiredPath := fs.EnsureMDExt(slugify(derivedTitle))
+	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))
 	if folder != "" {
-		desiredPath = filepath.ToSlash(filepath.Join(folder, desiredPath))
+		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
 	}
+	desiredPath := filepath.ToSlash(filepath.Join(ownerName, desiredRel))
 	pathChanged := filepath.ToSlash(notePath) != desiredPath
 	autoMove := !preserveUpdated && !titleChanged && pathChanged
 	if !preserveUpdated && titleChanged && decision == "" {
@@ -7161,9 +7499,9 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	metaAttrs := index.FrontmatterAttributes(mergedContent)
 	commitPaths := []string{fullPath}
 	if metaAttrs.ID != "" {
-		commitPaths = append(commitPaths, s.noteAttachmentsDir(metaAttrs.ID))
+		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
 	}
-	if err := commitRepoIfDirty(ctx, s.cfg.RepoPath, "auto: backup before edit", commitPaths...); err != nil {
+	if err := commitRepoIfDirty(ctx, s.ownerRepoPath(ownerName), "auto: backup before edit", commitPaths...); err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",

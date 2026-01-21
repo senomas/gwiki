@@ -105,6 +105,9 @@ type BrokenLink struct {
 
 type fileRecord struct {
 	ID        int
+	UserID    int
+	GroupID   sql.NullInt64
+	Path      string
 	Hash      string
 	MTimeUnix int64
 	Size      int64
@@ -209,6 +212,29 @@ func applyVisibilityFilter(ctx context.Context, clauses *[]string, args *[]inter
 	*args = append(*args, "public")
 }
 
+func applyAccessFilter(ctx context.Context, clauses *[]string, args *[]interface{}, table string) {
+	filter, ok := accessFilterFromContext(ctx)
+	if !ok || filter.userID == 0 {
+		return
+	}
+	if table == "" {
+		table = "files"
+	}
+	if len(filter.groupIDs) == 0 {
+		*clauses = append(*clauses, "("+table+".user_id = ? OR "+table+".visibility = ?)")
+		*args = append(*args, filter.userID, "public")
+		return
+	}
+	placeholders := strings.Repeat("?,", len(filter.groupIDs))
+	placeholders = strings.TrimRight(placeholders, ",")
+	*clauses = append(*clauses, "("+table+".user_id = ? OR "+table+".group_id IN ("+placeholders+") OR "+table+".visibility = ?)")
+	*args = append(*args, filter.userID)
+	for _, groupID := range filter.groupIDs {
+		*args = append(*args, groupID)
+	}
+	*args = append(*args, "public")
+}
+
 func applyFolderFilter(folder string, rootOnly bool, clauses *[]string, args *[]interface{}, table string) {
 	if table == "" {
 		table = "files"
@@ -238,6 +264,25 @@ func folderWhere(folder string, rootOnly bool, table string) (string, []interfac
 	}
 	folder = strings.TrimSuffix(folder, "/")
 	return table + ".path LIKE ?", []interface{}{folder + "/%"}
+}
+
+func ownerJoins(table string) string {
+	if table == "" {
+		table = "files"
+	}
+	return fmt.Sprintf(
+		"LEFT JOIN users u ON %s.user_id = u.id LEFT JOIN groups g ON %s.group_id = g.id",
+		table,
+		table,
+	)
+}
+
+func ownerNameExpr() string {
+	return "COALESCE(g.name, u.name)"
+}
+
+func ftsJoinClause() string {
+	return "JOIN files ON files.path = fts.path AND ((files.group_id IS NULL AND fts.group_id IS NULL AND files.user_id = fts.user_id) OR (files.group_id = fts.group_id)) " + ownerJoins("files")
 }
 
 func slugify(input string) string {
@@ -278,6 +323,17 @@ func (i *Index) Close() error {
 }
 
 func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
+	ownerName, relPath, err := splitOwnerPath(path)
+	if err != nil {
+		return err
+	}
+	userID, groupID, err := i.ResolveOwnerIDs(ctx, ownerName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
 	tx, err := i.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -285,7 +341,9 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 	defer tx.Rollback()
 
 	var id int
-	err = tx.QueryRowContext(ctx, "SELECT id FROM files WHERE path=?", path).Scan(&id)
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerArgs = append(ownerArgs, relPath)
+	err = tx.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -297,7 +355,6 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 		"DELETE FROM file_tags WHERE file_id=?",
 		"DELETE FROM links WHERE from_file_id=? OR to_file_id=?",
 		"DELETE FROM tasks WHERE file_id=?",
-		"DELETE FROM fts WHERE path=?",
 		"DELETE FROM files WHERE id=?",
 	}
 	for _, stmt := range stmts {
@@ -306,20 +363,25 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 			if _, err := tx.ExecContext(ctx, stmt, id, id); err != nil {
 				return err
 			}
-		case "DELETE FROM fts WHERE path=?":
-			if _, err := tx.ExecContext(ctx, stmt, path); err != nil {
-				return err
-			}
 		default:
 			if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
 				return err
 			}
 		}
 	}
+	ownerClause, ownerArgs = ownerWhereClause(userID, groupID, "fts")
+	ownerArgs = append(ownerArgs, relPath)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 func (i *Index) Init(ctx context.Context, repoPath string) error {
+	return i.InitWithOwners(ctx, repoPath, nil, nil)
+}
+
+func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []string, groups map[string][]GroupMember) error {
 	if _, err := i.db.ExecContext(ctx, schemaSQL); err != nil {
 		return err
 	}
@@ -340,7 +402,13 @@ func (i *Index) Init(ctx context.Context, repoPath string) error {
 		if err := i.setSchemaVersion(ctx, schemaVersion); err != nil {
 			return err
 		}
+		if err := i.SyncOwners(ctx, users, groups); err != nil {
+			return err
+		}
 		return i.RebuildFromFS(ctx, repoPath)
+	}
+	if err := i.SyncOwners(ctx, users, groups); err != nil {
+		return err
 	}
 	if err := i.ensureColumn(ctx, "file_tags", "is_exclusive", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
@@ -459,6 +527,18 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 19
+		case 19:
+			slog.Info("schema migration", "from", 19, "to", 20)
+			if err := i.migrate19To20(ctx); err != nil {
+				return err
+			}
+			version = 20
+		case 20:
+			slog.Info("schema migration", "from", 20, "to", 21)
+			if err := i.migrate20To21(ctx); err != nil {
+				return err
+			}
+			version = 21
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -620,6 +700,36 @@ func (i *Index) migrate18To19(ctx context.Context) error {
 	return nil
 }
 
+func (i *Index) migrate19To20(ctx context.Context) error {
+	return nil
+}
+
+func (i *Index) migrate20To21(ctx context.Context) error {
+	drops := []string{
+		"DROP TABLE IF EXISTS files",
+		"DROP TABLE IF EXISTS file_histories",
+		"DROP TABLE IF EXISTS tags",
+		"DROP TABLE IF EXISTS file_tags",
+		"DROP TABLE IF EXISTS links",
+		"DROP TABLE IF EXISTS tasks",
+		"DROP TABLE IF EXISTS embed_cache",
+		"DROP TABLE IF EXISTS collapsed_sections",
+		"DROP TABLE IF EXISTS broken_links",
+		"DROP TABLE IF EXISTS users",
+		"DROP TABLE IF EXISTS groups",
+		"DROP TABLE IF EXISTS group_members",
+		"DROP TABLE IF EXISTS fts",
+		"DROP TABLE IF EXISTS schema_version",
+	}
+	for _, stmt := range drops {
+		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	_, err := i.db.ExecContext(ctx, schemaSQL)
+	return err
+}
+
 func (i *Index) ensureColumn(ctx context.Context, table string, column string, ddl string) error {
 	hasColumn := false
 	rows, err := i.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
@@ -684,8 +794,47 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 	return nil
 }
 
+type ownerRoot struct {
+	name      string
+	notesRoot string
+}
+
+func ownerNoteRoots(repoPath string) ([]ownerRoot, error) {
+	entries, err := os.ReadDir(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	roots := make([]ownerRoot, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		notesRoot := filepath.Join(repoPath, name, "notes")
+		if info, err := os.Stat(notesRoot); err == nil && info.IsDir() {
+			roots = append(roots, ownerRoot{name: name, notesRoot: notesRoot})
+		}
+	}
+	systemNotes := filepath.Join(repoPath, "notes")
+	if info, err := os.Stat(systemNotes); err == nil && info.IsDir() {
+		hasSystem := false
+		for _, root := range roots {
+			if root.name == "system" {
+				hasSystem = true
+				break
+			}
+		}
+		if !hasSystem {
+			roots = append(roots, ownerRoot{name: "system", notesRoot: systemNotes})
+		}
+	}
+	return roots, nil
+}
+
 func (i *Index) RebuildFromFSWithStats(ctx context.Context, repoPath string) (int, int, int, error) {
-	notesRoot := filepath.Join(repoPath, "notes")
 	cleaned := 0
 	if err := i.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM files").Scan(&cleaned); err != nil {
 		return 0, 0, 0, err
@@ -708,39 +857,51 @@ func (i *Index) RebuildFromFSWithStats(ctx context.Context, repoPath string) (in
 	}
 
 	scanned := 0
-	err := filepath.WalkDir(notesRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			rel, relErr := filepath.Rel(notesRoot, path)
-			if relErr == nil {
-				rel = filepath.ToSlash(rel)
-				if rel == "attachments" || strings.HasPrefix(rel, "attachments/") {
-					return fs.SkipDir
-				}
+	roots, err := ownerNoteRoots(repoPath)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	err = nil
+	for _, root := range roots {
+		walkErr := filepath.WalkDir(root.notesRoot, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
-			return nil
+			if d.IsDir() {
+				rel, relErr := filepath.Rel(root.notesRoot, path)
+				if relErr == nil {
+					rel = filepath.ToSlash(rel)
+					if rel == "attachments" || strings.HasPrefix(rel, "attachments/") {
+						return fs.SkipDir
+					}
+				}
+				return nil
+			}
+			if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+				return nil
+			}
+			scanned++
+			rel, err := filepath.Rel(root.notesRoot, path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			notePath := joinOwnerPath(root.name, rel)
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			return i.IndexNote(ctx, notePath, content, info.ModTime(), info.Size())
+		})
+		if walkErr != nil {
+			err = walkErr
+			break
 		}
-		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
-			return nil
-		}
-		scanned++
-		rel, err := filepath.Rel(notesRoot, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		return i.IndexNote(ctx, rel, content, info.ModTime(), info.Size())
-	})
+	}
 	if err != nil {
 		return scanned, scanned, cleaned, err
 	}
@@ -748,7 +909,6 @@ func (i *Index) RebuildFromFSWithStats(ctx context.Context, repoPath string) (in
 }
 
 func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) (int, int, int, error) {
-	notesRoot := filepath.Join(repoPath, "notes")
 	records, err := i.loadFileRecords(ctx)
 	if err != nil {
 		return 0, 0, 0, err
@@ -757,46 +917,58 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) (int, int, i
 	seen := make(map[string]bool, len(records))
 	scanned := 0
 	updated := 0
-	err = filepath.WalkDir(notesRoot, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			rel, relErr := filepath.Rel(notesRoot, path)
-			if relErr == nil {
-				rel = filepath.ToSlash(rel)
-				if rel == "attachments" || strings.HasPrefix(rel, "attachments/") {
-					return fs.SkipDir
-				}
+	roots, err := ownerNoteRoots(repoPath)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	err = nil
+	for _, root := range roots {
+		walkErr := filepath.WalkDir(root.notesRoot, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
 			}
-			return nil
-		}
-		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
-			return nil
-		}
-		scanned++
-		rel, err := filepath.Rel(notesRoot, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		seen[rel] = true
+			if d.IsDir() {
+				rel, relErr := filepath.Rel(root.notesRoot, path)
+				if relErr == nil {
+					rel = filepath.ToSlash(rel)
+					if rel == "attachments" || strings.HasPrefix(rel, "attachments/") {
+						return fs.SkipDir
+					}
+				}
+				return nil
+			}
+			if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+				return nil
+			}
+			scanned++
+			rel, err := filepath.Rel(root.notesRoot, path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			notePath := joinOwnerPath(root.name, rel)
+			seen[notePath] = true
 
-		info, err := d.Info()
-		if err != nil {
-			return err
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			rec, ok := records[notePath]
+			if ok && rec.MTimeUnix == info.ModTime().Unix() && rec.Size == info.Size() {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			updated++
+			return i.IndexNoteIfChanged(ctx, notePath, content, info.ModTime(), info.Size())
+		})
+		if walkErr != nil {
+			err = walkErr
+			break
 		}
-		rec, ok := records[rel]
-		if ok && rec.MTimeUnix == info.ModTime().Unix() && rec.Size == info.Size() {
-			return nil
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		updated++
-		return i.IndexNoteIfChanged(ctx, rel, content, info.ModTime(), info.Size())
-	})
+	}
 	if err != nil {
 		return scanned, updated, 0, err
 	}
@@ -809,18 +981,26 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) (int, int, i
 }
 
 func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
+	ownerName, relPath, err := splitOwnerPath(notePath)
+	if err != nil {
+		return err
+	}
+	userID, groupID, err := i.ResolveOwnerIDs(ctx, ownerName)
+	if err != nil {
+		return err
+	}
 	meta := ParseContent(string(content))
 	attrs := FrontmatterAttributes(string(content))
 	uid := strings.TrimSpace(attrs.ID)
 	hash := sha256.Sum256(content)
 	checksum := hex.EncodeToString(hash[:])
 	isJournal := 0
-	if isJournalPath(notePath) {
+	if isJournalPath(relPath) {
 		isJournal = 1
 	}
 	updatedAt := mtime.Unix()
 	if isJournal == 1 {
-		if journalUpdated, ok := journalEndOfDayForPath(notePath); ok {
+		if journalUpdated, ok := journalEndOfDayForPath(relPath); ok {
 			updatedAt = journalUpdated.Unix()
 		}
 	} else if !attrs.Updated.IsZero() {
@@ -835,7 +1015,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 
 	var existingID int
 	var createdAt int64
-	err = tx.QueryRowContext(ctx, "SELECT id, created_at FROM files WHERE path=?", notePath).Scan(&existingID, &createdAt)
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerArgs = append(ownerArgs, relPath)
+	err = tx.QueryRowContext(ctx, "SELECT id, created_at FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		createdAt = time.Now().Unix()
 		visibility := attrs.Visibility
@@ -843,13 +1025,13 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			visibility = "private"
 		}
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO files(path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority, is_journal)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, notePath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, meta.Priority, isJournal)
+			INSERT INTO files(user_id, group_id, path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority, is_journal)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, userID, nullIfInvalidInt64(groupID), relPath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, meta.Priority, isJournal)
 		if err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM files WHERE path=?", notePath).Scan(&existingID); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID); err != nil {
 			return err
 		}
 	} else if err == nil {
@@ -877,7 +1059,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		return err
 	}
 	if uid != "" {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM collapsed_sections WHERE note_id=?", uid); err != nil {
+		ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "collapsed_sections")
+		ownerArgs = append(ownerArgs, uid)
+		if _, err := tx.ExecContext(ctx, "DELETE FROM collapsed_sections WHERE "+ownerClause+" AND note_id=?", ownerArgs...); err != nil {
 			return err
 		}
 		for _, lineNo := range attrs.CollapsedH2 {
@@ -885,9 +1069,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 				continue
 			}
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO collapsed_sections(note_id, line_no)
-				VALUES(?, ?)
-			`, uid, lineNo); err != nil {
+				INSERT INTO collapsed_sections(user_id, group_id, note_id, line_no)
+				VALUES(?, ?, ?, ?)
+			`, userID, nullIfInvalidInt64(groupID), uid, lineNo); err != nil {
 				return err
 			}
 		}
@@ -910,7 +1094,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 		actionTime := entry.At.UTC().Unix()
 		actionDate := actionTime / secondsPerDay
-		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?)", existingID, user, entry.Action, actionTime, actionDate); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, user, entry.Action, actionTime, actionDate); err != nil {
 			return err
 		}
 		validHistory++
@@ -918,7 +1102,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if validHistory == 0 {
 		actionTime := mtime.Unix()
 		actionDate := actionTime / secondsPerDay
-		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?)", existingID, dummyHistoryUser, "save", actionTime, actionDate); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, dummyHistoryUser, "save", actionTime, actionDate); err != nil {
 			return err
 		}
 	}
@@ -928,15 +1112,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if name == "" {
 			continue
 		}
-		_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO tags(name) VALUES(?)", name)
+		_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO tags(user_id, group_id, name) VALUES(?, ?, ?)", userID, nullIfInvalidInt64(groupID), name)
 		if err != nil {
 			return err
 		}
 		var tagID int
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM tags WHERE name=?", name).Scan(&tagID); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM tags WHERE group_id IS ? AND user_id=? AND name=?", nullIfInvalidInt64(groupID), userID, name).Scan(&tagID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO file_tags(file_id, tag_id, is_exclusive) VALUES(?, ?, ?)", existingID, tagID, boolToInt(isExclusive)); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO file_tags(user_id, group_id, file_id, tag_id, is_exclusive) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, tagID, boolToInt(isExclusive)); err != nil {
 			return err
 		}
 	}
@@ -945,15 +1129,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if link.Ref == "" {
 			continue
 		}
-		toFileID, err := i.resolveLinkTargetID(ctx, tx, link.Ref)
+		toFileID, err := i.resolveLinkTargetID(ctx, tx, userID, groupID, link.Ref)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO links(from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?)", existingID, link.Ref, nullIfZero(toFileID), link.Kind, link.LineNo, link.Line); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO links(user_id, group_id, from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, nullIfZero(toFileID), link.Kind, link.LineNo, link.Line); err != nil {
 			return err
 		}
 		if link.Kind == "wikilink" && toFileID == 0 {
-			if _, err := tx.ExecContext(ctx, "INSERT INTO broken_links(from_file_id, to_ref, kind, line_no, line) VALUES(?, ?, ?, ?, ?)", existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO broken_links(user_id, group_id, from_file_id, to_ref, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
 				return err
 			}
 		}
@@ -961,7 +1145,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 
 	defaultDue := time.Unix(updatedAt, 0).In(time.Local).Format("2006-01-02")
 	if isJournal == 1 {
-		if journalDate, ok := journalDateForPath(notePath); ok {
+		if journalDate, ok := journalDateForPath(relPath); ok {
 			defaultDue = journalDate
 		}
 	}
@@ -975,8 +1159,10 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			due = defaultDue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO tasks(file_id, line_no, text, hash, checked, due_date, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO tasks(user_id, group_id, file_id, line_no, text, hash, checked, due_date, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			userID,
+			nullIfInvalidInt64(groupID),
 			existingID,
 			task.LineNo,
 			task.Text,
@@ -989,10 +1175,12 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE path=?", notePath); err != nil {
+	ownerClause, ownerArgs = ownerWhereClause(userID, groupID, "fts")
+	ownerArgs = append(ownerArgs, relPath)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO fts(path, title, body) VALUES(?, ?, ?)", notePath, meta.Title, string(content)); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO fts(user_id, group_id, path, title, body) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), relPath, meta.Title, string(content)); err != nil {
 		return err
 	}
 
@@ -1001,7 +1189,17 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 
 func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
 	var rec fileRecord
-	err := i.db.QueryRowContext(ctx, "SELECT id, hash, mtime_unix, size FROM files WHERE path=?", notePath).
+	ownerName, relPath, err := splitOwnerPath(notePath)
+	if err != nil {
+		return err
+	}
+	userID, groupID, err := i.ResolveOwnerIDs(ctx, ownerName)
+	if err != nil {
+		return err
+	}
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerArgs = append(ownerArgs, relPath)
+	err = i.db.QueryRowContext(ctx, "SELECT id, hash, mtime_unix, size FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).
 		Scan(&rec.ID, &rec.Hash, &rec.MTimeUnix, &rec.Size)
 	if errors.Is(err, sql.ErrNoRows) {
 		return i.IndexNote(ctx, notePath, content, mtime, size)
@@ -1023,13 +1221,15 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 }
 
 func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, error) {
-	query := "SELECT path, title, mtime_unix FROM files"
+	query := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, %s FROM files %s", ownerNameExpr(), ownerJoins("files"))
 	args := []interface{}{}
-	if publicOnly(ctx) {
-		query += " WHERE visibility = ?"
-		args = append(args, "public")
+	clauses := []string{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += " ORDER BY priority ASC, updated_at DESC LIMIT ?"
+	query += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ?"
 	args = append(args, limit)
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1041,9 +1241,12 @@ func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, erro
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
@@ -1059,13 +1262,15 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 	if offset < 0 {
 		offset = 0
 	}
-	query := "SELECT path, title, mtime_unix FROM files"
+	query := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, %s FROM files %s", ownerNameExpr(), ownerJoins("files"))
 	args := []interface{}{}
-	if publicOnly(ctx) {
-		query += " WHERE visibility = ?"
-		args = append(args, "public")
+	clauses := []string{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += " ORDER BY priority ASC, updated_at DESC LIMIT ? OFFSET ?"
+	query += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1077,9 +1282,12 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
@@ -1138,6 +1346,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		clauses = append(clauses, "(files.uid IS NULL OR files.uid != ?)")
 		args = append(args, filter.ExcludeUID)
 	}
+	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	applyFolderFilter(filter.Folder, filter.Root, &clauses, &args, "files")
 	if clause, clauseArgs := exclusiveTagFilterClause(tagList, "files"); clause != "" {
@@ -1145,7 +1354,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		args = append(args, clauseArgs...)
 	}
 
-	sqlStr := "SELECT files.path, files.title, files.mtime_unix, files.uid FROM files"
+	sqlStr := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, files.uid, %s FROM files %s", ownerNameExpr(), ownerJoins("files"))
 	if len(joins) > 0 {
 		sqlStr += " " + strings.Join(joins, " ")
 	}
@@ -1172,9 +1381,12 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &n.UID, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
@@ -1193,18 +1405,26 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 		return nil, fmt.Errorf("due date required for due-only tasks")
 	}
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	if len(tags) == 0 {
 		if dueOnly {
 			exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-			query := `
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal
+			query := fmt.Sprintf(`
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
+				%s
 				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
-			`
+			`, ownerNameExpr(), ownerJoins("files"))
 			args := []interface{}{dueDate}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if len(accessClauses) > 0 {
+				query += " AND " + strings.Join(accessClauses, " AND ")
+				args = append(args, accessArgs...)
+			}
 			if journalOnly {
 				query += " AND files.is_journal = 1"
 			}
@@ -1219,15 +1439,20 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			rows, err = i.db.QueryContext(ctx, query, args...)
 		} else {
 			exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-			query := `
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal
+			query := fmt.Sprintf(`
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
+				%s
 				WHERE tasks.checked = 0
-			`
+			`, ownerNameExpr(), ownerJoins("files"))
 			args := []interface{}{}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if len(accessClauses) > 0 {
+				query += " AND " + strings.Join(accessClauses, " AND ")
+				args = append(args, accessArgs...)
+			}
 			if journalOnly {
 				query += " AND files.is_journal = 1"
 			}
@@ -1244,16 +1469,20 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
-		base := `
-			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal
+		base := fmt.Sprintf(`
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
 			FROM tasks
 			JOIN files ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
-		`
+			%s
+			WHERE tasks.checked = 0 AND tags.name IN (`+placeholders+`)
+		`, ownerNameExpr(), ownerJoins("files"))
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
 		base += " AND " + exclusiveClause
+		if len(accessClauses) > 0 {
+			base += " AND " + strings.Join(accessClauses, " AND ")
+		}
 		if journalOnly {
 			base += " AND files.is_journal = 1"
 		}
@@ -1278,6 +1507,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
 		args = append(args, folderArgs...)
 		if dueOnly {
 			args = append(args, dueDate)
@@ -1297,16 +1527,22 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 		var updatedUnix int64
 		var fileUpdatedUnix int64
 		var isJournal int
-		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &item.Hash, &due, &updatedUnix, &item.FileID, &fileUpdatedUnix, &isJournal); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &item.Title, &item.LineNo, &item.Text, &item.Hash, &due, &updatedUnix, &item.FileID, &fileUpdatedUnix, &isJournal, &ownerName); err != nil {
 			return nil, err
 		}
+		item.Path = joinOwnerPath(ownerName, relPath)
 		if due.Valid {
 			item.DueDate = due.String
 		} else if isJournal == 1 {
-			if journalDate, ok := journalDateForPath(item.Path); ok {
-				item.DueDate = journalDate
+			if _, rel, err := splitOwnerPath(item.Path); err == nil {
+				if journalDate, ok := journalDateForPath(rel); ok {
+					item.DueDate = journalDate
+				}
 			}
-		} else {
+		}
+		if item.DueDate == "" {
 			item.DueDate = time.Unix(fileUpdatedUnix, 0).In(time.Local).Format("2006-01-02")
 		}
 		item.UpdatedAt = time.Unix(updatedUnix, 0).Local()
@@ -1330,6 +1566,9 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 		limit = 50
 	}
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	var (
 		query string
 		args  []interface{}
@@ -1338,21 +1577,26 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 	if len(tags) == 0 {
 		if dueOnly {
 			exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-			query = `
+			query = fmt.Sprintf(`
 				WITH matching_files AS (
 					SELECT DISTINCT file_id
 					FROM file_histories
 					WHERE action_date = ?
 				)
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
+				%s
 				JOIN matching_files ON matching_files.file_id = files.id
 				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
-			`
+			`, ownerNameExpr(), ownerJoins("files"))
 			args = []interface{}{day, dueDate}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if len(accessClauses) > 0 {
+				query += " AND " + strings.Join(accessClauses, " AND ")
+				args = append(args, accessArgs...)
+			}
 			if journalOnly {
 				query += " AND files.is_journal = 1"
 			}
@@ -1366,21 +1610,26 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 			args = append(args, limit)
 		} else {
 			exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-			query = `
+			query = fmt.Sprintf(`
 				WITH matching_files AS (
 					SELECT DISTINCT file_id
 					FROM file_histories
 					WHERE action_date = ?
 				)
-				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal
+				SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
 				FROM tasks
 				JOIN files ON files.id = tasks.file_id
+				%s
 				JOIN matching_files ON matching_files.file_id = files.id
 				WHERE tasks.checked = 0
-			`
+			`, ownerNameExpr(), ownerJoins("files"))
 			args = []interface{}{day}
 			query += " AND " + exclusiveClause
 			args = append(args, exclusiveArgs...)
+			if len(accessClauses) > 0 {
+				query += " AND " + strings.Join(accessClauses, " AND ")
+				args = append(args, accessArgs...)
+			}
 			if journalOnly {
 				query += " AND files.is_journal = 1"
 			}
@@ -1398,7 +1647,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
-		base := `
+		base := fmt.Sprintf(`
 			WITH matching_files AS (
 				SELECT files.id
 				FROM files
@@ -1409,11 +1658,15 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
 			)
-			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
 			FROM tasks
 			JOIN files ON files.id = tasks.file_id
+			%s
 			JOIN matching_files ON matching_files.id = files.id
-			WHERE tasks.checked = 0`
+			WHERE tasks.checked = 0`, ownerNameExpr(), ownerJoins("files"))
+		if len(accessClauses) > 0 {
+			base += " AND " + strings.Join(accessClauses, " AND ")
+		}
 		if journalOnly {
 			base += " AND files.is_journal = 1"
 		}
@@ -1436,6 +1689,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 		}
 		args = append(args, exclusiveArgs...)
 		args = append(args, len(tags))
+		args = append(args, accessArgs...)
 		args = append(args, folderArgs...)
 		if dueOnly {
 			args = append(args, dueDate, limit)
@@ -1456,16 +1710,22 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 		var updatedUnix int64
 		var fileUpdatedUnix int64
 		var isJournal int
-		if err := rows.Scan(&item.Path, &item.Title, &item.LineNo, &item.Text, &item.Hash, &due, &updatedUnix, &item.FileID, &fileUpdatedUnix, &isJournal); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &item.Title, &item.LineNo, &item.Text, &item.Hash, &due, &updatedUnix, &item.FileID, &fileUpdatedUnix, &isJournal, &ownerName); err != nil {
 			return nil, err
 		}
+		item.Path = joinOwnerPath(ownerName, relPath)
 		if due.Valid {
 			item.DueDate = due.String
 		} else if isJournal == 1 {
-			if journalDate, ok := journalDateForPath(item.Path); ok {
-				item.DueDate = journalDate
+			if _, rel, err := splitOwnerPath(item.Path); err == nil {
+				if journalDate, ok := journalDateForPath(rel); ok {
+					item.DueDate = journalDate
+				}
 			}
-		} else {
+		}
+		if item.DueDate == "" {
 			item.DueDate = time.Unix(fileUpdatedUnix, 0).In(time.Local).Format("2006-01-02")
 		}
 		item.UpdatedAt = time.Unix(updatedUnix, 0).Local()
@@ -1487,15 +1747,23 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
-			WHERE tasks.checked = 0`
+			WHERE tasks.checked = 0`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1509,15 +1777,19 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
-		`
+		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1534,6 +1806,7 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
 		args = append(args, len(tags), limit, offset)
 	}
 
@@ -1547,9 +1820,12 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &n.UID, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
@@ -1572,17 +1848,25 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?
-		`
+		`, ownerNameExpr(), ownerJoins("files"))
 		args = []interface{}{dueDate}
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1596,17 +1880,21 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
-		`
+		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		args = make([]interface{}, 0, len(tags)+4+len(folderArgs))
 		args = append(args, dueDate)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1620,6 +1908,7 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
 		args = append(args, len(tags), limit, offset)
 	}
 
@@ -1633,9 +1922,12 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &n.UID, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
@@ -1662,18 +1954,26 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
 			WHERE tasks.checked = 0 AND file_histories.action_date = ?
-		`
+		`, ownerNameExpr(), ownerJoins("files"))
 		args = []interface{}{day}
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1687,18 +1987,22 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
-		`
+		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		args = make([]interface{}, 0, len(tags)+4+len(folderArgs))
 		args = append(args, day)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1712,6 +2016,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
 		args = append(args, len(tags), limit, offset)
 	}
 
@@ -1725,9 +2030,12 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &n.UID, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
@@ -1757,18 +2065,26 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?
-		`
+		`, ownerNameExpr(), ownerJoins("files"))
 		args = []interface{}{dueDate, day}
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1782,18 +2098,22 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
-		query = `
-			SELECT files.path, files.title, files.mtime_unix, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, files.mtime_unix, files.uid, %s
 			FROM files
+			%s
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
-		`
+		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		args = make([]interface{}, 0, len(tags)+5+len(folderArgs))
 		args = append(args, dueDate, day)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -1807,6 +2127,7 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
 		args = append(args, len(tags), limit, offset)
 	}
 
@@ -1820,9 +2141,12 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix, &n.UID); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &n.UID, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}
@@ -1833,32 +2157,20 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
-	var rows *sql.Rows
-	var err error
 	exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-	if publicOnly(ctx) {
-		queryStr := `
-			SELECT fts.path, fts.title, snippet(fts, 2, '', '', '...', 10)
-			FROM fts
-			JOIN files ON files.path = fts.path
-			WHERE fts MATCH ? AND files.visibility = ? AND ` + exclusiveClause + `
-			LIMIT ?`
-		args := []interface{}{query, "public"}
-		args = append(args, exclusiveArgs...)
-		args = append(args, limit)
-		rows, err = i.db.QueryContext(ctx, queryStr, args...)
-	} else {
-		queryStr := `
-			SELECT fts.path, fts.title, snippet(fts, 2, '', '', '...', 10)
-			FROM fts
-			JOIN files ON files.path = fts.path
-			WHERE fts MATCH ? AND ` + exclusiveClause + `
-			LIMIT ?`
-		args := []interface{}{query}
-		args = append(args, exclusiveArgs...)
-		args = append(args, limit)
-		rows, err = i.db.QueryContext(ctx, queryStr, args...)
-	}
+	clauses := []string{"fts MATCH ?", exclusiveClause}
+	args := []interface{}{query}
+	args = append(args, exclusiveArgs...)
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	queryStr := fmt.Sprintf(`
+		SELECT files.path, files.title, snippet(fts, 2, '', '', '...', 10), %s
+		FROM fts
+		%s
+		WHERE %s
+		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "))
+	args = append(args, limit)
+	rows, err := i.db.QueryContext(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1867,9 +2179,12 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		if err := rows.Scan(&r.Path, &r.Title, &r.Snippet); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &r.Title, &r.Snippet, &ownerName); err != nil {
 			return nil, err
 		}
+		r.Path = joinOwnerPath(ownerName, relPath)
 		results = append(results, r)
 	}
 	return results, rows.Err()
@@ -1884,6 +2199,9 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 		err  error
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	if publicOnly(ctx) {
 		query := `
 			SELECT tags.name, COUNT(file_tags.file_id)
@@ -1892,6 +2210,10 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 			JOIN files ON files.id = file_tags.file_id
 			WHERE files.visibility = ?`
 		args := []interface{}{"public"}
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if journalOnly {
 			query += " AND files.is_journal = 1"
 		}
@@ -1912,8 +2234,16 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 			LEFT JOIN file_tags ON tags.id = file_tags.tag_id
 			LEFT JOIN files ON files.id = file_tags.file_id`
 		args := []interface{}{}
+		if len(accessClauses) > 0 {
+			query += " WHERE " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if journalOnly {
-			query += " WHERE files.is_journal = 1"
+			if len(args) == 0 {
+				query += " WHERE files.is_journal = 1"
+			} else {
+				query += " AND files.is_journal = 1"
+			}
 		}
 		if folderClause != "" {
 			if len(args) == 0 {
@@ -1969,6 +2299,13 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	} else if strings.TrimSpace(folder) != "" {
 		folderClause = " AND files.path LIKE ?"
 	}
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	accessClause := ""
+	if len(accessClauses) > 0 {
+		accessClause = " AND " + strings.Join(accessClauses, " AND ")
+	}
 	exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(active, "files")
 	query := `
 		WITH matching_files AS (
@@ -1976,7 +2313,7 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 			FROM files
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + journalClause + ` AND ` + exclusiveClause + `
+			WHERE tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + journalClause + ` AND ` + exclusiveClause + accessClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -1988,11 +2325,10 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 		ORDER BY tags.name
 		LIMIT ?`
 
-	args := make([]interface{}, 0, len(active)+len(exclusiveArgs)+4)
+	args := make([]interface{}, 0, len(active)+len(exclusiveArgs)+len(accessArgs)+4)
 	for _, tag := range active {
 		args = append(args, tag)
 	}
-	args = append(args, exclusiveArgs...)
 	if publicOnly(ctx) {
 		args = append(args, "public")
 	}
@@ -2002,6 +2338,8 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 		folder = strings.TrimSuffix(folder, "/")
 		args = append(args, folder+"/%")
 	}
+	args = append(args, exclusiveArgs...)
+	args = append(args, accessArgs...)
 	args = append(args, len(active), limit)
 
 	rows, err := i.db.QueryContext(ctx, query, args...)
@@ -2037,15 +2375,23 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		var err error
 		folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
+		accessClauses := []string{}
+		accessArgs := []interface{}{}
+		applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+		accessClause := ""
+		if len(accessClauses) > 0 {
+			accessClause = " AND " + strings.Join(accessClauses, " AND ")
+		}
 		if publicOnly(ctx) {
 			query := `
 				WITH matching_files AS (
 					SELECT DISTINCT file_histories.file_id
 					FROM file_histories
 					JOIN files ON files.id = file_histories.file_id
-					WHERE file_histories.action_date = ? AND files.visibility = ? AND ` + exclusiveClause
+					WHERE file_histories.action_date = ? AND files.visibility = ? AND ` + exclusiveClause + accessClause
 			args := []interface{}{day, "public"}
 			args = append(args, exclusiveArgs...)
+			args = append(args, accessArgs...)
 			if journalOnly {
 				query += " AND files.is_journal = 1"
 			}
@@ -2070,9 +2416,10 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 					SELECT DISTINCT file_histories.file_id
 					FROM file_histories
 					JOIN files ON files.id = file_histories.file_id
-					WHERE file_histories.action_date = ? AND ` + exclusiveClause
+					WHERE file_histories.action_date = ? AND ` + exclusiveClause + accessClause
 			args := []interface{}{day}
 			args = append(args, exclusiveArgs...)
+			args = append(args, accessArgs...)
 			if journalOnly {
 				query += " AND files.is_journal = 1"
 			}
@@ -2125,6 +2472,13 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	} else if strings.TrimSpace(folder) != "" {
 		folderClause = " AND files.path LIKE ?"
 	}
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	accessClause := ""
+	if len(accessClauses) > 0 {
+		accessClause = " AND " + strings.Join(accessClauses, " AND ")
+	}
 	exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(active, "files")
 	query := `
 		WITH matching_files AS (
@@ -2133,7 +2487,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + journalClause + ` AND ` + exclusiveClause + `
+			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)` + visibilityClause + folderClause + journalClause + ` AND ` + exclusiveClause + accessClause + `
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
@@ -2145,12 +2499,11 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		ORDER BY tags.name
 		LIMIT ?`
 
-	args := make([]interface{}, 0, len(active)+len(exclusiveArgs)+5)
+	args := make([]interface{}, 0, len(active)+len(exclusiveArgs)+len(accessArgs)+5)
 	args = append(args, day)
 	for _, tag := range active {
 		args = append(args, tag)
 	}
-	args = append(args, exclusiveArgs...)
 	if publicOnly(ctx) {
 		args = append(args, "public")
 	}
@@ -2160,6 +2513,8 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		folder = strings.TrimSuffix(folder, "/")
 		args = append(args, folder+"/%")
 	}
+	args = append(args, exclusiveArgs...)
+	args = append(args, accessArgs...)
 	args = append(args, len(active), limit)
 
 	rows, err := i.db.QueryContext(ctx, query, args...)
@@ -2183,22 +2538,25 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 	if limit <= 0 {
 		limit = 100
 	}
+	clauses := []string{"tasks.checked = 0"}
+	args := []interface{}{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	var (
 		query string
-		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	if folderClause != "" {
+		clauses = append(clauses, folderClause)
+		args = append(args, folderArgs...)
+	}
 	if len(active) == 0 {
 		query = `
 			WITH matching_files AS (
 				SELECT DISTINCT files.id
 				FROM files
 				JOIN tasks ON files.id = tasks.file_id
-				WHERE tasks.checked = 0`
-		if folderClause != "" {
-			query += " AND " + folderClause
-			args = append(args, folderArgs...)
-		}
+				WHERE ` + strings.Join(clauses, " AND ")
 		query += `
 			)
 			SELECT tags.name, COUNT(file_tags.file_id)
@@ -2219,12 +2577,7 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 				JOIN tasks ON files.id = tasks.file_id
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
-				WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
-		`
-		if folderClause != "" {
-			query += " AND " + folderClause
-			args = append(args, folderArgs...)
-		}
+				WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `) AND ` + strings.Join(clauses[1:], " AND ")
 		query += `
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
@@ -2273,11 +2626,18 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 	if limit <= 0 {
 		limit = 100
 	}
+	clauses := []string{"tasks.checked = 0", "file_histories.action_date = ?"}
+	args := []interface{}{day}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	var (
 		query string
-		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	if folderClause != "" {
+		clauses = append(clauses, folderClause)
+		args = append(args, folderArgs...)
+	}
 	if len(active) == 0 {
 		query = `
 			WITH matching_files AS (
@@ -2285,12 +2645,7 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 				FROM files
 				JOIN tasks ON files.id = tasks.file_id
 				JOIN file_histories ON files.id = file_histories.file_id
-				WHERE tasks.checked = 0 AND file_histories.action_date = ?`
-		args = []interface{}{day}
-		if folderClause != "" {
-			query += " AND " + folderClause
-			args = append(args, folderArgs...)
-		}
+				WHERE ` + strings.Join(clauses, " AND ")
 		query += `
 			)
 			SELECT tags.name, COUNT(file_tags.file_id)
@@ -2312,13 +2667,9 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 				JOIN file_histories ON files.id = file_histories.file_id
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
-				WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
+				WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `) AND ` + strings.Join(clauses[2:], " AND ")
 		args = make([]interface{}, 0, len(active)+3+len(folderArgs))
 		args = append(args, day)
-		if folderClause != "" {
-			query += " AND " + folderClause
-			args = append(args, folderArgs...)
-		}
 		query += `
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
@@ -2360,23 +2711,25 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 	if limit <= 0 {
 		limit = 100
 	}
+	clauses := []string{"tasks.checked = 0", "tasks.due_date IS NOT NULL", "tasks.due_date != ''", "tasks.due_date <= ?"}
+	args := []interface{}{dueDate}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	var (
 		query string
-		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	if folderClause != "" {
+		clauses = append(clauses, folderClause)
+		args = append(args, folderArgs...)
+	}
 	if len(active) == 0 {
 		query = `
 			WITH matching_files AS (
 				SELECT DISTINCT files.id
 				FROM files
 				JOIN tasks ON files.id = tasks.file_id
-				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?`
-		args = []interface{}{dueDate}
-		if folderClause != "" {
-			query += " AND " + folderClause
-			args = append(args, folderArgs...)
-		}
+				WHERE ` + strings.Join(clauses, " AND ")
 		query += `
 			)
 			SELECT tags.name, COUNT(file_tags.file_id)
@@ -2397,14 +2750,9 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 				JOIN tasks ON files.id = tasks.file_id
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
-				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
-		`
+				WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `) AND ` + strings.Join(clauses[1:], " AND ")
 		args = make([]interface{}, 0, len(active)+3+len(folderArgs))
 		args = append(args, dueDate)
-		if folderClause != "" {
-			query += " AND " + folderClause
-			args = append(args, folderArgs...)
-		}
 		query += `
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
@@ -2453,18 +2801,20 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 	if limit <= 0 {
 		limit = 100
 	}
+	clauses := []string{"tasks.checked = 0", "tasks.due_date IS NOT NULL", "tasks.due_date != ''", "tasks.due_date <= ?", "file_histories.action_date = ?"}
+	args := []interface{}{dueDate, day}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	var (
 		query string
-		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	if folderClause != "" {
+		clauses = append(clauses, folderClause)
+		args = append(args, folderArgs...)
+	}
 	if len(active) == 0 {
-		whereClause := "WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ?"
-		args = []interface{}{dueDate, day}
-		if folderClause != "" {
-			whereClause += " AND " + folderClause
-			args = append(args, folderArgs...)
-		}
+		whereClause := "WHERE " + strings.Join(clauses, " AND ")
 		query = `
 			WITH matching_files AS (
 				SELECT DISTINCT files.id
@@ -2484,10 +2834,7 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 	} else {
 		placeholders := strings.Repeat("?,", len(active))
 		placeholders = strings.TrimRight(placeholders, ",")
-		whereClause := "WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (" + placeholders + ")"
-		if folderClause != "" {
-			whereClause += " AND " + folderClause
-		}
+		whereClause := "WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (" + placeholders + ") AND " + strings.Join(clauses[2:], " AND ")
 		query = `
 			WITH matching_files AS (
 				SELECT files.id
@@ -2509,9 +2856,6 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 			LIMIT ?`
 		args = make([]interface{}, 0, len(active)+4+len(folderArgs))
 		args = append(args, dueDate, day)
-		if folderClause != "" {
-			args = append(args, folderArgs...)
-		}
 		for _, tag := range active {
 			args = append(args, tag)
 		}
@@ -2538,9 +2882,11 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 func (i *Index) ListFolders(ctx context.Context) ([]string, bool, error) {
 	query := "SELECT path FROM files"
 	args := []interface{}{}
-	if publicOnly(ctx) {
-		query += " WHERE visibility = ?"
-		args = append(args, "public")
+	clauses := []string{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -2596,6 +2942,9 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 		err  error
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
 	dayCounts := map[string]int{}
 	if publicOnly(ctx) {
 		query := `
@@ -2604,6 +2953,10 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 			JOIN files ON files.id = file_histories.file_id
 			WHERE files.visibility = ?`
 		args := []interface{}{"public"}
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -2620,8 +2973,16 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 			FROM file_histories
 			JOIN files ON files.id = file_histories.file_id`
 		args := []interface{}{}
+		if len(accessClauses) > 0 {
+			query += " WHERE " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
 		if folderClause != "" {
-			query += " WHERE " + folderClause
+			if len(args) == 0 {
+				query += " WHERE " + folderClause
+			} else {
+				query += " AND " + folderClause
+			}
 			args = append(args, folderArgs...)
 		}
 		query += `
@@ -2657,6 +3018,10 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 	if publicOnly(ctx) {
 		journalQuery += " AND visibility = ?"
 		journalArgs = append(journalArgs, "public")
+	}
+	if len(accessClauses) > 0 {
+		journalQuery += " AND " + strings.Join(accessClauses, " AND ")
+		journalArgs = append(journalArgs, accessArgs...)
 	}
 	if folderClause != "" {
 		journalQuery += " AND " + folderClause
@@ -2704,6 +3069,12 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, fold
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	visibilityClauses := []string{}
+	visibilityArgs := []interface{}{}
+	applyVisibilityFilter(ctx, &visibilityClauses, &visibilityArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
 		query = `
@@ -2713,6 +3084,14 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, fold
 			WHERE tasks.checked = 0`
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+			args = append(args, visibilityArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -2730,6 +3109,12 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, fold
 			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
 		`
 		query += " AND " + exclusiveClause
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -2744,6 +3129,8 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, fold
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
+		args = append(args, visibilityArgs...)
 		args = append(args, len(tags))
 		query = `SELECT COUNT(*) FROM (` + query + `)`
 	}
@@ -2756,16 +3143,31 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, fold
 }
 
 func (i *Index) NoteSummaryByPath(ctx context.Context, notePath string) (NoteSummary, error) {
-	var note NoteSummary
-	row := i.db.QueryRowContext(ctx, `
-		SELECT path, title, mtime_unix, uid
-		FROM files
-		WHERE path=?
-	`, notePath)
-	var mtimeUnix int64
-	if err := row.Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID); err != nil {
+	ownerName, relPath, err := splitOwnerPath(notePath)
+	if err != nil {
 		return NoteSummary{}, err
 	}
+	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	if err != nil {
+		return NoteSummary{}, err
+	}
+	var note NoteSummary
+	var mtimeUnix int64
+	clauses := []string{}
+	args := []interface{}{}
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	clauses = append(clauses, ownerClause, "files.path = ?")
+	args = append(args, ownerArgs...)
+	args = append(args, relPath)
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, files.uid, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	row := i.db.QueryRowContext(ctx, query, args...)
+	var owner string
+	if err := row.Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID, &owner); err != nil {
+		return NoteSummary{}, err
+	}
+	note.Path = joinOwnerPath(owner, relPath)
 	note.MTime = time.Unix(mtimeUnix, 0)
 	return note, nil
 }
@@ -2775,31 +3177,30 @@ func (i *Index) JournalNoteByDate(ctx context.Context, date string) (NoteSummary
 	if err != nil {
 		return NoteSummary{}, false, err
 	}
-	notePath := filepath.ToSlash(filepath.Join(parsed.Format("2006-01"), parsed.Format("02")+".md"))
-	if publicOnly(ctx) {
-		var note NoteSummary
-		var mtimeUnix int64
-		err := i.db.QueryRowContext(ctx, `
-			SELECT path, title, mtime_unix, uid
-			FROM files
-			WHERE path=? AND visibility=? AND is_journal=1
-		`, notePath, "public").Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID)
+	relPath := filepath.ToSlash(filepath.Join(parsed.Format("2006-01"), parsed.Format("02")+".md"))
+	clauses := []string{"files.path = ?", "files.is_journal = 1"}
+	args := []interface{}{relPath}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := fmt.Sprintf(`
+		SELECT files.path, files.title, files.mtime_unix, files.uid, %s
+		FROM files
+		%s
+		WHERE %s
+		ORDER BY files.updated_at DESC
+		LIMIT 1
+	`, ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	var note NoteSummary
+	var mtimeUnix int64
+	var owner string
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID, &owner); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NoteSummary{}, false, nil
 		}
-		if err != nil {
-			return NoteSummary{}, false, err
-		}
-		note.MTime = time.Unix(mtimeUnix, 0)
-		return note, true, nil
-	}
-	note, err := i.NoteSummaryByPath(ctx, notePath)
-	if errors.Is(err, sql.ErrNoRows) {
-		return NoteSummary{}, false, nil
-	}
-	if err != nil {
 		return NoteSummary{}, false, err
 	}
+	note.Path = joinOwnerPath(owner, note.Path)
+	note.MTime = time.Unix(mtimeUnix, 0)
 	return note, true, nil
 }
 
@@ -2817,16 +3218,27 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	visibilityClauses := []string{}
+	visibilityArgs := []interface{}{}
+	applyVisibilityFilter(ctx, &visibilityClauses, &visibilityArgs, "files")
 	if len(tags) == 0 {
-		query = `
-			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid, %s
 			FROM file_histories
 			JOIN files ON files.id = file_histories.file_id
-			WHERE file_histories.action_date = ?`
+			%s
+			WHERE file_histories.action_date = ?`, ownerNameExpr(), ownerJoins("files"))
 		args = []interface{}{dayUnix}
-		if publicOnly(ctx) {
-			query += " AND files.visibility = ?"
-			args = append(args, "public")
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+			args = append(args, visibilityArgs...)
+		}
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
 		}
 		if strings.TrimSpace(excludeUID) != "" {
 			query += " AND files.uid != ?"
@@ -2844,18 +3256,23 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
-		query = `
-			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid
+		query = fmt.Sprintf(`
+			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid, %s
 			FROM file_histories
 			JOIN files ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
+			%s
+			WHERE file_histories.action_date = ? AND tags.name IN (`+placeholders+`)`, ownerNameExpr(), ownerJoins("files"))
 		args = make([]interface{}, 0, len(tags)+5+len(folderArgs))
 		args = append(args, dayUnix)
-		if publicOnly(ctx) {
-			query += " AND files.visibility = ?"
-			args = append(args, "public")
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+			args = append(args, visibilityArgs...)
+		}
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
 		}
 		if strings.TrimSpace(excludeUID) != "" {
 			query += " AND files.uid != ?"
@@ -2885,9 +3302,11 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 	for rows.Next() {
 		var note NoteSummary
 		var lastAction int64
-		if err := rows.Scan(&note.Path, &note.Title, &lastAction, &note.UID); err != nil {
+		var ownerName string
+		if err := rows.Scan(&note.Path, &note.Title, &lastAction, &note.UID, &ownerName); err != nil {
 			return nil, err
 		}
+		note.Path = joinOwnerPath(ownerName, note.Path)
 		note.MTime = time.Unix(lastAction, 0)
 		notes = append(notes, note)
 	}
@@ -2897,9 +3316,11 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 func (i *Index) JournalDates(ctx context.Context) ([]time.Time, error) {
 	query := "SELECT path FROM files WHERE is_journal = 1"
 	args := []interface{}{}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
+	clauses := []string{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		query += " AND " + strings.Join(clauses, " AND ")
 	}
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -2931,9 +3352,11 @@ func (i *Index) JournalDates(ctx context.Context) ([]time.Time, error) {
 func (i *Index) CountJournalNotes(ctx context.Context, folder string, rootOnly bool) (int, error) {
 	query := "SELECT COUNT(*) FROM files WHERE is_journal = 1"
 	args := []interface{}{}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
+	clauses := []string{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		query += " AND " + strings.Join(clauses, " AND ")
 	}
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
 	if folderClause != "" {
@@ -2960,6 +3383,12 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	visibilityClauses := []string{}
+	visibilityArgs := []interface{}{}
+	applyVisibilityFilter(ctx, &visibilityClauses, &visibilityArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
 		query = `
@@ -2971,6 +3400,14 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 		args = []interface{}{day}
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+			args = append(args, visibilityArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -2988,6 +3425,12 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
 		query += " AND " + exclusiveClause
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -3003,6 +3446,8 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
+		args = append(args, visibilityArgs...)
 		args = append(args, len(tags))
 		query = `SELECT COUNT(*) FROM (` + query + `)`
 	}
@@ -3073,6 +3518,7 @@ func (i *Index) CountTasks(ctx context.Context, filter TaskCountFilter) (int, er
 	if len(filter.Tags) > 0 {
 		sqlStr += " JOIN file_tags ON files.id = file_tags.file_id JOIN tags ON tags.id = file_tags.tag_id"
 	}
+	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	if len(clauses) > 0 {
 		sqlStr += " WHERE " + strings.Join(clauses, " AND ")
@@ -3102,6 +3548,12 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	visibilityClauses := []string{}
+	visibilityArgs := []interface{}{}
+	applyVisibilityFilter(ctx, &visibilityClauses, &visibilityArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
 		query = `
@@ -3112,6 +3564,14 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 		args = []interface{}{dueDate}
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+			args = append(args, visibilityArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -3128,6 +3588,12 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)`
 		query += " AND " + exclusiveClause
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -3143,6 +3609,8 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
+		args = append(args, visibilityArgs...)
 		args = append(args, len(tags))
 		query = `SELECT COUNT(*) FROM (` + query + `)`
 	}
@@ -3170,6 +3638,12 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 		args  []interface{}
 	)
 	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	visibilityClauses := []string{}
+	visibilityArgs := []interface{}{}
+	applyVisibilityFilter(ctx, &visibilityClauses, &visibilityArgs, "files")
 	if len(tags) == 0 {
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
 		query = `
@@ -3181,6 +3655,14 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 		args = []interface{}{dueDate, day}
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+			args = append(args, visibilityArgs...)
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -3198,6 +3680,12 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 			JOIN tags ON tags.id = file_tags.tag_id
 			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)`
 		query += " AND " + exclusiveClause
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+		}
+		if len(visibilityClauses) > 0 {
+			query += " AND " + strings.Join(visibilityClauses, " AND ")
+		}
 		if folderClause != "" {
 			query += " AND " + folderClause
 			args = append(args, folderArgs...)
@@ -3213,6 +3701,8 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 			args = append(args, tag)
 		}
 		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
+		args = append(args, visibilityArgs...)
 		args = append(args, len(tags))
 		query = `SELECT COUNT(*) FROM (` + query + `)`
 	}
@@ -3225,7 +3715,11 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 }
 
 func (i *Index) Backlinks(ctx context.Context, notePath string, title string, uid string) ([]Backlink, error) {
-	candidates := backlinkCandidates(notePath, title, uid)
+	relPath := notePath
+	if _, rel, err := splitOwnerPath(notePath); err == nil {
+		relPath = rel
+	}
+	candidates := backlinkCandidates(relPath, title, uid)
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -3235,21 +3729,30 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string, ui
 	if publicOnly(ctx) {
 		visibilityClause = " AND files.visibility = ?"
 	}
-	query := `
-		SELECT files.path, files.title, links.line_no, links.line, links.kind
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	accessClause := ""
+	if len(accessClauses) > 0 {
+		accessClause = " AND " + strings.Join(accessClauses, " AND ")
+	}
+	query := fmt.Sprintf(`
+		SELECT files.path, files.title, links.line_no, links.line, links.kind, %s
 		FROM links
 		JOIN files ON files.id = links.from_file_id
-		WHERE lower(links.to_ref) IN (` + placeholders + `) AND files.path != ?` + visibilityClause + `
-		ORDER BY files.updated_at DESC, files.title`
+		%s
+		WHERE lower(links.to_ref) IN (`+placeholders+`) AND files.path != ?`+visibilityClause+accessClause+`
+		ORDER BY files.updated_at DESC, files.title`, ownerNameExpr(), ownerJoins("files"))
 
-	args := make([]interface{}, 0, len(candidates)+2)
+	args := make([]interface{}, 0, len(candidates)+2+len(accessArgs))
 	for _, candidate := range candidates {
 		args = append(args, strings.ToLower(candidate))
 	}
-	args = append(args, notePath)
+	args = append(args, relPath)
 	if publicOnly(ctx) {
 		args = append(args, "public")
 	}
+	args = append(args, accessArgs...)
 
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -3260,9 +3763,12 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string, ui
 	var backlinks []Backlink
 	for rows.Next() {
 		var link Backlink
-		if err := rows.Scan(&link.FromPath, &link.FromTitle, &link.LineNo, &link.Line, &link.Kind); err != nil {
+		var ownerName string
+		var path string
+		if err := rows.Scan(&path, &link.FromTitle, &link.LineNo, &link.Line, &link.Kind, &ownerName); err != nil {
 			return nil, err
 		}
+		link.FromPath = joinOwnerPath(ownerName, path)
 		backlinks = append(backlinks, link)
 	}
 	return backlinks, rows.Err()
@@ -3275,13 +3781,23 @@ func (i *Index) BrokenLinks(ctx context.Context) ([]BrokenLink, error) {
 		visibilityClause = " AND files.visibility = ?"
 		args = append(args, "public")
 	}
-	rows, err := i.db.QueryContext(ctx, `
-		SELECT broken_links.to_ref, files.path, files.title, broken_links.line_no, broken_links.line, broken_links.kind
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+	accessClause := ""
+	if len(accessClauses) > 0 {
+		accessClause = " AND " + strings.Join(accessClauses, " AND ")
+		args = append(args, accessArgs...)
+	}
+	query := fmt.Sprintf(`
+		SELECT broken_links.to_ref, files.path, files.title, broken_links.line_no, broken_links.line, broken_links.kind, %s
 		FROM broken_links
 		JOIN files ON files.id = broken_links.from_file_id
-		WHERE 1=1`+visibilityClause+`
+		%s
+		WHERE 1=1`+visibilityClause+accessClause+`
 		ORDER BY lower(broken_links.to_ref), lower(files.title), broken_links.line_no
-	`, args...)
+	`, ownerNameExpr(), ownerJoins("files"))
+	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3289,9 +3805,12 @@ func (i *Index) BrokenLinks(ctx context.Context) ([]BrokenLink, error) {
 	var out []BrokenLink
 	for rows.Next() {
 		var link BrokenLink
-		if err := rows.Scan(&link.ToRef, &link.FromPath, &link.FromTitle, &link.LineNo, &link.Line, &link.Kind); err != nil {
+		var ownerName string
+		var path string
+		if err := rows.Scan(&link.ToRef, &path, &link.FromTitle, &link.LineNo, &link.Line, &link.Kind, &ownerName); err != nil {
 			return nil, err
 		}
+		link.FromPath = joinOwnerPath(ownerName, path)
 		out = append(out, link)
 	}
 	return out, rows.Err()
@@ -3342,7 +3861,12 @@ func backlinkCandidates(notePath string, title string, uid string) []string {
 }
 
 func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, error) {
-	rows, err := i.db.QueryContext(ctx, "SELECT id, path, hash, mtime_unix, size FROM files")
+	query := fmt.Sprintf(`
+		SELECT files.id, files.user_id, files.group_id, files.path, files.hash, files.mtime_unix, files.size, %s
+		FROM files
+		%s
+	`, ownerNameExpr(), ownerJoins("files"))
+	rows, err := i.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -3350,25 +3874,34 @@ func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, err
 
 	records := map[string]fileRecord{}
 	for rows.Next() {
-		var path string
+		var relPath string
+		var ownerName string
 		var rec fileRecord
-		if err := rows.Scan(&rec.ID, &path, &rec.Hash, &rec.MTimeUnix, &rec.Size); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.GroupID, &relPath, &rec.Hash, &rec.MTimeUnix, &rec.Size, &ownerName); err != nil {
 			return nil, err
 		}
-		records[path] = rec
+		rec.Path = relPath
+		records[joinOwnerPath(ownerName, relPath)] = rec
 	}
 	return records, rows.Err()
 }
 
 func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fileRecord, seen map[string]bool) (int, error) {
 	type missing struct {
-		id   int
-		path string
+		id        int
+		userID    int
+		groupID   sql.NullInt64
+		path      string
 	}
 	var missingRows []missing
 	for path, rec := range records {
 		if !seen[path] {
-			missingRows = append(missingRows, missing{id: rec.ID, path: path})
+			missingRows = append(missingRows, missing{
+				id:        rec.ID,
+				userID:    rec.UserID,
+				groupID:   rec.GroupID,
+				path:      rec.Path,
+			})
 		}
 	}
 	if len(missingRows) == 0 {
@@ -3394,7 +3927,9 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		if _, err := tx.ExecContext(ctx, "DELETE FROM file_histories WHERE file_id=?", row.id); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE path=?", row.path); err != nil {
+		ownerClause, ownerArgs := ownerWhereClause(row.userID, row.groupID, "fts")
+		ownerArgs = append(ownerArgs, row.path)
+		if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE id=?", row.id); err != nil {
@@ -3422,15 +3957,36 @@ func nullIfZero(value int) any {
 	return value
 }
 
-func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
-	var id int
-	query := "SELECT id FROM files WHERE path=?"
-	args := []interface{}{notePath}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
+func nullIfInvalidInt64(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
 	}
-	err := i.db.QueryRowContext(ctx, query, args...).Scan(&id)
+	return value.Int64
+}
+
+func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
+	ownerName, relPath, err := splitOwnerPath(notePath)
+	if err != nil {
+		return false, nil
+	}
+	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var id int
+	clauses := make([]string, 0, 3)
+	args := make([]interface{}, 0, 4)
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	clauses = append(clauses, ownerClause, "files.path = ?")
+	args = append(args, ownerArgs...)
+	args = append(args, relPath)
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := "SELECT files.id FROM files WHERE " + strings.Join(clauses, " AND ")
+	err = i.db.QueryRowContext(ctx, query, args...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -3444,13 +4000,14 @@ type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, ref string) (int, error) {
+func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, userID int, groupID sql.NullInt64, ref string) (int, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return 0, nil
 	}
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
 	var id int
-	err := q.QueryRowContext(ctx, "SELECT id FROM files WHERE uid=? LIMIT 1", ref).Scan(&id)
+	err := q.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND uid=? LIMIT 1", append(ownerArgs, ref)...).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -3466,7 +4023,7 @@ func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, ref string) 
 			candidates = append(candidates, path+".md")
 		}
 		for _, candidate := range candidates {
-			err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE lower(path)=lower(?) LIMIT 1", candidate).Scan(&id)
+			err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND lower(path)=lower(?) LIMIT 1", append(ownerArgs, candidate)...).Scan(&id)
 			if err == nil {
 				return id, nil
 			}
@@ -3475,7 +4032,7 @@ func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, ref string) 
 			}
 		}
 	}
-	err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE lower(title)=lower(?) LIMIT 1", ref).Scan(&id)
+	err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND lower(title)=lower(?) LIMIT 1", append(ownerArgs, ref)...).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -3486,13 +4043,24 @@ func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, ref string) 
 }
 
 func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) {
-	var id int
-	query := "SELECT id FROM files WHERE path=?"
-	args := []interface{}{notePath}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
+	ownerName, relPath, err := splitOwnerPath(notePath)
+	if err != nil {
+		return 0, err
 	}
+	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	if err != nil {
+		return 0, err
+	}
+	var id int
+	clauses := make([]string, 0, 3)
+	args := make([]interface{}, 0, 4)
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	clauses = append(clauses, ownerClause, "files.path = ?")
+	args = append(args, ownerArgs...)
+	args = append(args, relPath)
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := "SELECT files.id FROM files WHERE " + strings.Join(clauses, " AND ")
 	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&id); err != nil {
 		return 0, err
 	}
@@ -3500,17 +4068,17 @@ func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) 
 }
 
 func (i *Index) PathByFileID(ctx context.Context, id int) (string, error) {
-	var path string
-	query := "SELECT path FROM files WHERE id=?"
+	var relPath string
+	var ownerName string
+	clauses := []string{"files.id = ?"}
 	args := []interface{}{id}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
-	}
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path); err != nil {
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := fmt.Sprintf("SELECT files.path, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
 		return "", err
 	}
-	return path, nil
+	return joinOwnerPath(ownerName, relPath), nil
 }
 
 func (i *Index) PathByUID(ctx context.Context, uid string) (string, error) {
@@ -3518,17 +4086,17 @@ func (i *Index) PathByUID(ctx context.Context, uid string) (string, error) {
 	if uid == "" {
 		return "", sql.ErrNoRows
 	}
-	var path string
-	query := "SELECT path FROM files WHERE lower(uid)=lower(?)"
+	var relPath string
+	var ownerName string
+	clauses := []string{"lower(files.uid)=lower(?)"}
 	args := []interface{}{uid}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
-	}
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path); err != nil {
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := fmt.Sprintf("SELECT files.path, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
 		return "", err
 	}
-	return path, nil
+	return joinOwnerPath(ownerName, relPath), nil
 }
 
 func (i *Index) PathTitleByUID(ctx context.Context, uid string) (string, string, error) {
@@ -3536,18 +4104,18 @@ func (i *Index) PathTitleByUID(ctx context.Context, uid string) (string, string,
 	if uid == "" {
 		return "", "", sql.ErrNoRows
 	}
-	var path string
+	var relPath string
+	var ownerName string
 	var title string
-	query := "SELECT path, title FROM files WHERE lower(uid)=lower(?)"
+	clauses := []string{"lower(files.uid)=lower(?)"}
 	args := []interface{}{uid}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
-	}
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path, &title); err != nil {
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := fmt.Sprintf("SELECT files.path, files.title, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &title, &ownerName); err != nil {
 		return "", "", err
 	}
-	return path, title, nil
+	return joinOwnerPath(ownerName, relPath), title, nil
 }
 
 func (i *Index) PathByTitleNewest(ctx context.Context, title string) (string, error) {
@@ -3555,33 +4123,35 @@ func (i *Index) PathByTitleNewest(ctx context.Context, title string) (string, er
 	if title == "" {
 		return "", sql.ErrNoRows
 	}
-	var path string
-	query := `
-		SELECT path
-		FROM files
-		WHERE lower(title)=lower(?)`
+	var relPath string
+	var ownerName string
+	clauses := []string{"lower(files.title)=lower(?)"}
 	args := []interface{}{title}
-	if publicOnly(ctx) {
-		query += " AND visibility = ?"
-		args = append(args, "public")
-	}
-	query += `
-		ORDER BY updated_at DESC
-		LIMIT 1`
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&path); err != nil {
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := fmt.Sprintf(`
+		SELECT files.path, %s
+		FROM files
+		%s
+		WHERE %s
+		ORDER BY files.updated_at DESC
+		LIMIT 1`, ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
 		return "", err
 	}
-	return path, nil
+	return joinOwnerPath(ownerName, relPath), nil
 }
 
 func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
-	query := "SELECT path, title, mtime_unix FROM files"
+	query := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, %s FROM files %s", ownerNameExpr(), ownerJoins("files"))
 	args := []interface{}{}
-	if publicOnly(ctx) {
-		query += " WHERE visibility = ?"
-		args = append(args, "public")
+	clauses := []string{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += " ORDER BY path"
+	query += " ORDER BY files.path"
 	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -3592,9 +4162,12 @@ func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
-		if err := rows.Scan(&n.Path, &n.Title, &mtimeUnix); err != nil {
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &ownerName); err != nil {
 			return nil, err
 		}
+		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
 		notes = append(notes, n)
 	}

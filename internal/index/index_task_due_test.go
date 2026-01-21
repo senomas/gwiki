@@ -9,7 +9,8 @@ import (
 
 func TestJournalTaskDefaultsDueDate(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes", "2026-01")
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes", "2026-01")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
@@ -53,7 +54,8 @@ func TestJournalTaskDefaultsDueDate(t *testing.T) {
 
 func TestJournalTaskRespectsInlineDueDate(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes", "2026-01")
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes", "2026-01")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}

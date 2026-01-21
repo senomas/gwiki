@@ -18,7 +18,8 @@ import (
 
 func TestIntegrationFlow(t *testing.T) {
 	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, "notes"), 0o755); err != nil {
+	owner := "local"
+	if err := os.MkdirAll(filepath.Join(repo, owner, "notes"), 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
 	dataDir := filepath.Join(repo, ".wiki")
@@ -47,30 +48,41 @@ func TestIntegrationFlow(t *testing.T) {
 	defer ts.Close()
 
 	form := url.Values{}
-	form.Set("title", "My Note")
+	form.Set("content", "# My Note\n\nHello world")
 	resp, err := http.PostForm(ts.URL+"/notes/new", form)
 	if err != nil {
 		t.Fatalf("post new: %v", err)
 	}
 	resp.Body.Close()
 
-	resp, err = http.Get(ts.URL + "/notes/my-note.md/edit")
+	noteURL := "/notes/" + owner + "/my-note.md"
+	resp, err = http.Get(ts.URL + noteURL + "/edit")
 	if err != nil {
 		t.Fatalf("get edit: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get edit status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	resp.Body.Close()
 
 	save := url.Values{}
 	save.Set("content", "# My Note\n\nHello world")
-	resp, err = http.PostForm(ts.URL+"/notes/my-note.md/save", save)
+	resp, err = http.PostForm(ts.URL+noteURL+"/save", save)
 	if err != nil {
 		t.Fatalf("post save: %v", err)
 	}
 	resp.Body.Close()
 
-	resp, err = http.Get(ts.URL + "/notes/my-note.md")
+	resp, err = http.Get(ts.URL + noteURL)
 	if err != nil {
 		t.Fatalf("get view: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get view status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	resp.Body.Close()
 
@@ -87,7 +99,8 @@ func TestIntegrationFlow(t *testing.T) {
 
 func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes")
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
 	dataDir := filepath.Join(repo, ".wiki")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
@@ -114,7 +127,8 @@ func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 
-	notePath := "bookmark.md"
+	noteRel := "bookmark.md"
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
 	content := strings.Join([]string{
 		"---",
 		"id: note-1",
@@ -130,7 +144,7 @@ func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 		"## Homelab",
 		"Proxmox",
 	}, "\n")
-	fullPath := filepath.Join(notesDir, notePath)
+	fullPath := filepath.Join(notesDir, noteRel)
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write note: %v", err)
 	}

@@ -22,6 +22,10 @@ type EmbedCacheEntry struct {
 }
 
 func (i *Index) GetEmbedCache(ctx context.Context, url, kind string) (EmbedCacheEntry, bool, error) {
+	userID, err := i.actorUserID(ctx)
+	if err != nil {
+		return EmbedCacheEntry{}, false, err
+	}
 	var entry EmbedCacheEntry
 	var updatedUnix int64
 	var expiresUnix int64
@@ -29,12 +33,13 @@ func (i *Index) GetEmbedCache(ctx context.Context, url, kind string) (EmbedCache
 	row := i.db.QueryRowContext(ctx, `
 		SELECT url, kind, embed_url, status, error_msg, updated_at, expires_at
 		FROM embed_cache
-		WHERE url = ? AND kind = ?
+		WHERE url = ? AND kind = ? AND user_id = ? AND group_id IS NULL
 		LIMIT 1`,
 		url,
 		kind,
+		userID,
 	)
-	err := row.Scan(&entry.URL, &entry.Kind, &entry.EmbedURL, &entry.Status, &entry.ErrorMsg, &updatedUnix, &expiresUnix)
+	err = row.Scan(&entry.URL, &entry.Kind, &entry.EmbedURL, &entry.Status, &entry.ErrorMsg, &updatedUnix, &expiresUnix)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return EmbedCacheEntry{}, false, nil
@@ -45,22 +50,27 @@ func (i *Index) GetEmbedCache(ctx context.Context, url, kind string) (EmbedCache
 	entry.ExpiresAt = time.Unix(expiresUnix, 0)
 
 	if time.Now().After(entry.ExpiresAt) {
-		_, _ = i.db.ExecContext(ctx, "DELETE FROM embed_cache WHERE url = ? AND kind = ?", url, kind)
+		_, _ = i.db.ExecContext(ctx, "DELETE FROM embed_cache WHERE url = ? AND kind = ? AND user_id = ? AND group_id IS NULL", url, kind, userID)
 		return EmbedCacheEntry{}, false, nil
 	}
 	return entry, true, nil
 }
 
 func (i *Index) UpsertEmbedCache(ctx context.Context, entry EmbedCacheEntry) error {
-	_, err := i.db.ExecContext(ctx, `
-		INSERT INTO embed_cache(url, kind, embed_url, status, error_msg, updated_at, expires_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(url, kind) DO UPDATE SET
+	userID, err := i.actorUserID(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = i.db.ExecContext(ctx, `
+		INSERT INTO embed_cache(user_id, group_id, url, kind, embed_url, status, error_msg, updated_at, expires_at)
+		VALUES(?, NULL, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, url, kind) WHERE group_id IS NULL DO UPDATE SET
 			embed_url = excluded.embed_url,
 			status = excluded.status,
 			error_msg = excluded.error_msg,
 			updated_at = excluded.updated_at,
 			expires_at = excluded.expires_at`,
+		userID,
 		entry.URL,
 		entry.Kind,
 		entry.EmbedURL,

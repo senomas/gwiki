@@ -1053,7 +1053,15 @@
         wikiLinkNotePath = body ? (body.getAttribute("data-note-path") || "") : "";
         var targetPath = ensureNotePath(ref);
         createNote.classList.remove("hidden");
-        createNote.setAttribute("href", "/notes/new?path=" + encodeURIComponent(targetPath));
+        var owner = "";
+        if (wikiLinkNotePath) {
+          owner = wikiLinkNotePath.split("/")[0] || "";
+        }
+        var createHref = "/notes/new?path=" + encodeURIComponent(targetPath);
+        if (owner) {
+          createHref += "&owner=" + encodeURIComponent(owner);
+        }
+        createNote.setAttribute("href", createHref);
         openLauncher();
         input.value = ref;
         input.dispatchEvent(new Event("input", {bubbles: true}));
@@ -1307,6 +1315,12 @@
       document.addEventListener("keydown", function (event) {
         if (!event.ctrlKey || event.key !== " ") {
           return;
+        }
+        var target = event.target;
+        if (target) {
+          if (target.tagName === "TEXTAREA" && target.id === "note-content") {
+            return;
+          }
         }
         event.preventDefault();
         if (launcher.classList.contains("is-open")) {

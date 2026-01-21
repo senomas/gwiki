@@ -26,6 +26,19 @@ Tip: on index/todo/due pages, navigation focuses note titles. On note pages it f
 - Selecting a note opens a submenu (Open/Edit/Delete). Enter activates the focused item.
 - Toggle list view (compact/full) from the launcher; it remembers your choice.
 
+## Groups
+
+Create a group by adding a `.member.txt` file in a top-level folder under `WIKI_REPO_PATH`. The folder name becomes the group name.
+
+`.member.txt` format:
+```
+alice:rw
+bob:rw
+charlie:ro
+```
+
+Valid access values are `rw` and `ro`. Users listed with `rw` can create and edit notes in that group; `ro` users can only view notes.
+
 ## Markdown Basics
 
 ### Headings

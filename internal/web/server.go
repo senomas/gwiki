@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"gwiki/internal/config"
@@ -41,16 +42,40 @@ func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
 }
 
 func (s *Server) Handler() http.Handler {
+	base := s.accessContextMiddleware(s.mux)
 	var handler http.Handler
 	if s.auth != nil {
-		handler = s.auth.Middleware(s.mux)
+		handler = s.auth.Middleware(base)
 	} else {
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := WithUser(r.Context(), User{Name: "local", Authenticated: true})
-			s.mux.ServeHTTP(w, r.WithContext(ctx))
+			base.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 	return s.debugLogMiddleware(handler)
+}
+
+func (s *Server) accessContextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		if IsAuthenticated(ctx) {
+			user, ok := CurrentUser(ctx)
+			if ok && strings.TrimSpace(user.Name) != "" {
+				userID, groupIDs, err := s.idx.AccessFilterForUser(ctx, user.Name)
+				if err != nil {
+					if _, ensureErr := s.idx.EnsureUser(ctx, user.Name); ensureErr == nil {
+						userID, groupIDs, err = s.idx.AccessFilterForUser(ctx, user.Name)
+					}
+				}
+				if err == nil && userID > 0 {
+					ctx = index.WithAccessFilter(ctx, userID, groupIDs)
+				}
+			}
+		} else {
+			ctx = index.WithPublicVisibility(ctx)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) debugLogMiddleware(next http.Handler) http.Handler {

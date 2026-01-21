@@ -9,7 +9,8 @@ import (
 
 func TestExclusiveTagsFiltering(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes")
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
@@ -48,13 +49,13 @@ func TestExclusiveTagsFiltering(t *testing.T) {
 	for _, note := range notes {
 		paths[note.Path] = struct{}{}
 	}
-	if _, ok := paths["a.md"]; ok {
+	if _, ok := paths["local/a.md"]; ok {
 		t.Fatalf("expected exclusive note to be hidden without filter")
 	}
-	if _, ok := paths["b.md"]; !ok {
+	if _, ok := paths["local/b.md"]; !ok {
 		t.Fatalf("expected non-exclusive note b.md in list")
 	}
-	if _, ok := paths["c.md"]; !ok {
+	if _, ok := paths["local/c.md"]; !ok {
 		t.Fatalf("expected non-exclusive note c.md in list")
 	}
 
@@ -62,7 +63,7 @@ func TestExclusiveTagsFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("note list filtered: %v", err)
 	}
-	if len(notes) != 1 || notes[0].Path != "a.md" {
+	if len(notes) != 1 || notes[0].Path != "local/a.md" {
 		t.Fatalf("expected only a.md when filtering by work, got %#v", notes)
 	}
 
@@ -70,7 +71,7 @@ func TestExclusiveTagsFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("note list filtered (work+btn): %v", err)
 	}
-	if len(notes) != 1 || notes[0].Path != "a.md" {
+	if len(notes) != 1 || notes[0].Path != "local/a.md" {
 		t.Fatalf("expected a.md when filtering by work+btn, got %#v", notes)
 	}
 

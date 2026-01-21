@@ -9,7 +9,8 @@ import (
 
 func TestPublicVisibilityFilter(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes")
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
@@ -57,7 +58,7 @@ Secret bananas with #privatetag.
 	if err != nil {
 		t.Fatalf("note list: %v", err)
 	}
-	if len(notes) != 1 || notes[0].Path != "public.md" {
+	if len(notes) != 1 || notes[0].Path != "local/public.md" {
 		t.Fatalf("expected only public note, got %+v", notes)
 	}
 
@@ -79,7 +80,7 @@ Secret bananas with #privatetag.
 		}
 	}
 
-	exists, err := idx.NoteExists(publicCtx, "private.md")
+	exists, err := idx.NoteExists(publicCtx, "local/private.md")
 	if err != nil {
 		t.Fatalf("note exists: %v", err)
 	}

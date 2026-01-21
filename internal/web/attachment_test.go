@@ -18,7 +18,8 @@ import (
 
 func TestAttachmentAccessByNoteID(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes")
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
 	dataDir := filepath.Join(repo, ".wiki")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
@@ -28,7 +29,8 @@ func TestAttachmentAccessByNoteID(t *testing.T) {
 	}
 
 	noteID := "xxxx-yyyy"
-	notePath := filepath.Join(notesDir, "test.md")
+	noteRel := "test.md"
+	notePath := filepath.Join(notesDir, noteRel)
 	noteContent := "---\n" +
 		"id: " + noteID + "\n" +
 		"title: Test Note\n" +
@@ -65,7 +67,8 @@ func TestAttachmentAccessByNoteID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat note: %v", err)
 	}
-	if err := idx.IndexNote(ctx, "test.md", []byte(noteContent), info.ModTime(), info.Size()); err != nil {
+	noteIndexPath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, noteIndexPath, []byte(noteContent), info.ModTime(), info.Size()); err != nil {
 		t.Fatalf("index note: %v", err)
 	}
 
@@ -96,7 +99,8 @@ func TestAttachmentAccessByNoteID(t *testing.T) {
 
 func TestRenderVideoAttachmentEmbed(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes")
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
 	dataDir := filepath.Join(repo, ".wiki")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
@@ -136,6 +140,26 @@ func TestRenderVideoAttachmentEmbed(t *testing.T) {
 		t.Fatalf("init index: %v", err)
 	}
 
+	noteContent := "---\n" +
+		"id: " + noteID + "\n" +
+		"title: Video Note\n" +
+		"visibility: public\n" +
+		"---\n\n" +
+		"Video\n"
+	noteRel := "video.md"
+	notePath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(notePath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	noteIndexPath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, noteIndexPath, []byte(noteContent), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
 	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
 	srv, err := NewServer(cfg, idx)
 	if err != nil {
@@ -160,7 +184,8 @@ func TestRenderVideoAttachmentEmbed(t *testing.T) {
 
 func TestAttachmentAndAssetAccessControl(t *testing.T) {
 	repo := t.TempDir()
-	notesDir := filepath.Join(repo, "notes")
+	owner := "alice"
+	notesDir := filepath.Join(repo, owner, "notes")
 	dataDir := filepath.Join(repo, ".wiki")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
@@ -193,8 +218,10 @@ func TestAttachmentAndAssetAccessControl(t *testing.T) {
 		"---\n\n" +
 		"Private\n"
 
-	publicPath := filepath.Join(notesDir, "public.md")
-	privatePath := filepath.Join(notesDir, "private.md")
+	publicRel := "public.md"
+	privateRel := "private.md"
+	publicPath := filepath.Join(notesDir, publicRel)
+	privatePath := filepath.Join(notesDir, privateRel)
 	if err := os.WriteFile(publicPath, []byte(publicContent), 0o644); err != nil {
 		t.Fatalf("write public note: %v", err)
 	}
@@ -243,21 +270,19 @@ func TestAttachmentAndAssetAccessControl(t *testing.T) {
 	if err := idx.Init(ctx, repo); err != nil {
 		t.Fatalf("init index: %v", err)
 	}
+
+	publicIndexPath := filepath.ToSlash(filepath.Join(owner, publicRel))
+	privateIndexPath := filepath.ToSlash(filepath.Join(owner, privateRel))
 	if info, err := os.Stat(publicPath); err == nil {
-		if err := idx.IndexNote(ctx, "public.md", []byte(publicContent), info.ModTime(), info.Size()); err != nil {
+		if err := idx.IndexNote(ctx, publicIndexPath, []byte(publicContent), info.ModTime(), info.Size()); err != nil {
 			t.Fatalf("index public note: %v", err)
 		}
-	} else {
-		t.Fatalf("stat public note: %v", err)
 	}
 	if info, err := os.Stat(privatePath); err == nil {
-		if err := idx.IndexNote(ctx, "private.md", []byte(privateContent), info.ModTime(), info.Size()); err != nil {
+		if err := idx.IndexNote(ctx, privateIndexPath, []byte(privateContent), info.ModTime(), info.Size()); err != nil {
 			t.Fatalf("index private note: %v", err)
 		}
-	} else {
-		t.Fatalf("stat private note: %v", err)
 	}
-
 	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0", AuthFile: authFile}
 	srv, err := NewServer(cfg, idx)
 	if err != nil {

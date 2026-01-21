@@ -33,6 +33,10 @@ Authentication helpers and password verification.
 - `Verify`: helper for verify
 - `LoadFile`: loads file
 
+## Group membership discovery
+
+Groups are discovered by scanning top-level folders under `WIKI_REPO_PATH` for a `.member.txt` file. The folder name becomes the group name; each line is `user:access` with access `ro` or `rw`.
+
 ## `internal/auth/auth_test.go`
 Auth unit tests.
 

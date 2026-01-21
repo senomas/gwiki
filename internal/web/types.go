@@ -59,6 +59,8 @@ type ViewData struct {
 	NoteURL          string
 	ReturnURL        string
 	FolderOptions    []string
+	OwnerOptions     []OwnerOption
+	SelectedOwner    string
 	TagSuggestions   []string
 	DailyDate        string
 	DailyJournal     *NoteCard
@@ -78,6 +80,11 @@ type ViewData struct {
 	SyncPending      bool
 	BrokenLinks      []BrokenLinkGroup
 	BuildVersion     string
+}
+
+type OwnerOption struct {
+	Name  string
+	Label string
 }
 
 type BacklinkView struct {

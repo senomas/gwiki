@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"gwiki/internal/auth"
 	"gwiki/internal/config"
 	"gwiki/internal/index"
 	"gwiki/internal/web"
@@ -47,11 +48,6 @@ func main() {
 		slog.Error("create .wiki dir", "err", err)
 		os.Exit(1)
 	}
-	notesDir := filepath.Join(cfg.RepoPath, "notes")
-	if err := os.MkdirAll(notesDir, 0o755); err != nil {
-		slog.Error("create notes dir", "err", err)
-		os.Exit(1)
-	}
 
 	idx, err := index.Open(filepath.Join(cfg.DataPath, "index.sqlite"))
 	if err != nil {
@@ -60,9 +56,37 @@ func main() {
 	}
 	defer idx.Close()
 
+	users := make([]string, 0)
+	if cfg.AuthFile != "" {
+		fileUsers, err := auth.LoadFile(cfg.AuthFile)
+		if err != nil {
+			slog.Error("load auth file", "err", err)
+			os.Exit(1)
+		}
+		for user := range fileUsers {
+			users = append(users, user)
+		}
+	}
+	if cfg.AuthUser != "" {
+		users = append(users, cfg.AuthUser)
+	}
+	groupFile, err := auth.LoadGroupsFromRepo(cfg.RepoPath)
+	if err != nil {
+		slog.Error("load group file", "err", err)
+		os.Exit(1)
+	}
+	groupMembers := make(map[string][]index.GroupMember, len(groupFile))
+	for group, members := range groupFile {
+		list := make([]index.GroupMember, 0, len(members))
+		for _, member := range members {
+			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
+		}
+		groupMembers[group] = list
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := idx.Init(ctx, cfg.RepoPath); err != nil {
+	if err := idx.InitWithOwners(ctx, cfg.RepoPath, users, groupMembers); err != nil {
 		slog.Error("init index", "err", err)
 		os.Exit(1)
 	}

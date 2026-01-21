@@ -61,6 +61,16 @@
         <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
         <input type="hidden" name="return_url" value="{{.ReturnURL}}">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
+        {{if .OwnerOptions}}
+        <div class="space-y-2">
+          <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Owner</label>
+          <select id="owner-select" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="owner">
+            {{range .OwnerOptions}}
+            <option value="{{.Name}}" {{if eq $.SelectedOwner .Name}}selected{{end}}>{{.Label}}</option>
+            {{end}}
+          </select>
+        </div>
+        {{end}}
         <div class="relative">
           <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" id="note-content" name="content">{{.RawContent}}</textarea>
           <div id="tag-suggest" class="absolute z-10 hidden" aria-live="polite"></div>
@@ -98,6 +108,7 @@
   </form>
   <form class="mt-4 space-y-3" action="{{if .NotePath}}/notes/{{.NotePath}}/upload{{else}}/notes/new/upload{{end}}" method="post" enctype="multipart/form-data">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
+        {{if .OwnerOptions}}<input data-owner-input type="hidden" name="owner" value="{{.SelectedOwner}}">{{end}}
         <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Attachments</label>
         <div class="flex flex-wrap items-center gap-3">
           <input class="text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-200 hover:file:bg-slate-700" type="file" name="attachment" required>
@@ -147,6 +158,7 @@
             <form action="{{if $.NotePath}}/notes/{{$.NotePath}}/attachments/delete{{else}}/notes/new/attachments/delete{{end}}" method="post">
               <input type="hidden" name="file" value="{{.}}">
               {{if $.UploadToken}}<input type="hidden" name="upload_token" value="{{$.UploadToken}}">{{end}}
+              {{if $.OwnerOptions}}<input data-owner-input type="hidden" name="owner" value="{{$.SelectedOwner}}">{{end}}
               <button class="rounded-md border border-rose-500/60 bg-rose-500/10 px-2 py-1 text-xs font-semibold text-rose-100 transition hover:border-rose-400 hover:bg-rose-500/20" type="submit">Delete</button>
             </form>
           </li>
@@ -169,6 +181,22 @@
       event.preventDefault();
       window.history.go(-1);
     });
+  })();
+</script>
+<script>
+  (function () {
+    var ownerSelect = document.getElementById("owner-select");
+    if (!ownerSelect) {
+      return;
+    }
+    var updateOwnerInputs = function () {
+      var inputs = document.querySelectorAll("[data-owner-input]");
+      inputs.forEach(function (input) {
+        input.value = ownerSelect.value;
+      });
+    };
+    ownerSelect.addEventListener("change", updateOwnerInputs);
+    updateOwnerInputs();
   })();
 </script>
 <script>
