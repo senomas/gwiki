@@ -2,7 +2,7 @@ WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
 
 docker-build:
-	docker build -t gwiki .
+	docker build --build-arg BUILD_TAG=$(BUILD_TAG) -t gwiki .
 
 BUILD_TAG := $(shell git show -s --format=%cd --date=format:%Y%m%d%H%M%S)
 IMAGE := docker.senomas.com/gwiki
@@ -13,7 +13,7 @@ build: css htmx
 			sed -i 's|^GWIKI_IMAGE=.*|GWIKI_IMAGE=$(IMAGE):$(BUILD_TAG)|' "$$f"; \
 		fi; \
 	done
-	docker build -t $(IMAGE):$(BUILD_TAG) .
+	docker build --build-arg BUILD_TAG=$(BUILD_TAG) -t $(IMAGE):$(BUILD_TAG) .
 	docker tag $(IMAGE):$(BUILD_TAG) $(IMAGE):latest
 	docker push $(IMAGE):$(BUILD_TAG)
 	docker push $(IMAGE):latest

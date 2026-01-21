@@ -1,10 +1,11 @@
 FROM golang:1.25.5-alpine AS build
 
 WORKDIR /src
+ARG BUILD_TAG=dev
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/wiki ./cmd/wiki
+RUN CGO_ENABLED=0 go build -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_TAG}" -o /out/wiki ./cmd/wiki
 RUN CGO_ENABLED=0 go build -o /out/sync ./cmd/sync
 
 FROM alpine:3.19

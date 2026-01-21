@@ -113,6 +113,7 @@ func shouldOpenNewTab(dest []byte) bool {
 
 func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	data.AuthEnabled = s.auth != nil
+	data.BuildVersion = BuildVersion
 	if user, ok := CurrentUser(r.Context()); ok {
 		data.CurrentUser = user
 		data.IsAuthenticated = user.Authenticated

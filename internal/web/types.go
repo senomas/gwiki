@@ -76,6 +76,7 @@ type ViewData struct {
 	SyncError        string
 	SyncDuration     string
 	BrokenLinks      []BrokenLinkGroup
+	BuildVersion     string
 }
 
 type BacklinkView struct {
