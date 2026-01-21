@@ -245,6 +245,9 @@
       }, 0);
     }
     document.addEventListener("keydown", function (event) {
+      if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+        return;
+      }
       if (!event.ctrlKey) {
         return;
       }
@@ -252,14 +255,12 @@
         if (!form) {
           return;
         }
-        console.log("[edit] ctrl+enter", event.target);
         event.preventDefault();
         form.requestSubmit();
       } else if (event.key === "Escape") {
         if (!cancel) {
           return;
         }
-        console.log("[edit] ctrl+escape", event.target);
         event.preventDefault();
         window.location.href = cancel.getAttribute("href");
       }

@@ -1414,16 +1414,18 @@
         }
         return true;
       }
+      function isAnyLauncherOpen() {
+        return !!document.querySelector(".quick-launcher.is-open");
+      }
       window.isEditableTarget = isEditableTarget;
+      window.isAnyLauncherOpen = isAnyLauncherOpen;
 
       document.addEventListener("keydown", function (event) {
         if (!event.ctrlKey || event.key !== " ") {
           return;
         }
-        console.log("[keys] ctrl+space", event.key, event.target);
         var target = event.target;
         if (isEditableTarget(target)) {
-          console.log("[keys] ctrl+space ignored: editable");
           return;
         }
         event.preventDefault();
@@ -1435,6 +1437,9 @@
       });
 
       document.addEventListener("keydown", function (event) {
+        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+          return;
+        }
         if (!event.ctrlKey) {
           return;
         }
@@ -1471,10 +1476,8 @@
           }
         }
         if (event.key === "y") {
-          console.log("[keys] ctrl+y", event.key, event.target);
           var target = event.target;
           if (isEditableTarget(target)) {
-            console.log("[keys] ctrl+y ignored: editable");
             return;
           }
           if (launcher.classList.contains("is-open")) {
@@ -1487,13 +1490,11 @@
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "h" && event.key !== "l") {
           return;
         }
-        console.log("[keys] ctrl+nav", event.key, event.target);
         if (launcher.classList.contains("is-open")) {
           return;
         }
         var target = event.target;
         if (isEditableTarget(target)) {
-          console.log("[keys] ctrl+nav ignored: editable");
           return;
         }
         event.preventDefault();
@@ -1511,16 +1512,17 @@
       });
 
       document.addEventListener("keydown", function (event) {
+        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+          return;
+        }
         if (event.ctrlKey || event.metaKey || event.altKey) {
           return;
         }
         if (event.key !== "j" && event.key !== "k" && event.key !== "y") {
           return;
         }
-        console.log("[keys] nav", event.key, event.target);
         var target = event.target;
         if (isEditableTarget(target)) {
-          console.log("[keys] nav ignored: editable");
           return;
         }
         if (launcher.classList.contains("is-open")) {
@@ -2349,6 +2351,9 @@
       }
 
       document.addEventListener("keydown", function (event) {
+        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+          return;
+        }
         if (!event.ctrlKey) {
           return;
         }
@@ -2360,9 +2365,7 @@
         } else {
           return;
         }
-        console.log("[keys] ctrl+focus", event.key, event.target);
         if (window.isEditableTarget && window.isEditableTarget(event.target)) {
-          console.log("[keys] ctrl+focus ignored: editable");
           return;
         }
         if (!getNoteBody() && !getNotesFeed() && !getSearchInput()) {
