@@ -1,0 +1,15 @@
+{{define "toast"}}
+<div id="toast-stack" class="toast-stack">
+  {{range .ToastItems}}
+    <div class="toast toast--{{.Kind}} is-open" role="status" aria-live="polite">
+      <div class="flex items-start justify-between gap-3">
+        <div>{{.Message}}</div>
+        <button class="toast__close" type="button" aria-label="Dismiss" hx-delete="/toast/{{.ID}}" hx-target="#toast-stack" hx-swap="outerHTML">&times;</button>
+      </div>
+      {{if gt .DurationSeconds 0}}
+        <div hx-delete="/toast/{{.ID}}" hx-trigger="load delay:{{.DurationSeconds}}s" hx-target="#toast-stack" hx-swap="outerHTML"></div>
+      {{end}}
+    </div>
+  {{end}}
+</div>
+{{end}}

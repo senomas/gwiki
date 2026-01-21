@@ -113,6 +113,7 @@ HTMX patterns
   - note view content
   - preview content
   - toast/flash messages
+- **Layout rule:** New pages should use the same app-shell layout as index (sidebar + top header). Do not fall back to the simplified header-only layout in `base.html` for new pages unless explicitly requested.
 - Prefer `hx-swap="outerHTML"` or `innerHTML` intentionally (no accidental layout changes).
 - Use `hx-trigger="keyup changed delay:600ms"` for preview typing debounce.
 - Ensure all endpoints return HTML fragments for HTMX, full page for normal navigation.

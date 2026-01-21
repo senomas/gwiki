@@ -614,6 +614,9 @@
       background: rgba(30, 41, 59, 0.6);
       color: #e2e8f0;
     }
+    .quick-launcher__item.hidden {
+      display: none;
+    }
     .quick-launcher__icon {
       width: 2rem;
       height: 2rem;
@@ -687,6 +690,53 @@
     .note-actions-modal .quick-launcher__item.hidden {
       display: none;
     }
+    .toast-stack {
+      position: fixed;
+      top: 1.5rem;
+      right: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      z-index: 80;
+      pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto;
+      width: min(360px, 92vw);
+      border-radius: 0.9rem;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      padding: 0.85rem 1rem;
+      background: rgba(15, 23, 42, 0.95);
+      color: #e2e8f0;
+      box-shadow: 0 20px 60px -40px rgba(0, 0, 0, 0.7);
+      font-size: 0.85rem;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    .toast__close {
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 999px;
+      padding: 0.15rem 0.5rem;
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: inherit;
+    }
+    .toast.is-open {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .toast--success {
+      border-color: rgba(52, 211, 153, 0.45);
+      background: rgba(6, 95, 70, 0.4);
+      color: #d1fae5;
+    }
+    .toast--error {
+      border-color: rgba(248, 113, 113, 0.45);
+      background: rgba(127, 29, 29, 0.4);
+      color: #fecaca;
+    }
     #quick-note-delete,
     #note-action-delete {
       width: 100%;
@@ -727,8 +777,8 @@
     }
   </style>
 </head>
-  <body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search")}}
+  <body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search") (eq .ContentTemplate "settings")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}" data-note-list-mode="{{if .CompactNoteList}}compact{{else}}full{{end}}">
+{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "due") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search") (eq .ContentTemplate "settings")}}
   {{.ContentHTML}}
 {{else}}
   <div class="mx-auto max-w-5xl px-6 py-8">
@@ -753,6 +803,7 @@
     </main>
   </div>
 {{end}}
+  <div id="toast-stack" class="toast-stack" hx-get="/toast" hx-trigger="load, toast:refresh from:body" hx-swap="outerHTML"></div>
   <div id="quick-launcher" class="quick-launcher" aria-hidden="true">
     <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
       <input id="quick-launcher-input" class="quick-launcher__input" type="search" placeholder="Search..." autocomplete="off">
@@ -786,13 +837,13 @@
               <span class="quick-launcher__hint">Jump</span>
             </span>
           </a>
-          <button class="quick-launcher__item js-list-view-action" type="button" data-label="list view" data-action="toggle-list-view">
-            <span class="quick-launcher__icon">V</span>
+          <a class="quick-launcher__item" href="/settings" data-label="settings">
+            <span class="quick-launcher__icon">S</span>
             <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">List view</span>
-              <span class="quick-launcher__hint">Compact</span>
+              <span class="quick-launcher__label">Settings</span>
+              <span class="quick-launcher__hint">Config</span>
             </span>
-          </button>
+          </a>
           <a class="quick-launcher__item" href="/notes/{{if .NoteMeta.ID}}{{.NoteMeta.ID}}{{else}}{{.NotePath}}{{end}}/edit" data-label="edit">
             <span class="quick-launcher__icon">E</span>
             <span class="quick-launcher__meta">
@@ -826,19 +877,19 @@
             </span>
           </a>
           <a class="quick-launcher__item" href="/sync" data-label="sync">
-            <span class="quick-launcher__icon">S</span>
+            <span class="quick-launcher__icon">G</span>
             <span class="quick-launcher__meta">
               <span class="quick-launcher__label">Sync</span>
               <span class="quick-launcher__hint">Git</span>
             </span>
           </a>
-          <button class="quick-launcher__item js-list-view-action" type="button" data-label="list view" data-action="toggle-list-view">
-            <span class="quick-launcher__icon">V</span>
+          <a class="quick-launcher__item" href="/settings" data-label="settings">
+            <span class="quick-launcher__icon">S</span>
             <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">List view</span>
-              <span class="quick-launcher__hint">Compact</span>
+              <span class="quick-launcher__label">Settings</span>
+              <span class="quick-launcher__hint">Config</span>
             </span>
-          </button>
+          </a>
           <a class="quick-launcher__item" href="/search" data-label="search">
             <span class="quick-launcher__icon">F</span>
             <span class="quick-launcher__meta">
@@ -940,6 +991,23 @@
       </form>
     </div>
   </div>
+  <div id="wiki-link-launcher" class="quick-launcher" aria-hidden="true">
+    <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Create note">
+      <input id="wiki-link-input" class="quick-launcher__input" type="search" placeholder="Search or create..." autocomplete="off">
+      <div id="wiki-link-actions" class="quick-launcher__list">
+        <a id="wiki-link-create-note" class="quick-launcher__item" href="#" data-label="create note" data-action="wiki-create">
+          <span class="quick-launcher__icon">+</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Create note</span>
+            <span class="quick-launcher__hint">New</span>
+          </span>
+        </a>
+      </div>
+      <div class="quick-launcher__note-row">
+        <div id="wiki-link-notes" class="quick-launcher__list hidden"></div>
+      </div>
+    </div>
+  </div>
   <script>
     (function () {
       var launcher = document.getElementById("quick-launcher");
@@ -1012,7 +1080,7 @@
       }
 
       function noteListView() {
-        return localStorage.getItem("noteListView") || "compact";
+        return document.body.getAttribute("data-note-list-mode") || "compact";
       }
 
       function applyNoteListView(root) {
@@ -1028,20 +1096,6 @@
               body.classList.remove("note-body--short");
             }
           });
-        });
-      }
-
-      function updateListViewAction() {
-        var actions = document.querySelectorAll(".js-list-view-action");
-        if (!actions.length) {
-          return;
-        }
-        actions.forEach(function (action) {
-          var hint = action.querySelector(".quick-launcher__hint");
-          if (!hint) {
-            return;
-          }
-          hint.textContent = noteListView() === "compact" ? "Compact" : "Full";
         });
       }
 
@@ -1274,14 +1328,6 @@
           closeLauncher();
           return;
         }
-        if (target.getAttribute("data-action") === "toggle-list-view") {
-          var next = noteListView() === "compact" ? "full" : "compact";
-          localStorage.setItem("noteListView", next);
-          applyNoteListView();
-          updateListViewAction();
-          closeLauncher();
-          return;
-        }
         if (target.tagName === "BUTTON") {
           target.click();
           return;
@@ -1491,16 +1537,7 @@
         updateSubmenu(target);
       });
 
-      actionList.addEventListener("click", function (event) {
-        var target = event.target.closest(".quick-launcher__item");
-        if (!target) {
-          return;
-        }
-        if (target.getAttribute("data-action") === "toggle-list-view") {
-          event.preventDefault();
-          activateActionTarget(target);
-        }
-      });
+      // no-op
 
       input.addEventListener("input", function (event) {
         var value = event.target.value || "";
@@ -1588,7 +1625,6 @@
       });
 
       applyNoteListView();
-      updateListViewAction();
 
       document.addEventListener("click", function (event) {
         var target = event.target.closest(".js-wiki-missing");
@@ -1613,6 +1649,10 @@
         }
         ref = ref.trim();
         if (!ref) {
+          return;
+        }
+        if (window.openWikiLinkLauncher) {
+          window.openWikiLinkLauncher(ref, target);
           return;
         }
         openWikiLauncher(ref, target);
@@ -1655,6 +1695,251 @@
             closeLauncher();
           });
       }
+    })();
+  </script>
+  <script>
+    (function () {
+      var launcher = document.getElementById("wiki-link-launcher");
+      var input = document.getElementById("wiki-link-input");
+      var actionList = document.getElementById("wiki-link-actions");
+      var notesList = document.getElementById("wiki-link-notes");
+      var createNote = document.getElementById("wiki-link-create-note");
+      if (!launcher || !input || !actionList || !notesList || !createNote) {
+        return;
+      }
+
+      var wikiLinkRef = "";
+      var wikiLinkElement = null;
+      var wikiLinkNotePath = "";
+
+      function ensureNotePath(raw) {
+        var value = (raw || "").trim();
+        if (!value) {
+          return value;
+        }
+        if (!/\.md$/i.test(value)) {
+          value += ".md";
+        }
+        return value;
+      }
+
+      function buildNoteURL(path) {
+        return encodeURI("/notes/" + path);
+      }
+
+      function listVisibleItems(list) {
+        if (!list) {
+          return [];
+        }
+        return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item"), function (item) {
+          return !item.classList.contains("hidden");
+        });
+      }
+
+      function listCombinedItems() {
+        return listVisibleItems(actionList).concat(listVisibleItems(notesList));
+      }
+
+      function activateCombined(index) {
+        var items = listCombinedItems();
+        if (!items.length) {
+          return;
+        }
+        var target = items[index];
+        if (!target) {
+          return;
+        }
+        items.forEach(function (item) {
+          item.classList.toggle("is-active", item === target);
+        });
+        target.scrollIntoView({block: "nearest"});
+      }
+
+      function activeCombinedIndex() {
+        var items = listCombinedItems();
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].classList.contains("is-active")) {
+            return i;
+          }
+        }
+        return -1;
+      }
+
+      function moveCombined(delta) {
+        var items = listCombinedItems();
+        if (!items.length) {
+          return;
+        }
+        var index = activeCombinedIndex();
+        var nextIndex = index + delta;
+        if (index < 0) {
+          nextIndex = delta > 0 ? 0 : items.length - 1;
+        }
+        if (nextIndex < 0) {
+          nextIndex = items.length - 1;
+        }
+        if (nextIndex >= items.length) {
+          nextIndex = 0;
+        }
+        activateCombined(nextIndex);
+      }
+
+      function applyWikiLinkSelection(item) {
+        if (!item) {
+          return;
+        }
+        var path = item.getAttribute("data-note-path") || "";
+        if (!path || !wikiLinkNotePath || !wikiLinkRef) {
+          return;
+        }
+        var payload = {
+          from: wikiLinkRef,
+          to: path,
+        };
+        fetch(buildNoteURL(wikiLinkNotePath) + "/wikilink", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        })
+          .then(function (resp) {
+            if (!resp.ok) {
+              throw new Error("update failed");
+            }
+            return resp.json();
+          })
+          .then(function (data) {
+            if (wikiLinkElement) {
+              var label = data.title || item.getAttribute("data-note-title") || path;
+              wikiLinkElement.textContent = label;
+              wikiLinkElement.setAttribute("href", "/notes/" + data.path);
+              wikiLinkElement.classList.remove("js-wiki-missing");
+              wikiLinkElement.removeAttribute("data-wiki-ref");
+            }
+            closeLauncher();
+          })
+          .catch(function () {
+            closeLauncher();
+          });
+      }
+
+      function activateActionTarget(target) {
+        if (!target) {
+          return;
+        }
+        if (target.getAttribute("data-action") === "wiki-create") {
+          var href = target.getAttribute("href");
+          if (href) {
+            window.location.href = href;
+          }
+          return;
+        }
+        if (target.getAttribute("data-note-path")) {
+          applyWikiLinkSelection(target);
+        }
+      }
+
+      function openLauncher(ref, element) {
+        wikiLinkRef = ref;
+        wikiLinkElement = element;
+        var body = element ? element.closest(".note-body") : null;
+        wikiLinkNotePath = body ? (body.getAttribute("data-note-path") || "") : "";
+        var targetPath = ensureNotePath(ref);
+        var owner = "";
+        if (wikiLinkNotePath) {
+          owner = wikiLinkNotePath.split("/")[0] || "";
+        }
+        var createHref = "/notes/new?path=" + encodeURIComponent(targetPath);
+        if (owner) {
+          createHref += "&owner=" + encodeURIComponent(owner);
+        }
+        createNote.setAttribute("href", createHref);
+        launcher.classList.add("is-open");
+        launcher.setAttribute("aria-hidden", "false");
+        input.value = ref;
+        notesList.classList.add("hidden");
+        notesList.innerHTML = "";
+        input.focus();
+        input.dispatchEvent(new Event("input", {bubbles: true}));
+        activateCombined(0);
+      }
+
+      function closeLauncher() {
+        launcher.classList.remove("is-open");
+        launcher.setAttribute("aria-hidden", "true");
+        wikiLinkRef = "";
+        wikiLinkElement = null;
+        wikiLinkNotePath = "";
+      }
+
+      input.addEventListener("input", function (event) {
+        var value = event.target.value || "";
+        if (!value.trim()) {
+          notesList.classList.add("hidden");
+          notesList.innerHTML = "";
+          activateCombined(0);
+          return;
+        }
+        htmx.ajax("GET", "/quick/notes?q=" + encodeURIComponent(value), "#wiki-link-notes");
+        notesList.classList.remove("hidden");
+      });
+
+      notesList.addEventListener("click", function (event) {
+        var item = event.target.closest(".quick-launcher__item");
+        if (!item) {
+          return;
+        }
+        applyWikiLinkSelection(item);
+      });
+
+      actionList.addEventListener("click", function (event) {
+        var item = event.target.closest(".quick-launcher__item");
+        if (!item) {
+          return;
+        }
+        activateActionTarget(item);
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (!launcher.classList.contains("is-open")) {
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeLauncher();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          var combined = listCombinedItems();
+          var combinedIndex = activeCombinedIndex();
+          var target = combinedIndex >= 0 ? combined[combinedIndex] : combined[0];
+          if (!target) {
+            return;
+          }
+          activateActionTarget(target);
+          return;
+        }
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          moveCombined(1);
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          moveCombined(-1);
+          return;
+        }
+      });
+
+      launcher.addEventListener("click", function (event) {
+        if (event.target === launcher) {
+          closeLauncher();
+        }
+      });
+
+      window.openWikiLinkLauncher = function (ref, element) {
+        openLauncher(ref, element);
+      };
     })();
   </script>
   <script>

@@ -24,8 +24,8 @@
               <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.DailyJournal.Path}}">{{.DailyJournal.Title}}</a>
             </h2>
             <div class="text-xs uppercase tracking-[0.2em] text-slate-500">
-              {{if .DailyJournal.Meta.Folder}}{{.DailyJournal.Meta.Folder}}{{end}}
-              {{if and .DailyJournal.Meta.Folder (not .DailyJournal.Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
+              {{if .DailyJournal.FolderLabel}}{{.DailyJournal.FolderLabel}}{{else}}{{if .DailyJournal.Meta.Folder}}{{.DailyJournal.Meta.Folder}}{{end}}{{end}}
+              {{if and (or .DailyJournal.FolderLabel .DailyJournal.Meta.Folder) (not .DailyJournal.Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
               {{if .DailyJournal.Meta.Updated.IsZero}}{{else}}{{.DailyJournal.Meta.Updated.Format "02/01/2006 15:04:05"}}{{end}}
             </div>
             <div class="note-body text-sm leading-relaxed text-slate-200">{{.DailyJournal.RenderedHTML}}</div>
@@ -52,8 +52,8 @@
                 <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">{{.Title}}</a>
               </h2>
               <div class="text-xs uppercase tracking-[0.2em] text-slate-500">
-                {{if .Meta.Folder}}{{.Meta.Folder}}{{end}}
-                {{if and .Meta.Folder (not .Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
+                {{if .FolderLabel}}{{.FolderLabel}}{{else}}{{if .Meta.Folder}}{{.Meta.Folder}}{{end}}{{end}}
+                {{if and (or .FolderLabel .Meta.Folder) (not .Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
                 {{if .Meta.Updated.IsZero}}{{else}}{{.Meta.Updated.Format "02/01/2006 15:04:05"}}{{end}}
               </div>
               <div class="note-body text-sm leading-relaxed text-slate-200">{{.RenderedHTML}}</div>

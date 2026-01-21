@@ -20,6 +20,7 @@ type Server struct {
 	locker *fs.Locker
 	views  *Templates
 	auth   *Auth
+	toasts *toastStore
 }
 
 func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
@@ -34,6 +35,7 @@ func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
 		locker: fs.NewLocker(),
 		views:  MustParseTemplates(),
 		auth:   auth,
+		toasts: newToastStore(),
 	}
 	embedCacheStore = idx
 
@@ -93,7 +95,13 @@ func (s *Server) debugLogMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		elapsed := time.Since(start)
 
-		slog.Debug(
+		level := slog.LevelDebug
+		if rec.status >= http.StatusBadRequest {
+			level = slog.LevelWarn
+		}
+		slog.Log(
+			r.Context(),
+			level,
 			"http request",
 			"method", r.Method,
 			"url", r.URL.String(),
@@ -125,6 +133,10 @@ func (r *statusRecorder) Write(p []byte) (int, error) {
 func (s *Server) routes() {
 	s.mux.HandleFunc("/login", s.handleLogin)
 	s.mux.HandleFunc("/logout", s.handleLogout)
+	s.mux.HandleFunc("/toast", s.handleToastList)
+	s.mux.HandleFunc("/toast/", s.handleToastDismiss)
+	s.mux.HandleFunc("/settings", s.handleSettings)
+	s.mux.HandleFunc("/settings/save", s.handleSettingsSave)
 	s.mux.HandleFunc("/", s.handleHome)
 	s.mux.HandleFunc("/search", s.handleSearch)
 	s.mux.HandleFunc("/notes/new", s.handleNewNote)

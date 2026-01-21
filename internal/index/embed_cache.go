@@ -30,7 +30,7 @@ func (i *Index) GetEmbedCache(ctx context.Context, url, kind string) (EmbedCache
 	var updatedUnix int64
 	var expiresUnix int64
 
-	row := i.db.QueryRowContext(ctx, `
+	row := i.queryRowContext(ctx, `
 		SELECT url, kind, embed_url, status, error_msg, updated_at, expires_at
 		FROM embed_cache
 		WHERE url = ? AND kind = ? AND user_id = ? AND group_id IS NULL
@@ -50,7 +50,7 @@ func (i *Index) GetEmbedCache(ctx context.Context, url, kind string) (EmbedCache
 	entry.ExpiresAt = time.Unix(expiresUnix, 0)
 
 	if time.Now().After(entry.ExpiresAt) {
-		_, _ = i.db.ExecContext(ctx, "DELETE FROM embed_cache WHERE url = ? AND kind = ? AND user_id = ? AND group_id IS NULL", url, kind, userID)
+		_, _ = i.execContext(ctx, "DELETE FROM embed_cache WHERE url = ? AND kind = ? AND user_id = ? AND group_id IS NULL", url, kind, userID)
 		return EmbedCacheEntry{}, false, nil
 	}
 	return entry, true, nil
@@ -61,7 +61,7 @@ func (i *Index) UpsertEmbedCache(ctx context.Context, entry EmbedCacheEntry) err
 	if err != nil {
 		return err
 	}
-	_, err = i.db.ExecContext(ctx, `
+	_, err = i.execContext(ctx, `
 		INSERT INTO embed_cache(user_id, group_id, url, kind, embed_url, status, error_msg, updated_at, expires_at)
 		VALUES(?, NULL, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, url, kind) WHERE group_id IS NULL DO UPDATE SET

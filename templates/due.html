@@ -28,7 +28,7 @@
           <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
             {{ $noteURL := printf "/notes/%s" .Path }}
             {{ if $.FilterQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.FilterQuery }}{{ end }}
-            {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "NotePath" .Path "NoteURL" $noteURL "RenderedHTML" .RenderedHTML)}}
+            {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "NotePath" .Path "NoteURL" $noteURL "RenderedHTML" .RenderedHTML "Short" $.CompactNoteList)}}
           </article>
         {{end}}
       </div>

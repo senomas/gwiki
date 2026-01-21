@@ -59,6 +59,7 @@ type ViewData struct {
 	NoteURL          string
 	ReturnURL        string
 	FolderOptions    []string
+	FolderLabel      string
 	OwnerOptions     []OwnerOption
 	SelectedOwner    string
 	TagSuggestions   []string
@@ -80,6 +81,8 @@ type ViewData struct {
 	SyncPending      bool
 	BrokenLinks      []BrokenLinkGroup
 	BuildVersion     string
+	CompactNoteList  bool
+	ToastItems       []Toast
 }
 
 type OwnerOption struct {
@@ -147,6 +150,7 @@ type NoteCard struct {
 	FileName     string
 	RenderedHTML template.HTML
 	Meta         index.FrontmatterAttrs
+	FolderLabel  string
 }
 
 type JournalDay struct {

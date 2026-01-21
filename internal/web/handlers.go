@@ -118,6 +118,11 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 		data.CurrentUser = user
 		data.IsAuthenticated = user.Authenticated
 	}
+	cfg, err := s.loadUserConfig(r.Context())
+	if err != nil {
+		slog.Warn("load user config", "err", err)
+	}
+	data.CompactNoteList = cfg.CompactNoteListValue()
 }
 
 func currentUserName(ctx context.Context) string {
@@ -164,6 +169,22 @@ func (s *Server) ownerFromNoteID(ctx context.Context, noteID string) (string, st
 		return "", "", err
 	}
 	return fs.SplitOwnerNotePath(notePath)
+}
+
+func (s *Server) noteFolderLabel(ctx context.Context, notePath, folder string) string {
+	label := folder
+	if label == "" {
+		label = "/"
+	}
+	owner, _, err := s.ownerFromNotePath(notePath)
+	if err != nil || strings.TrimSpace(owner) == "" {
+		return label
+	}
+	ownerLabel := owner
+	if currentUserName(ctx) != "" && owner == currentUserName(ctx) {
+		ownerLabel = "Personal"
+	}
+	return ownerLabel + "/" + strings.TrimPrefix(label, "/")
 }
 
 func (s *Server) requireWriteAccess(w http.ResponseWriter, r *http.Request, ownerName string) bool {
@@ -885,6 +906,89 @@ func buildFolderTree(folders []string, hasRoot bool, activeFolder string, active
 		out = append(out, materialize(child))
 	}
 	return out
+}
+
+func (s *Server) populateSidebarData(r *http.Request, basePath string, data *ViewData) error {
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	activeDate := ""
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	isAuth := IsAuthenticated(r.Context())
+	if !isAuth {
+		activeTodo = false
+		activeDue = false
+		activeJournal = false
+		activeTags = noteTags
+	}
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal)
+	if err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{}
+	todoCount := 0
+	dueCount := 0
+	if isAuth {
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
+		if err != nil {
+			return err
+		}
+	}
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal)
+		if err != nil {
+			return err
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+		_ = dueCount
+	}
+	tagLinks := buildTagLinks(urlTags, tags, allowed, basePath, todoCount, dueCount, activeDate, activeSearch, isAuth, activeFolder, activeRoot)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot)
+	if err != nil {
+		return err
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, basePath, noteTags, activeDate, activeSearch, activeFolder, activeRoot)
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot)
+	if err != nil {
+		return err
+	}
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := buildFilterQuery(urlTags, activeDate, activeSearch, activeFolder, activeRoot)
+	calendar := buildCalendarMonth(time.Now(), updateDays, basePath, tagQuery, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	folders, hasRoot, err := s.idx.ListFolders(r.Context())
+	if err != nil {
+		return err
+	}
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, basePath, urlTags, activeDate, activeSearch)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now())
+	if err != nil {
+		return err
+	}
+	data.Tags = tags
+	data.TagLinks = tagLinks
+	data.TodoCount = todoCount
+	data.DueCount = dueCount
+	data.ActiveTags = urlTags
+	data.TagQuery = tagQuery
+	data.FolderTree = folderTree
+	data.ActiveFolder = activeFolder
+	data.FolderQuery = buildFolderQuery(activeFolder, activeRoot)
+	data.FilterQuery = filterQuery
+	data.HomeURL = buildTagsURL(basePath, urlTags, activeDate, activeSearch, buildFolderQuery(activeFolder, activeRoot))
+	data.ActiveDate = activeDate
+	data.DateQuery = buildDateQuery(activeDate)
+	data.SearchQuery = activeSearch
+	data.SearchQueryParam = buildSearchQuery(activeSearch)
+	data.UpdateDays = updateDays
+	data.CalendarMonth = calendar
+	data.JournalSidebar = journalSidebar
+	return nil
 }
 
 func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool) (int, int, error) {
@@ -4765,12 +4869,14 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, noteTasks)
 		}
 		noteMeta := index.FrontmatterAttributes(snippet)
+		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
 		todoNotes = append(todoNotes, NoteCard{
 			Path:         path,
 			Title:        noteTitles[path],
 			FileName:     filepath.Base(path),
 			RenderedHTML: template.HTML(htmlStr),
 			Meta:         noteMeta,
+			FolderLabel:  folderLabel,
 		})
 	}
 	sort.Slice(todoNotes, func(i, j int) bool {
@@ -4941,12 +5047,14 @@ func (s *Server) handleDue(w http.ResponseWriter, r *http.Request) {
 			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, noteTasks)
 		}
 		noteMeta := index.FrontmatterAttributes(snippet)
+		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
 		dueNotes = append(dueNotes, NoteCard{
 			Path:         path,
 			Title:        noteTitles[path],
 			FileName:     filepath.Base(path),
 			RenderedHTML: template.HTML(htmlStr),
 			Meta:         noteMeta,
+			FolderLabel:  folderLabel,
 		})
 	}
 	sort.Slice(dueNotes, func(i, j int) bool {
@@ -5109,11 +5217,82 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		SyncDuration: duration,
 	}
 	if err != nil {
+		slog.Warn("sync failed", "repo", ownerRepo, "err", err)
 		data.SyncError = err.Error()
-		w.WriteHeader(http.StatusInternalServerError)
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "sync_result", data)
+}
+
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	returnURL := sanitizeReturnURL(r, r.URL.Query().Get("return"))
+	if returnURL == "" {
+		returnURL = sanitizeReturnURL(r, r.Referer())
+	}
+	data := ViewData{
+		Title:           "Settings",
+		ContentTemplate: "settings",
+		ReturnURL:       returnURL,
+	}
+	if err := s.populateSidebarData(r, "/", &data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	mode := strings.TrimSpace(r.Form.Get("list_view"))
+	if mode != "compact" && mode != "full" {
+		http.Error(w, "invalid list view", http.StatusBadRequest)
+		return
+	}
+	owner := currentUserName(r.Context())
+	if owner == "" {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	cfg, err := s.loadUserConfig(r.Context())
+	if err != nil {
+		slog.Warn("load user config", "err", err)
+	}
+	val := mode == "compact"
+	cfg.CompactNoteList = &val
+	if err := s.saveUserConfig(r.Context(), owner, cfg); err != nil {
+		http.Error(w, "failed to save settings", http.StatusInternalServerError)
+		return
+	}
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "Settings saved.",
+		Kind:            "success",
+		DurationSeconds: 3,
+		CreatedAt:       time.Now(),
+	})
+	returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
+	if returnURL == "" {
+		returnURL = "/settings"
+	}
+	http.Redirect(w, r, returnURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
@@ -5223,6 +5402,41 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(listItem))
 }
 
+func (s *Server) handleToastList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	toasts := s.toasts.List(toastKey(r))
+	data := ViewData{
+		ContentTemplate: "toast",
+		ToastItems:      toasts,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "toast", data)
+}
+
+func (s *Server) handleToastDismiss(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/toast/")
+	id = strings.TrimSpace(id)
+	if id == "" {
+		http.Error(w, "toast id required", http.StatusBadRequest)
+		return
+	}
+	s.toasts.Remove(toastKey(r), id)
+	toasts := s.toasts.List(toastKey(r))
+	data := ViewData{
+		ContentTemplate: "toast",
+		ToastItems:      toasts,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "toast", data)
+}
+
 func extractFirstListItem(htmlStr string) string {
 	start := strings.Index(htmlStr, "<li")
 	if start == -1 {
@@ -5273,11 +5487,13 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 		if metaAttrs.Updated.IsZero() {
 			metaAttrs.Updated = labelTime.Local()
 		}
+		folderLabel := s.noteFolderLabel(ctx, note.Path, metaAttrs.Folder)
 		cards = append(cards, NoteCard{
-			Path:     note.Path,
-			Title:    note.Title,
-			FileName: filepath.Base(note.Path),
-			Meta:     metaAttrs,
+			Path:        note.Path,
+			Title:       note.Title,
+			FileName:    filepath.Base(note.Path),
+			Meta:        metaAttrs,
+			FolderLabel: folderLabel,
 		})
 	}
 	return cards, offset + len(notes), hasMore, nil
@@ -5568,6 +5784,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			if info, err := os.Stat(fullPath); err == nil {
 				_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 			}
+			s.addToast(r, Toast{
+				ID:              uuid.NewString(),
+				Message:         "Journal entry saved.",
+				Kind:            "success",
+				DurationSeconds: 3,
+				CreatedAt:       time.Now(),
+			})
 			targetURL := "/notes/" + notePath
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
@@ -5843,6 +6066,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		_ = s.idx.IndexNote(r.Context(), notePath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
 
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "Note created.",
+		Kind:            "success",
+		DurationSeconds: 3,
+		CreatedAt:       time.Now(),
+	})
 	targetURL := "/notes/" + notePath
 	if isHTMX(r) {
 		w.Header().Set("HX-Redirect", targetURL)
@@ -6015,7 +6245,7 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	s.attachViewData(r, &data)
-	data.Short = true
+	data.Short = data.CompactNoteList
 	s.views.RenderTemplate(w, "note_detail", data)
 }
 
@@ -6033,6 +6263,7 @@ func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, erro
 		FileName:     filepath.Base(notePath),
 		RenderedHTML: data.RenderedHTML,
 		Meta:         data.NoteMeta,
+		FolderLabel:  data.FolderLabel,
 	}, nil
 }
 
@@ -6080,6 +6311,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
 		return ViewData{}, http.StatusNotFound, errors.New("not found")
 	}
+	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	htmlStr := ""
 	if renderBody {
 		renderCtx := r.Context()
@@ -6191,6 +6423,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		NoteTitle:        meta.Title,
 		NoteFileName:     filepath.Base(notePath),
 		NoteMeta:         noteMeta,
+		FolderLabel:      folderLabel,
 		RenderedHTML:     template.HTML(htmlStr),
 		Tags:             tags,
 		TagLinks:         tagLinks,
@@ -6260,6 +6493,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
 		return ViewData{}, http.StatusNotFound, errors.New("not found")
 	}
+	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	renderCtx := r.Context()
 	if state, ok, err := s.collapsedSectionState(renderCtx, noteMeta.ID); err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
@@ -6303,6 +6537,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 		NoteMeta:     noteMeta,
 		RenderedHTML: template.HTML(htmlStr),
 		NoteURL:      noteURL,
+		FolderLabel:  folderLabel,
 	}
 	return data, http.StatusOK, nil
 }
@@ -7382,9 +7617,24 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			targetURL = returnURL
 		}
 		if isHTMX(r) {
+			s.addToast(r, Toast{
+				ID:              uuid.NewString(),
+				Message:         "No changes to save.",
+				Kind:            "success",
+				DurationSeconds: 3,
+				CreatedAt:       time.Now(),
+			})
+			w.Header().Set("HX-Trigger", "toast:refresh")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         "No changes to save.",
+			Kind:            "success",
+			DurationSeconds: 3,
+			CreatedAt:       time.Now(),
+		})
 		http.Redirect(w, r, targetURL, http.StatusSeeOther)
 		return
 	}
@@ -7551,6 +7801,13 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		_ = s.idx.IndexNote(ctx, targetPath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
 
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "Note updated.",
+		Kind:            "success",
+		DurationSeconds: 3,
+		CreatedAt:       time.Now(),
+	})
 	targetURL := "/notes/" + targetPath
 	if returnURL != "" {
 		targetURL = returnURL
@@ -7767,6 +8024,15 @@ func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data Vi
 			"status", status,
 			"error", data.ErrorMessage,
 		)
+	}
+	if data.ErrorMessage != "" {
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         data.ErrorMessage,
+			Kind:            "error",
+			DurationSeconds: 5,
+			CreatedAt:       time.Now(),
+		})
 	}
 	w.WriteHeader(status)
 	if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
