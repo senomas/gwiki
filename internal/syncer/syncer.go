@@ -88,6 +88,7 @@ func Run(ctx context.Context, repoPath string) (string, error) {
 		return output.String(), err
 	}
 	if !hasChanges {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
 		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
 		if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
 			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
@@ -101,6 +102,7 @@ func Run(ctx context.Context, repoPath string) (string, error) {
 	}
 
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "commit", "-m", commitMessage)
+	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
 
 	if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
