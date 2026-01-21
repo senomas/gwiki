@@ -1,10 +1,19 @@
 # gwiki
 
-Minimal wiki server for a notes repo.
+Personal wiki server with keyboard-focused, vim-like navigation and Markdown notes on disk. Uses
+standard Markdown with YAML frontmatter, keeps a fast SQLite index for browsing,
+and relies on Git for backup/history.
 
 ## Docs
 
 - Usage guide: `docs/usage.md`
+
+## Highlights
+
+- Keyboard-focused, vim-like navigation and quick launcher.
+- Standard Markdown + YAML frontmatter stored on disk.
+- Designed for personal or very small team usage.
+- Git-based backup and history for changes.
 
 ## Requirements
 
