@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -113,6 +114,37 @@ func Run(ctx context.Context, repoPath string) (string, error) {
 	writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
 
 	return output.String(), nil
+}
+
+func LogGraph(ctx context.Context, repoPath string, limit int) (string, error) {
+	repoDir := strings.TrimSpace(os.Getenv("REPO_DIR"))
+	if repoDir == "" {
+		repoDir = repoPath
+	}
+	if repoDir == "" {
+		repoDir = "/notes"
+	}
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/home/gwiki"
+	}
+	gitConfigGlobal := os.Getenv("GIT_CONFIG_GLOBAL")
+	if gitConfigGlobal == "" {
+		gitConfigGlobal = filepath.Join(homeDir, ".gitconfig")
+	}
+	gitCredentialsFile := os.Getenv("GIT_CREDENTIALS_FILE")
+	if gitCredentialsFile == "" {
+		gitCredentialsFile = filepath.Join(homeDir, ".git-credentials")
+	}
+	env := append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"HOME="+homeDir,
+		"GIT_CONFIG_GLOBAL="+gitConfigGlobal,
+		"GIT_CREDENTIALS_FILE="+gitCredentialsFile,
+	)
+	var output bytes.Buffer
+	_, err := runGitCommand(ctx, repoDir, env, &output, "git", "log", "--graph", "--decorate", "--all", "-n", strconv.Itoa(limit))
+	return output.String(), err
 }
 
 func gitHasStagedChanges(ctx context.Context, dir string, env []string, writer io.Writer) (bool, error) {

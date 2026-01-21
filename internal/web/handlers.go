@@ -5003,6 +5003,11 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	output, err := syncer.Run(r.Context(), s.cfg.RepoPath)
 	if err == nil {
+		logOutput, logErr := syncer.LogGraph(r.Context(), s.cfg.RepoPath, 10)
+		output += logOutput
+		if logErr != nil {
+			err = logErr
+		}
 		scanned, updated, cleaned, recheckErr := s.idx.RecheckFromFS(r.Context(), s.cfg.RepoPath)
 		output += fmt.Sprintf("\nindex: recheck scanned=%d updated=%d cleaned=%d", scanned, updated, cleaned)
 		if recheckErr != nil {
