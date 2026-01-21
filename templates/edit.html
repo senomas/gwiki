@@ -61,6 +61,10 @@
         <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
         <input type="hidden" name="return_url" value="{{.ReturnURL}}">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
+        <div class="relative">
+          <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" id="note-content" name="content">{{.RawContent}}</textarea>
+          <div id="tag-suggest" class="absolute z-10 hidden" aria-live="polite"></div>
+        </div>
         {{if .OwnerOptions}}
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Owner</label>
@@ -71,10 +75,6 @@
           </select>
         </div>
         {{end}}
-        <div class="relative">
-          <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" id="note-content" name="content">{{.RawContent}}</textarea>
-          <div id="tag-suggest" class="absolute z-10 hidden" aria-live="polite"></div>
-        </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Visibility</label>
           <select class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="visibility">
@@ -106,7 +106,7 @@
           <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Save</button>
         </div>
   </form>
-  <form class="mt-4 space-y-3" action="{{if .NotePath}}/notes/{{.NotePath}}/upload{{else}}/notes/new/upload{{end}}" method="post" enctype="multipart/form-data">
+  <form id="note-upload-form" class="mt-4 space-y-3" action="{{if .NotePath}}/notes/{{.NotePath}}/upload{{else}}/notes/new/upload{{end}}" method="post" enctype="multipart/form-data">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
         {{if .OwnerOptions}}<input data-owner-input type="hidden" name="owner" value="{{.SelectedOwner}}">{{end}}
         <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Attachments</label>
@@ -244,12 +244,120 @@
         textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
       }, 0);
     }
+    function focusScope() {
+      var scopes = [];
+      if (form) {
+        scopes.push(form);
+      }
+      var upload = document.getElementById("note-upload-form");
+      if (upload) {
+        scopes.push(upload);
+      }
+      return scopes;
+    }
+
+    function moveFormFocus(event) {
+      if (!event.target) {
+        return false;
+      }
+      var scopes = focusScope();
+      if (!scopes.length) {
+        return false;
+      }
+      var inside = false;
+      for (var s = 0; s < scopes.length; s++) {
+        if (scopes[s].contains(event.target)) {
+          inside = true;
+          break;
+        }
+      }
+      if (!inside) {
+        return false;
+      }
+      var items = [];
+      scopes.forEach(function (scope) {
+        var nodes = scope.querySelectorAll("input, textarea, select, button, a[href], [tabindex]");
+        items = items.concat(Array.prototype.slice.call(nodes));
+      });
+      var focusables = Array.prototype.filter.call(items, function (item) {
+        if (item.hasAttribute("disabled")) {
+          return false;
+        }
+        if (item.getAttribute("tabindex") === "-1") {
+          return false;
+        }
+        if (item.closest && item.closest("#folder-suggest")) {
+          return false;
+        }
+        return item.getClientRects().length > 0;
+      });
+      event.preventDefault();
+      event.stopPropagation();
+      if (!focusables.length) {
+        return true;
+      }
+      var index = -1;
+      for (var i = 0; i < focusables.length; i++) {
+        if (focusables[i] === event.target) {
+          index = i;
+          break;
+        }
+      }
+      if (index < 0) {
+        return true;
+      }
+      var delta = event.key === "j" ? 1 : -1;
+      var next = index + delta;
+      if (next < 0 || next >= focusables.length) {
+        return true;
+      }
+      focusables[next].focus({preventScroll: true});
+      focusables[next].scrollIntoView({block: "nearest"});
+      return true;
+    }
+
+    if (form) {
+      form.addEventListener("keydown", function (event) {
+        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+          return;
+        }
+        if (!event.ctrlKey) {
+          return;
+        }
+        if (event.key === "j" || event.key === "k") {
+          moveFormFocus(event);
+        }
+      }, true);
+    }
+    var uploadForm = document.getElementById("note-upload-form");
+    if (uploadForm) {
+      uploadForm.addEventListener("keydown", function (event) {
+        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+          return;
+        }
+        if (!event.ctrlKey) {
+          return;
+        }
+        if (event.key === "j" || event.key === "k") {
+          moveFormFocus(event);
+        }
+      }, true);
+    }
+
     document.addEventListener("keydown", function (event) {
       if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
         return;
       }
       if (!event.ctrlKey) {
         return;
+      }
+      if (event.defaultPrevented) {
+        return;
+      }
+      if (event.key === "j" || event.key === "k") {
+        if (moveFormFocus(event)) {
+          return;
+        }
       }
       if (event.key === "Enter") {
         if (!form) {
