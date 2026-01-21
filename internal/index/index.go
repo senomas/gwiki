@@ -453,6 +453,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 18
+		case 18:
+			slog.Info("schema migration", "from", 18, "to", 19)
+			if err := i.migrate18To19(ctx); err != nil {
+				return err
+			}
+			version = 19
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -592,6 +598,23 @@ func (i *Index) migrate17To18(ctx context.Context) error {
 		return err
 	}
 	if _, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id)"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *Index) migrate18To19(ctx context.Context) error {
+	if _, err := i.db.ExecContext(ctx, `DROP TABLE IF EXISTS fts`); err != nil {
+		return err
+	}
+	if _, err := i.db.ExecContext(ctx, `
+		CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
+			path UNINDEXED,
+			title,
+			body,
+			tokenize='trigram'
+		)
+	`); err != nil {
 		return err
 	}
 	return nil
