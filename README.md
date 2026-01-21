@@ -93,10 +93,12 @@ alice:$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$FqYyK9XjY6Z8w1mYp0KXcg
 If both `WIKI_AUTH_FILE` and `WIKI_AUTH_USER`/`WIKI_AUTH_PASS` are set, both are
 accepted (env wins on duplicate usernames).
 
-### Add or update a user
+### Add, list, or remove a user
 
 ```bash
-go run ./cmd/user-add <username>
+go run ./cmd/user add <username>
+go run ./cmd/user list
+go run ./cmd/user remove <username>
 ```
 
 The command writes to `WIKI_AUTH_FILE` when set, otherwise to

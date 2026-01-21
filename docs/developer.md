@@ -2,14 +2,20 @@
 
 This document is a compact map of Go files and their functions. It is intended for orientation, not exhaustive API documentation.
 
-## `cmd/user-add/main.go`
-CLI to add/update users in the auth file.
+## `cmd/user/main.go`
+CLI to list/add/remove users in the auth file.
 
 - `main`: helper for main
+- `usage`: helper for usage
+- `listUsers`: helper for list users
+- `addUser`: helper for add user
+- `removeUser`: helper for remove user
 - `authFilePath`: helper for auth file path
 - `promptPassword`: helper for prompt password
 - `promptYesNo`: helper for prompt yes no
 - `userExists`: helper for user exists
+- `readAuthFile`: helper for read auth file
+- `writeAuthFile`: helper for write auth file
 - `upsertAuthFile`: helper for upsert auth file
 
 ## `cmd/wiki/main.go`
