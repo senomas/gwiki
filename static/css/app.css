@@ -1481,10 +1481,6 @@ video {
   a-z-a--z: -;
 }
 
-.\[lineStart\:lineEnd\] {
-  line-start: lineEnd;
-}
-
 .\[start\:end\] {
   start: end;
 }
