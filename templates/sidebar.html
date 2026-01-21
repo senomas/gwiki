@@ -61,16 +61,7 @@
   <div
     class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500"
   >
-    <a class="text-slate-500 transition hover:text-slate-300" href="/todo{{if .FilterQuery}}?{{.FilterQuery}}{{end}}">Todo ({{.TodoCount}})</a>
-    <span class="text-slate-600">.</span>
-  </div>
-</div>
-
-<div>
-  <div
-    class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500"
-  >
-    <a class="text-slate-500 transition hover:text-slate-300" href="/due{{if .FilterQuery}}?{{.FilterQuery}}{{end}}">Due ({{.DueCount}})</a>
+    <a class="text-slate-500 transition hover:text-slate-300" href="/todo{{if .FilterQuery}}?{{.FilterQuery}}{{end}}">Todo ({{.DueCount}} / {{.TodoCount}})</a>
     <span class="text-slate-600">.</span>
   </div>
 </div>

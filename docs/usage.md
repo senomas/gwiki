@@ -12,6 +12,8 @@ This page covers everyday use of gwiki: keyboard navigation, quick launcher, and
 - `Ctrl+Y`: go to index (disabled inside inputs).
 - `Ctrl+Enter`: save on the edit page.
 - `Ctrl+Esc`: cancel on the edit page.
+- `J` / `K`: scroll down/up (disabled inside inputs).
+- `Y`: scroll to top (disabled inside inputs).
 
 Tip: on index/todo/due pages, navigation focuses note titles. On note pages it focuses note content links, checkboxes, and section toggles.
 
@@ -22,6 +24,7 @@ Tip: on index/todo/due pages, navigation focuses note titles. On note pages it f
 - Start with `#` to search tags.
 - Use Arrow Up/Down and Enter to select.
 - Selecting a note opens a submenu (Open/Edit/Delete). Enter activates the focused item.
+- Toggle list view (compact/full) from the launcher; it remembers your choice.
 
 ## Markdown Basics
 

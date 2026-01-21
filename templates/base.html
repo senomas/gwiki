@@ -810,13 +810,20 @@
           </form>
         {{else}}
           {{if and .AuthEnabled .IsAuthenticated}}
-            <a class="quick-launcher__item" href="/notes/new" data-label="new note">
-              <span class="quick-launcher__icon">+</span>
-              <span class="quick-launcher__meta">
-                <span class="quick-launcher__label">New note</span>
-                <span class="quick-launcher__hint">Create</span>
-              </span>
-            </a>
+          <a class="quick-launcher__item" href="/notes/new" data-label="new note">
+            <span class="quick-launcher__icon">+</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">New note</span>
+              <span class="quick-launcher__hint">Create</span>
+            </span>
+          </a>
+          <a class="quick-launcher__item" href="/todo" data-label="todo">
+            <span class="quick-launcher__icon">T</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Todo</span>
+              <span class="quick-launcher__hint">Tasks</span>
+            </span>
+          </a>
           <a class="quick-launcher__item" href="/sync" data-label="sync">
             <span class="quick-launcher__icon">S</span>
             <span class="quick-launcher__meta">

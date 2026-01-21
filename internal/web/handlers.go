@@ -4414,6 +4414,40 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if len(tasks) > 1 {
+		noteEarliest := make(map[string]time.Time, len(tasks))
+		for _, task := range tasks {
+			dueTime, err := time.Parse("2006-01-02", task.DueDate)
+			if err != nil {
+				dueTime = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+			}
+			if current, ok := noteEarliest[task.Path]; !ok || dueTime.Before(current) {
+				noteEarliest[task.Path] = dueTime
+			}
+		}
+		sort.Slice(tasks, func(i, j int) bool {
+			ai := noteEarliest[tasks[i].Path]
+			aj := noteEarliest[tasks[j].Path]
+			if !ai.Equal(aj) {
+				return ai.Before(aj)
+			}
+			di, err := time.Parse("2006-01-02", tasks[i].DueDate)
+			if err != nil {
+				di = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+			}
+			dj, err := time.Parse("2006-01-02", tasks[j].DueDate)
+			if err != nil {
+				dj = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+			}
+			if !di.Equal(dj) {
+				return di.Before(dj)
+			}
+			if tasks[i].UpdatedAt.Equal(tasks[j].UpdatedAt) {
+				return tasks[i].LineNo < tasks[j].LineNo
+			}
+			return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
+		})
+	}
 	urlTags := append([]string{}, noteTags...)
 	if activeJournal {
 		urlTags = append(urlTags, journalTagName)
@@ -4570,10 +4604,15 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	tasksByNote := make(map[string][]index.Task)
 	noteTitles := make(map[string]string)
 	noteUpdated := make(map[string]time.Time)
+	noteEarliestDue := make(map[string]time.Time)
 	noteFileID := make(map[string]int)
 	for _, task := range tasks {
 		if task.FileID <= 0 || task.Hash == "" {
 			continue
+		}
+		dueTime, err := time.Parse("2006-01-02", task.DueDate)
+		if err != nil {
+			dueTime = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
 		}
 		tasksByNote[task.Path] = append(tasksByNote[task.Path], index.Task{
 			LineNo: task.LineNo,
@@ -4582,9 +4621,15 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		if _, ok := noteTitles[task.Path]; !ok {
 			noteTitles[task.Path] = task.Title
 			noteUpdated[task.Path] = task.UpdatedAt
+			noteEarliestDue[task.Path] = dueTime
 			noteFileID[task.Path] = task.FileID
 		} else if task.UpdatedAt.After(noteUpdated[task.Path]) {
 			noteUpdated[task.Path] = task.UpdatedAt
+			if dueTime.Before(noteEarliestDue[task.Path]) {
+				noteEarliestDue[task.Path] = dueTime
+			}
+		} else if dueTime.Before(noteEarliestDue[task.Path]) {
+			noteEarliestDue[task.Path] = dueTime
 		}
 	}
 	todoNotes := make([]NoteCard, 0, len(tasksByNote))
@@ -4620,12 +4665,17 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(todoNotes, func(i, j int) bool {
-		left := noteUpdated[todoNotes[i].Path]
-		right := noteUpdated[todoNotes[j].Path]
-		if left.Equal(right) {
+		leftDue := noteEarliestDue[todoNotes[i].Path]
+		rightDue := noteEarliestDue[todoNotes[j].Path]
+		if !leftDue.Equal(rightDue) {
+			return leftDue.Before(rightDue)
+		}
+		leftUpdated := noteUpdated[todoNotes[i].Path]
+		rightUpdated := noteUpdated[todoNotes[j].Path]
+		if leftUpdated.Equal(rightUpdated) {
 			return todoNotes[i].Title < todoNotes[j].Title
 		}
-		return left.Before(right)
+		return leftUpdated.Before(rightUpdated)
 	})
 	data := ViewData{
 		Title:            "Todo",
