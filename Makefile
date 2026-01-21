@@ -4,7 +4,7 @@ WIKI_DATA_PATH ?= ./.wiki
 docker-build:
 	docker build --build-arg BUILD_TAG=$(BUILD_TAG) -t gwiki .
 
-BUILD_TAG := $(shell git show -s --format=%cd --date=format:%Y%m%d%H%M%S)
+BUILD_TAG := $(shell git show -s --format=%cd --date=format:%Y.%m.%d.%H.%M.%S)
 IMAGE := docker.senomas.com/gwiki
 
 build: css htmx
