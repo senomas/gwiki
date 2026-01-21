@@ -447,6 +447,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 17
+		case 17:
+			slog.Info("schema migration", "from", 17, "to", 18)
+			if err := i.migrate17To18(ctx); err != nil {
+				return err
+			}
+			version = 18
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -561,6 +567,34 @@ func (i *Index) migrate16To17(ctx context.Context) error {
 	}
 	_, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS broken_links_by_file ON broken_links(from_file_id)")
 	return err
+}
+
+func (i *Index) migrate17To18(ctx context.Context) error {
+	if _, err := i.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS collapsed_sections_new (
+			note_id TEXT NOT NULL,
+			line_no INTEGER NOT NULL,
+			PRIMARY KEY(note_id, line_no)
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := i.db.ExecContext(ctx, `
+		INSERT INTO collapsed_sections_new(note_id, line_no)
+		SELECT DISTINCT note_id, line_no FROM collapsed_sections
+	`); err != nil {
+		return err
+	}
+	if _, err := i.db.ExecContext(ctx, `DROP TABLE collapsed_sections`); err != nil {
+		return err
+	}
+	if _, err := i.db.ExecContext(ctx, `ALTER TABLE collapsed_sections_new RENAME TO collapsed_sections`); err != nil {
+		return err
+	}
+	if _, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id)"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (i *Index) ensureColumn(ctx context.Context, table string, column string, ddl string) error {
@@ -818,6 +852,22 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM broken_links WHERE from_file_id=?", existingID); err != nil {
 		return err
+	}
+	if uid != "" {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM collapsed_sections WHERE note_id=?", uid); err != nil {
+			return err
+		}
+		for _, lineNo := range attrs.CollapsedH2 {
+			if lineNo <= 0 {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO collapsed_sections(note_id, line_no)
+				VALUES(?, ?)
+			`, uid, lineNo); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE file_id=?", existingID); err != nil {
 		return err

@@ -2,6 +2,8 @@ package index
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -319,6 +321,7 @@ type FrontmatterAttrs struct {
 	Priority     string
 	Visibility   string
 	Folder       string
+	CollapsedH2  []int
 	HistoryCount int
 	History      []HistoryEntry
 	Has          bool
@@ -468,6 +471,8 @@ func FrontmatterAttributes(content string) FrontmatterAttrs {
 			attrs.Visibility = val
 		case "folder":
 			attrs.Folder = val
+		case "collapsed_h2":
+			attrs.CollapsedH2 = parseFrontmatterIntList(val)
 		}
 	}
 	attrs.HistoryCount = countHistoryEntries(lines)
@@ -478,6 +483,82 @@ func FrontmatterAttributes(content string) FrontmatterAttrs {
 		attrs.Visibility = "private"
 	}
 	return attrs
+}
+
+func SetCollapsedH2LineNumbers(content string, lineNos []int) (string, error) {
+	lines, body, ok := splitFrontmatterLines(content)
+	if !ok {
+		return "", fmt.Errorf("frontmatter required")
+	}
+	lineIdx := map[string]int{}
+	for i, line := range lines {
+		key, _ := parseFrontmatterLine(line)
+		if key == "" {
+			continue
+		}
+		key = strings.ToLower(key)
+		if _, exists := lineIdx[key]; !exists {
+			lineIdx[key] = i
+		}
+	}
+	clean := make([]int, 0, len(lineNos))
+	seen := map[int]struct{}{}
+	for _, lineNo := range lineNos {
+		if lineNo <= 0 {
+			continue
+		}
+		if _, ok := seen[lineNo]; ok {
+			continue
+		}
+		seen[lineNo] = struct{}{}
+		clean = append(clean, lineNo)
+	}
+	sort.Ints(clean)
+	if len(clean) == 0 {
+		removeFrontmatterLine(&lines, lineIdx, "collapsed_h2")
+	} else {
+		parts := make([]string, 0, len(clean))
+		for _, lineNo := range clean {
+			parts = append(parts, strconv.Itoa(lineNo))
+		}
+		setFrontmatterLine(&lines, lineIdx, "collapsed_h2", "["+strings.Join(parts, ", ")+"]")
+	}
+	fmBlock := "---\n" + strings.Join(lines, "\n") + "\n---"
+	if body == "" {
+		return fmBlock + "\n", nil
+	}
+	return fmBlock + "\n" + body, nil
+}
+
+func parseFrontmatterIntList(raw string) []int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	raw = strings.TrimPrefix(raw, "[")
+	raw = strings.TrimSuffix(raw, "]")
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	out := make([]int, 0, len(parts))
+	seen := map[int]struct{}{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		val, err := strconv.Atoi(part)
+		if err != nil || val <= 0 {
+			continue
+		}
+		if _, ok := seen[val]; ok {
+			continue
+		}
+		seen[val] = struct{}{}
+		out = append(out, val)
+	}
+	sort.Ints(out)
+	return out
 }
 
 func parseFrontmatterTime(raw string) (time.Time, string) {

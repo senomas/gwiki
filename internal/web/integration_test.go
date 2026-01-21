@@ -121,6 +121,7 @@ func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 		"created: 2026-01-14T01:00:00Z",
 		"updated: 2026-01-14T01:00:00Z",
 		"visibility: private",
+		"collapsed_h2: [4]",
 		"---",
 		"",
 		"# Bookmark",
@@ -140,11 +141,6 @@ func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
 		t.Fatalf("index note: %v", err)
 	}
-	if err := idx.SetCollapsedSections(ctx, "note-1", []index.CollapsedSection{
-		{LineNo: 2, Line: "## Homelab"},
-	}); err != nil {
-		t.Fatalf("set collapsed sections: %v", err)
-	}
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -157,10 +153,10 @@ func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 	resp.Body.Close()
 
 	html := string(body)
-	if !strings.Contains(html, `data-line="## Homelab"`) {
+	if !strings.Contains(html, `data-line-no="4"`) {
 		t.Fatalf("expected homelab section to render, got %s", html)
 	}
-	tag := detailsTagForLine(html, `data-line="## Homelab"`)
+	tag := detailsTagForLine(html, `data-line-no="4"`)
 	if tag == "" {
 		t.Fatalf("expected details tag for homelab, got %s", html)
 	}

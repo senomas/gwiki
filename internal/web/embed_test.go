@@ -287,8 +287,8 @@ func TestRenderMarkdownCollapsedSections(t *testing.T) {
 
 	collapsedAlpha := withCollapsibleSectionState(ctx, collapsibleSectionRenderState{
 		NoteID: "note-1",
-		Lines: map[string]struct{}{
-			"## Alpha": {},
+		Collapsed: map[int]struct{}{
+			1: {},
 		},
 	})
 	html, err := srv.renderMarkdown(collapsedAlpha, []byte(md))
@@ -298,14 +298,14 @@ func TestRenderMarkdownCollapsedSections(t *testing.T) {
 	if strings.Count(html, `class="note-section" open`) != 1 {
 		t.Fatalf("expected one open section, got %s", html)
 	}
-	if !strings.Contains(html, `data-line="## Alpha"`) {
+	if !strings.Contains(html, `data-line-no="1"`) {
 		t.Fatalf("expected alpha section to be marked, got %s", html)
 	}
 
 	collapsedBeta := withCollapsibleSectionState(ctx, collapsibleSectionRenderState{
 		NoteID: "note-1",
-		Lines: map[string]struct{}{
-			"## Beta": {},
+		Collapsed: map[int]struct{}{
+			4: {},
 		},
 	})
 	html, err = srv.renderMarkdown(collapsedBeta, []byte(md))
@@ -315,7 +315,7 @@ func TestRenderMarkdownCollapsedSections(t *testing.T) {
 	if strings.Count(html, `class="note-section" open`) != 1 {
 		t.Fatalf("expected one open section after beta collapse, got %s", html)
 	}
-	if !strings.Contains(html, `data-line="## Beta"`) {
+	if !strings.Contains(html, `data-line-no="4"`) {
 		t.Fatalf("expected beta section to be marked, got %s", html)
 	}
 }

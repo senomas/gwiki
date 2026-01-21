@@ -225,7 +225,6 @@ func historyUser(ctx context.Context) string {
 type collapsibleSectionRenderState struct {
 	NoteID    string
 	Collapsed map[int]struct{}
-	Lines     map[string]struct{}
 }
 
 type collapsibleSectionStateKey struct{}
@@ -256,23 +255,18 @@ func collapsedSectionStateFromSections(noteID string, sections []index.Collapsed
 		return collapsibleSectionRenderState{}, false, nil
 	}
 	collapsed := make(map[int]struct{}, len(sections))
-	lines := make(map[string]struct{}, len(sections))
 	for _, section := range sections {
 		if section.LineNo <= 0 {
 			continue
 		}
 		collapsed[section.LineNo] = struct{}{}
-		if line := strings.TrimSpace(section.Line); line != "" {
-			lines[line] = struct{}{}
-		}
 	}
-	if len(collapsed) == 0 && len(lines) == 0 {
+	if len(collapsed) == 0 {
 		return collapsibleSectionRenderState{}, false, nil
 	}
 	return collapsibleSectionRenderState{
 		NoteID:    noteID,
 		Collapsed: collapsed,
-		Lines:     lines,
 	}, true, nil
 }
 
@@ -988,10 +982,9 @@ const (
 
 type collapsibleSection struct {
 	ast.BaseBlock
-	Title    string
-	LineNo   int
-	LineText string
-	Open     bool
+	Title  string
+	LineNo int
+	Open   bool
 }
 
 func (n *collapsibleSection) Kind() ast.NodeKind {
@@ -1037,24 +1030,17 @@ func (t *collapsibleSectionTransformer) Transform(node *ast.Document, reader tex
 		if strings.TrimSpace(title) == "" {
 			title = "Section"
 		}
-		lineNo, lineText := headingLineInfo(heading, source)
-		normalizedLine := strings.TrimSpace(lineText)
+		lineNo := headingLineInfo(heading, source)
 		open := true
 		if lineNo > 0 && state.Collapsed != nil {
 			if _, ok := state.Collapsed[lineNo]; ok {
 				open = false
 			}
 		}
-		if open && normalizedLine != "" && state.Lines != nil {
-			if _, ok := state.Lines[normalizedLine]; ok {
-				open = false
-			}
-		}
 		section := &collapsibleSection{
-			Title:    title,
-			LineNo:   lineNo,
-			LineText: normalizedLine,
-			Open:     open,
+			Title:  title,
+			LineNo: lineNo,
+			Open:   open,
 		}
 		node.ReplaceChild(node, current, section)
 		for child := next; child != nil; {
@@ -1087,23 +1073,18 @@ func headingPlainText(node *ast.Heading, source []byte) string {
 	return strings.TrimSpace(b.String())
 }
 
-func headingLineInfo(node *ast.Heading, source []byte) (int, string) {
+func headingLineInfo(node *ast.Heading, source []byte) int {
 	lines := node.Lines()
 	if lines == nil || lines.Len() == 0 {
-		return 0, ""
+		return 0
 	}
 	segment := lines.At(0)
 	if segment.Start < 0 || segment.Start > len(source) {
-		return 0, ""
+		return 0
 	}
 	lineStart := bytes.LastIndex(source[:segment.Start], []byte("\n")) + 1
-	lineEnd := len(source)
-	if nextBreak := bytes.Index(source[segment.Start:], []byte("\n")); nextBreak >= 0 {
-		lineEnd = segment.Start + nextBreak
-	}
 	lineNo := bytes.Count(source[:lineStart], []byte("\n")) + 1
-	lineText := strings.TrimSpace(string(source[lineStart:lineEnd]))
-	return lineNo, lineText
+	return lineNo
 }
 
 type collapsibleSectionHTMLRenderer struct{}
@@ -1129,11 +1110,6 @@ func (r *collapsibleSectionHTMLRenderer) renderCollapsibleSection(
 		if section.LineNo > 0 {
 			_, _ = w.WriteString(` data-line-no="`)
 			_, _ = w.WriteString(strconv.Itoa(section.LineNo))
-			_, _ = w.WriteString(`"`)
-		}
-		if section.LineText != "" {
-			_, _ = w.WriteString(` data-line="`)
-			_, _ = w.WriteString(html.EscapeString(section.LineText))
 			_, _ = w.WriteString(`"`)
 		}
 		_, _ = w.WriteString(`>`)
@@ -7366,8 +7342,7 @@ type collapsedSectionsPayload struct {
 }
 
 type collapsedSectionPayloadItem struct {
-	LineNo int    `json:"line_no"`
-	Line   string `json:"line"`
+	LineNo int `json:"line_no"`
 }
 
 func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request, notePath string) {
@@ -7407,7 +7382,6 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 		for _, section := range sections {
 			payload.Collapsed = append(payload.Collapsed, collapsedSectionPayloadItem{
 				LineNo: section.LineNo,
-				Line:   section.Line,
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -7419,19 +7393,30 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	sections := make([]index.CollapsedSection, 0, len(payload.Collapsed))
+	lineNos := make([]int, 0, len(payload.Collapsed))
 	for _, item := range payload.Collapsed {
 		if item.LineNo <= 0 {
 			continue
 		}
-		sections = append(sections, index.CollapsedSection{
-			LineNo: item.LineNo,
-			Line:   item.Line,
-		})
+		lineNos = append(lineNos, item.LineNo)
 	}
-	if err := s.idx.SetCollapsedSections(r.Context(), meta.ID, sections); err != nil {
+	writeLock, err := s.acquireNoteWriteLock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	defer writeLock.Release()
+	updatedContent, err := index.SetCollapsedH2LineNumbers(string(content), lineNos)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if info, err := os.Stat(fullPath); err == nil {
+		_ = s.idx.IndexNoteIfChanged(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

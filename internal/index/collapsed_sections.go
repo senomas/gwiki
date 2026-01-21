@@ -10,11 +10,8 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-const maxCollapsedLineLen = 500
-
 type CollapsedSection struct {
 	LineNo int
-	Line   string
 }
 
 func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, sections []CollapsedSection) error {
@@ -47,17 +44,10 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 			if section.LineNo <= 0 {
 				continue
 			}
-			line := strings.TrimSpace(section.Line)
-			if line == "" {
-				continue
-			}
-			if len(line) > maxCollapsedLineLen {
-				line = line[:maxCollapsedLineLen]
-			}
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO collapsed_sections(note_id, line_no, line)
-				VALUES(?, ?, ?)
-			`, noteID, section.LineNo, line); err != nil {
+				INSERT INTO collapsed_sections(note_id, line_no)
+				VALUES(?, ?)
+			`, noteID, section.LineNo); err != nil {
 				_ = tx.Rollback()
 				if isSQLiteBusy(err) {
 					lastErr = err
@@ -90,7 +80,7 @@ func (i *Index) CollapsedSections(ctx context.Context, noteID string) ([]Collaps
 		return nil, errors.New("note id required")
 	}
 	rows, err := i.db.QueryContext(ctx, `
-		SELECT line_no, line
+		SELECT line_no
 		FROM collapsed_sections
 		WHERE note_id=?
 		ORDER BY line_no
@@ -103,7 +93,7 @@ func (i *Index) CollapsedSections(ctx context.Context, noteID string) ([]Collaps
 	sections := []CollapsedSection{}
 	for rows.Next() {
 		var section CollapsedSection
-		if err := rows.Scan(&section.LineNo, &section.Line); err != nil {
+		if err := rows.Scan(&section.LineNo); err != nil {
 			return nil, err
 		}
 		sections = append(sections, section)

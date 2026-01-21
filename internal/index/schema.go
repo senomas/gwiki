@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 17
+const schemaVersion = 18
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -81,7 +81,6 @@ CREATE TABLE IF NOT EXISTS embed_cache (
 CREATE TABLE IF NOT EXISTS collapsed_sections (
 	note_id TEXT NOT NULL,
 	line_no INTEGER NOT NULL,
-	line TEXT NOT NULL,
 	PRIMARY KEY(note_id, line_no)
 );
 
