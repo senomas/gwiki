@@ -1358,15 +1358,73 @@
         activateItem(submenuPanel, 0);
       }
 
+      function isEditableTarget(target) {
+        if (!target) {
+          return false;
+        }
+        if (target.isContentEditable) {
+          return true;
+        }
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") {
+          return true;
+        }
+        return false;
+      }
+      function editableTargets() {
+        var nodes = document.querySelectorAll("input, textarea, select, [contenteditable=\"true\"]");
+        return Array.prototype.filter.call(nodes, function (node) {
+          if (!node || node.hasAttribute("disabled")) {
+            return false;
+          }
+          if (node.getAttribute("tabindex") === "-1") {
+            return false;
+          }
+          if (node.getClientRects().length === 0) {
+            return false;
+          }
+          return true;
+        });
+      }
+      function moveEditableFocus(delta) {
+        var items = editableTargets();
+        if (!items.length) {
+          return;
+        }
+        var active = document.activeElement;
+        var index = -1;
+        for (var i = 0; i < items.length; i++) {
+          if (items[i] === active) {
+            index = i;
+            break;
+          }
+        }
+        if (index < 0) {
+          return;
+        }
+        var next = index + delta;
+        if (next < 0 || next >= items.length) {
+          return;
+        }
+        items[next].focus({preventScroll: true});
+        items[next].scrollIntoView({block: "nearest"});
+      }
+      function confirmLeaveIfDirty() {
+        if (window.noteFormDirty) {
+          return window.confirm("You have unsaved changes. Leave this page?");
+        }
+        return true;
+      }
+      window.isEditableTarget = isEditableTarget;
+
       document.addEventListener("keydown", function (event) {
         if (!event.ctrlKey || event.key !== " ") {
           return;
         }
+        console.log("[keys] ctrl+space", event.key, event.target);
         var target = event.target;
-        if (target) {
-          if (target.tagName === "TEXTAREA" && target.id === "note-content") {
-            return;
-          }
+        if (isEditableTarget(target)) {
+          console.log("[keys] ctrl+space ignored: editable");
+          return;
         }
         event.preventDefault();
         if (launcher.classList.contains("is-open")) {
@@ -1380,9 +1438,43 @@
         if (!event.ctrlKey) {
           return;
         }
+        if (isEditableTarget(event.target)) {
+          if (event.key === "h") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!confirmLeaveIfDirty()) {
+              return;
+            }
+            window.history.back();
+            return;
+          }
+          if (event.key === "l") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!confirmLeaveIfDirty()) {
+              return;
+            }
+            window.history.forward();
+            return;
+          }
+          if (event.key === "j") {
+            event.preventDefault();
+            event.stopPropagation();
+            moveEditableFocus(1);
+            return;
+          }
+          if (event.key === "k") {
+            event.preventDefault();
+            event.stopPropagation();
+            moveEditableFocus(-1);
+            return;
+          }
+        }
         if (event.key === "y") {
+          console.log("[keys] ctrl+y", event.key, event.target);
           var target = event.target;
-          if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+          if (isEditableTarget(target)) {
+            console.log("[keys] ctrl+y ignored: editable");
             return;
           }
           if (launcher.classList.contains("is-open")) {
@@ -1395,16 +1487,24 @@
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "h" && event.key !== "l") {
           return;
         }
+        console.log("[keys] ctrl+nav", event.key, event.target);
         if (launcher.classList.contains("is-open")) {
           return;
         }
         var target = event.target;
-        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        if (isEditableTarget(target)) {
+          console.log("[keys] ctrl+nav ignored: editable");
           return;
         }
         event.preventDefault();
         if (event.key === "ArrowLeft" || event.key === "h") {
+          if (!confirmLeaveIfDirty()) {
+            return;
+          }
           window.history.back();
+          return;
+        }
+        if (!confirmLeaveIfDirty()) {
           return;
         }
         window.history.forward();
@@ -1417,8 +1517,10 @@
         if (event.key !== "j" && event.key !== "k" && event.key !== "y") {
           return;
         }
+        console.log("[keys] nav", event.key, event.target);
         var target = event.target;
-        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        if (isEditableTarget(target)) {
+          console.log("[keys] nav ignored: editable");
           return;
         }
         if (launcher.classList.contains("is-open")) {
@@ -2258,6 +2360,11 @@
         } else {
           return;
         }
+        console.log("[keys] ctrl+focus", event.key, event.target);
+        if (window.isEditableTarget && window.isEditableTarget(event.target)) {
+          console.log("[keys] ctrl+focus ignored: editable");
+          return;
+        }
         if (!getNoteBody() && !getNotesFeed() && !getSearchInput()) {
           return;
         }
@@ -2266,7 +2373,7 @@
         }
         event.preventDefault();
         moveFocus(direction);
-      }, true);
+      });
 
     })();
   </script>

@@ -227,6 +227,17 @@
     var textarea = document.getElementById("note-content");
     var form = document.getElementById("note-edit-form");
     var cancel = document.querySelector("[data-return-link]");
+    if (form) {
+      window.noteFormDirty = false;
+      var markDirty = function () {
+        window.noteFormDirty = true;
+      };
+      form.addEventListener("input", markDirty);
+      form.addEventListener("change", markDirty);
+      form.addEventListener("submit", function () {
+        window.noteFormDirty = false;
+      });
+    }
     if (textarea) {
       window.setTimeout(function () {
         textarea.focus();
@@ -241,12 +252,14 @@
         if (!form) {
           return;
         }
+        console.log("[edit] ctrl+enter", event.target);
         event.preventDefault();
         form.requestSubmit();
       } else if (event.key === "Escape") {
         if (!cancel) {
           return;
         }
+        console.log("[edit] ctrl+escape", event.target);
         event.preventDefault();
         window.location.href = cancel.getAttribute("href");
       }
