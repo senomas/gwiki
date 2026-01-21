@@ -12,6 +12,7 @@ FROM alpine:3.19
 WORKDIR /app
 RUN apk add --no-cache ffmpeg git tzdata
 COPY templates /app/templates
+COPY static /app/static
 COPY --from=build /out/wiki /usr/local/bin/wiki
 COPY --from=build /out/sync /usr/local/bin/sync
 ENV WIKI_LISTEN_ADDR=0.0.0.0:8080
