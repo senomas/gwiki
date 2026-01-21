@@ -352,9 +352,49 @@ func (s *Server) noteAttachmentsDir(noteID string) string {
 
 func (s *Server) assetsRoot() string {
 	if s.cfg.DataPath == "" {
+		if s.cfg.RepoPath == "" {
+			return ""
+		}
+		repoAssets := filepath.Join(s.cfg.RepoPath, "assets")
+		if info, err := os.Stat(repoAssets); err == nil && info.IsDir() {
+			return repoAssets
+		}
 		return ""
 	}
-	return filepath.Join(s.cfg.DataPath, "assets")
+	dataAssets := filepath.Join(s.cfg.DataPath, "assets")
+	if info, err := os.Stat(dataAssets); err == nil && info.IsDir() {
+		return dataAssets
+	}
+	if s.cfg.RepoPath == "" {
+		return ""
+	}
+	repoAssets := filepath.Join(s.cfg.RepoPath, "assets")
+	if info, err := os.Stat(repoAssets); err == nil && info.IsDir() {
+		return repoAssets
+	}
+	return dataAssets
+}
+
+func (s *Server) staticRoot() string {
+	paths := make([]string, 0, 3)
+	if s.cfg.RepoPath != "" {
+		paths = append(paths, filepath.Join(s.cfg.RepoPath, "static"))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		paths = append(paths, filepath.Join(cwd, "static"))
+	}
+	if exe, err := os.Executable(); err == nil {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), "static"))
+	}
+	for _, candidate := range paths {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	if len(paths) > 0 {
+		return paths[0]
+	}
+	return ""
 }
 
 func (s *Server) acquireNoteWriteLock() (*fs.FileLock, error) {
@@ -6612,6 +6652,30 @@ func (s *Server) handleAssetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, fullPath)
+}
+
+func (s *Server) handleStaticFile(w http.ResponseWriter, r *http.Request) {
+	rel := strings.TrimPrefix(r.URL.Path, "/static/")
+	if rel == "" {
+		http.NotFound(w, r)
+		return
+	}
+	clean := filepath.Clean(rel)
+	staticRoot := s.staticRoot()
+	if staticRoot == "" {
+		http.NotFound(w, r)
+		return
+	}
+	fullPath := filepath.Clean(filepath.Join(staticRoot, clean))
+	if !strings.HasPrefix(fullPath, staticRoot+string(filepath.Separator)) && fullPath != staticRoot {
+		http.NotFound(w, r)
+		return
+	}
+	if info, err := os.Stat(fullPath); err != nil || info.IsDir() {
 		http.NotFound(w, r)
 		return
 	}

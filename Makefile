@@ -7,7 +7,7 @@ docker-build:
 BUILD_TAG := $(shell git show -s --format=%cd --date=format:%Y%m%d%H%M%S)
 IMAGE := docker.senomas.com/gwiki
 
-build:
+build: css htmx
 	docker build -t $(IMAGE):$(BUILD_TAG) .
 	docker tag $(IMAGE):$(BUILD_TAG) $(IMAGE):latest
 	docker push $(IMAGE):$(BUILD_TAG)
@@ -24,3 +24,20 @@ dev:
 		echo "  go install github.com/air-verse/air@latest"; \
 		exit 1; \
 	fi
+
+NODE_IMAGE ?= node:20-alpine
+TAILWIND_CONFIG ?= tailwind.config.js
+TAILWIND_INPUT ?= assets/tailwind.css
+TAILWIND_OUTPUT ?= static/css/app.css
+
+css:
+	docker run --rm -v "$$(pwd)":/work -w /work $(NODE_IMAGE) \
+		sh -lc "mkdir -p $$(dirname $(TAILWIND_OUTPUT)) && BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss -c $(TAILWIND_CONFIG) -i $(TAILWIND_INPUT) -o $(TAILWIND_OUTPUT)"
+
+css-watch:
+	docker run --rm -it -v "$$(pwd)":/work -w /work $(NODE_IMAGE) \
+		sh -lc "mkdir -p $$(dirname $(TAILWIND_OUTPUT)) && BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss -c $(TAILWIND_CONFIG) -i $(TAILWIND_INPUT) -o $(TAILWIND_OUTPUT) --watch"
+
+htmx:
+	mkdir -p static/js
+	curl -fsSL -o static/js/htmx.min.js https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js
