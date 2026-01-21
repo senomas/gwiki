@@ -18,6 +18,7 @@ type Config struct {
 	GitPushDebounce   time.Duration
 	NoteLockTimeout   time.Duration
 	UpdatedHistoryMax int
+	DBLockTimeout     time.Duration
 }
 
 func Load() Config {
@@ -41,6 +42,7 @@ func Load() Config {
 	cfg.GitPushDebounce = parseDurationOr("WIKI_GIT_PUSH_DEBOUNCE", 10*time.Minute)
 	cfg.NoteLockTimeout = parseDurationOr("WIKI_NOTE_LOCK_TIMEOUT", 5*time.Second)
 	cfg.UpdatedHistoryMax = parseIntOr("WIKI_UPDATED_HISTORY_MAX", 100)
+	cfg.DBLockTimeout = time.Duration(parseIntOr("WIKI_DB_LOCK_TIMEOUT_MS", 5000)) * time.Millisecond
 	return cfg
 }
 

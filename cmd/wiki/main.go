@@ -55,6 +55,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer idx.Close()
+	idx.SetLockTimeout(cfg.DBLockTimeout)
 
 	users := make([]string, 0)
 	if cfg.AuthFile != "" {

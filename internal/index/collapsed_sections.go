@@ -31,7 +31,7 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, "DELETE FROM collapsed_sections WHERE note_id=?", noteID); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM collapsed_sections WHERE note_id=?", noteID); err != nil {
 			_ = tx.Rollback()
 			if isSQLiteBusy(err) {
 				lastErr = err
@@ -44,7 +44,7 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 			if section.LineNo <= 0 {
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, `
+			if _, err := i.execContextTx(ctx, tx, `
 				INSERT INTO collapsed_sections(note_id, line_no)
 				VALUES(?, ?)
 			`, noteID, section.LineNo); err != nil {
@@ -79,7 +79,7 @@ func (i *Index) CollapsedSections(ctx context.Context, noteID string) ([]Collaps
 	if noteID == "" {
 		return nil, errors.New("note id required")
 	}
-	rows, err := i.db.QueryContext(ctx, `
+	rows, err := i.queryContext(ctx, `
 		SELECT line_no
 		FROM collapsed_sections
 		WHERE note_id=?
@@ -107,7 +107,13 @@ func (i *Index) CollapsedSections(ctx context.Context, noteID string) ([]Collaps
 func isSQLiteBusy(err error) bool {
 	var se *sqlite.Error
 	if errors.As(err, &se) {
-		if se.Code() == sqlite3.SQLITE_BUSY {
+		if se.Code() == sqlite3.SQLITE_BUSY || se.Code() == sqlite3.SQLITE_LOCKED {
+			return true
+		}
+	}
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "database is locked") || strings.Contains(msg, "database is busy") {
 			return true
 		}
 	}

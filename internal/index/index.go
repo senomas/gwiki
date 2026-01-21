@@ -21,7 +21,8 @@ import (
 )
 
 type Index struct {
-	db *sql.DB
+	db          *sql.DB
+	lockTimeout time.Duration
 }
 
 type NoteSummary struct {
@@ -312,7 +313,14 @@ func Open(path string) (*Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Index{db: db}, nil
+	return &Index{db: db, lockTimeout: 5 * time.Second}, nil
+}
+
+func (i *Index) SetLockTimeout(timeout time.Duration) {
+	if timeout < 0 {
+		timeout = 0
+	}
+	i.lockTimeout = timeout
 }
 
 func (i *Index) Close() error {
@@ -343,7 +351,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 	var id int
 	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
 	ownerArgs = append(ownerArgs, relPath)
-	err = tx.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&id)
+	err = i.queryRowContextTx(ctx, tx, "SELECT id FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -360,18 +368,18 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 	for _, stmt := range stmts {
 		switch stmt {
 		case "DELETE FROM links WHERE from_file_id=? OR to_file_id=?":
-			if _, err := tx.ExecContext(ctx, stmt, id, id); err != nil {
+			if _, err := i.execContextTx(ctx, tx, stmt, id, id); err != nil {
 				return err
 			}
 		default:
-			if _, err := tx.ExecContext(ctx, stmt, id); err != nil {
+			if _, err := i.execContextTx(ctx, tx, stmt, id); err != nil {
 				return err
 			}
 		}
 	}
 	ownerClause, ownerArgs = ownerWhereClause(userID, groupID, "fts")
 	ownerArgs = append(ownerArgs, relPath)
-	if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -382,7 +390,7 @@ func (i *Index) Init(ctx context.Context, repoPath string) error {
 }
 
 func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []string, groups map[string][]GroupMember) error {
-	if _, err := i.db.ExecContext(ctx, schemaSQL); err != nil {
+	if _, err := i.execContext(ctx, schemaSQL); err != nil {
 		return err
 	}
 	version, err := i.schemaVersion(ctx)
@@ -547,7 +555,7 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 }
 
 func (i *Index) migrate3To4(ctx context.Context) error {
-	if _, err := i.db.ExecContext(ctx, `
+	if _, err := i.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS embed_cache (
 			url TEXT NOT NULL,
 			kind TEXT NOT NULL,
@@ -567,10 +575,10 @@ func (i *Index) migrate4To5(ctx context.Context) error {
 	if err := i.ensureColumn(ctx, "tasks", "updated_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if _, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS tasks_by_file_checked ON tasks(file_id, checked)"); err != nil {
+	if _, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS tasks_by_file_checked ON tasks(file_id, checked)"); err != nil {
 		return err
 	}
-	if _, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS tasks_by_file_due ON tasks(file_id, due_date)"); err != nil {
+	if _, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS tasks_by_file_due ON tasks(file_id, due_date)"); err != nil {
 		return err
 	}
 	return nil
@@ -581,7 +589,7 @@ func (i *Index) migrate5To6(ctx context.Context) error {
 }
 
 func (i *Index) migrate6To7(ctx context.Context) error {
-	if _, err := i.db.ExecContext(ctx, `
+	if _, err := i.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS file_histories (
 			id INTEGER PRIMARY KEY,
 			file_id INTEGER NOT NULL,
@@ -614,7 +622,7 @@ func (i *Index) migrate11To12(ctx context.Context) error {
 }
 
 func (i *Index) migrate12To13(ctx context.Context) error {
-	if _, err := i.db.ExecContext(ctx, `
+	if _, err := i.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS collapsed_sections (
 			note_id TEXT NOT NULL,
 			line_no INTEGER NOT NULL,
@@ -623,7 +631,7 @@ func (i *Index) migrate12To13(ctx context.Context) error {
 		)`); err != nil {
 		return err
 	}
-	_, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id)")
+	_, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id)")
 	return err
 }
 
@@ -640,7 +648,7 @@ func (i *Index) migrate15To16(ctx context.Context) error {
 }
 
 func (i *Index) migrate16To17(ctx context.Context) error {
-	if _, err := i.db.ExecContext(ctx, `
+	if _, err := i.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS broken_links (
 			id INTEGER PRIMARY KEY,
 			from_file_id INTEGER NOT NULL,
@@ -651,12 +659,12 @@ func (i *Index) migrate16To17(ctx context.Context) error {
 		)`); err != nil {
 		return err
 	}
-	_, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS broken_links_by_file ON broken_links(from_file_id)")
+	_, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS broken_links_by_file ON broken_links(from_file_id)")
 	return err
 }
 
 func (i *Index) migrate17To18(ctx context.Context) error {
-	if _, err := i.db.ExecContext(ctx, `
+	if _, err := i.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS collapsed_sections_new (
 			note_id TEXT NOT NULL,
 			line_no INTEGER NOT NULL,
@@ -665,29 +673,29 @@ func (i *Index) migrate17To18(ctx context.Context) error {
 	`); err != nil {
 		return err
 	}
-	if _, err := i.db.ExecContext(ctx, `
+	if _, err := i.execContext(ctx, `
 		INSERT INTO collapsed_sections_new(note_id, line_no)
 		SELECT DISTINCT note_id, line_no FROM collapsed_sections
 	`); err != nil {
 		return err
 	}
-	if _, err := i.db.ExecContext(ctx, `DROP TABLE collapsed_sections`); err != nil {
+	if _, err := i.execContext(ctx, `DROP TABLE collapsed_sections`); err != nil {
 		return err
 	}
-	if _, err := i.db.ExecContext(ctx, `ALTER TABLE collapsed_sections_new RENAME TO collapsed_sections`); err != nil {
+	if _, err := i.execContext(ctx, `ALTER TABLE collapsed_sections_new RENAME TO collapsed_sections`); err != nil {
 		return err
 	}
-	if _, err := i.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id)"); err != nil {
+	if _, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id)"); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (i *Index) migrate18To19(ctx context.Context) error {
-	if _, err := i.db.ExecContext(ctx, `DROP TABLE IF EXISTS fts`); err != nil {
+	if _, err := i.execContext(ctx, `DROP TABLE IF EXISTS fts`); err != nil {
 		return err
 	}
-	if _, err := i.db.ExecContext(ctx, `
+	if _, err := i.execContext(ctx, `
 		CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 			path UNINDEXED,
 			title,
@@ -722,17 +730,17 @@ func (i *Index) migrate20To21(ctx context.Context) error {
 		"DROP TABLE IF EXISTS schema_version",
 	}
 	for _, stmt := range drops {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := i.execContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
-	_, err := i.db.ExecContext(ctx, schemaSQL)
+	_, err := i.execContext(ctx, schemaSQL)
 	return err
 }
 
 func (i *Index) ensureColumn(ctx context.Context, table string, column string, ddl string) error {
 	hasColumn := false
-	rows, err := i.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	rows, err := i.queryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return err
 	}
@@ -760,13 +768,13 @@ func (i *Index) ensureColumn(ctx context.Context, table string, column string, d
 	if hasColumn {
 		return nil
 	}
-	_, err = i.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, ddl))
+	_, err = i.execContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, ddl))
 	return err
 }
 
 func (i *Index) schemaVersion(ctx context.Context) (int, error) {
 	var v int
-	err := i.db.QueryRowContext(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&v)
+	err := i.queryRowContext(ctx, "SELECT version FROM schema_version LIMIT 1").Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -777,11 +785,11 @@ func (i *Index) schemaVersion(ctx context.Context) (int, error) {
 }
 
 func (i *Index) setSchemaVersion(ctx context.Context, v int) error {
-	_, err := i.db.ExecContext(ctx, "DELETE FROM schema_version")
+	_, err := i.execContext(ctx, "DELETE FROM schema_version")
 	if err != nil {
 		return err
 	}
-	_, err = i.db.ExecContext(ctx, "INSERT INTO schema_version(version) VALUES(?)", v)
+	_, err = i.execContext(ctx, "INSERT INTO schema_version(version) VALUES(?)", v)
 	return err
 }
 
@@ -836,7 +844,7 @@ func ownerNoteRoots(repoPath string) ([]ownerRoot, error) {
 
 func (i *Index) RebuildFromFSWithStats(ctx context.Context, repoPath string) (int, int, int, error) {
 	cleaned := 0
-	if err := i.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM files").Scan(&cleaned); err != nil {
+	if err := i.queryRowContext(ctx, "SELECT COUNT(*) FROM files").Scan(&cleaned); err != nil {
 		return 0, 0, 0, err
 	}
 	clear := []string{
@@ -851,7 +859,7 @@ func (i *Index) RebuildFromFSWithStats(ctx context.Context, repoPath string) (in
 		"DELETE FROM fts",
 	}
 	for _, stmt := range clear {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := i.execContext(ctx, stmt); err != nil {
 			return 0, 0, 0, err
 		}
 	}
@@ -1017,21 +1025,21 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	var createdAt int64
 	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
 	ownerArgs = append(ownerArgs, relPath)
-	err = tx.QueryRowContext(ctx, "SELECT id, created_at FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID, &createdAt)
+	err = i.queryRowContextTx(ctx, tx, "SELECT id, created_at FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		createdAt = time.Now().Unix()
 		visibility := attrs.Visibility
 		if visibility == "" {
 			visibility = "private"
 		}
-		_, err = tx.ExecContext(ctx, `
+		_, err = i.execContextTx(ctx, tx, `
 			INSERT INTO files(user_id, group_id, path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority, is_journal)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, userID, nullIfInvalidInt64(groupID), relPath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, meta.Priority, isJournal)
 		if err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID); err != nil {
+		if err := i.queryRowContextTx(ctx, tx, "SELECT id FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID); err != nil {
 			return err
 		}
 	} else if err == nil {
@@ -1039,7 +1047,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if visibility == "" {
 			visibility = "private"
 		}
-		_, err = tx.ExecContext(ctx, `
+		_, err = i.execContextTx(ctx, tx, `
 			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=?, is_journal=? WHERE id=?
 		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, updatedAt, meta.Priority, isJournal, existingID)
 		if err != nil {
@@ -1049,26 +1057,26 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, "DELETE FROM file_tags WHERE file_id=?", existingID); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_tags WHERE file_id=?", existingID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE from_file_id=?", existingID); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM links WHERE from_file_id=?", existingID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM broken_links WHERE from_file_id=?", existingID); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM broken_links WHERE from_file_id=?", existingID); err != nil {
 		return err
 	}
 	if uid != "" {
 		ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "collapsed_sections")
 		ownerArgs = append(ownerArgs, uid)
-		if _, err := tx.ExecContext(ctx, "DELETE FROM collapsed_sections WHERE "+ownerClause+" AND note_id=?", ownerArgs...); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM collapsed_sections WHERE "+ownerClause+" AND note_id=?", ownerArgs...); err != nil {
 			return err
 		}
 		for _, lineNo := range attrs.CollapsedH2 {
 			if lineNo <= 0 {
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, `
+			if _, err := i.execContextTx(ctx, tx, `
 				INSERT INTO collapsed_sections(user_id, group_id, note_id, line_no)
 				VALUES(?, ?, ?, ?)
 			`, userID, nullIfInvalidInt64(groupID), uid, lineNo); err != nil {
@@ -1076,10 +1084,10 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE file_id=?", existingID); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM tasks WHERE file_id=?", existingID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM file_histories WHERE file_id=?", existingID); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_histories WHERE file_id=?", existingID); err != nil {
 		return err
 	}
 	historyEntries := ParseHistoryEntries(string(content))
@@ -1094,7 +1102,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 		actionTime := entry.At.UTC().Unix()
 		actionDate := actionTime / secondsPerDay
-		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, user, entry.Action, actionTime, actionDate); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, user, entry.Action, actionTime, actionDate); err != nil {
 			return err
 		}
 		validHistory++
@@ -1102,7 +1110,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if validHistory == 0 {
 		actionTime := mtime.Unix()
 		actionDate := actionTime / secondsPerDay
-		if _, err := tx.ExecContext(ctx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, dummyHistoryUser, "save", actionTime, actionDate); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, dummyHistoryUser, "save", actionTime, actionDate); err != nil {
 			return err
 		}
 	}
@@ -1112,15 +1120,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if name == "" {
 			continue
 		}
-		_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO tags(user_id, group_id, name) VALUES(?, ?, ?)", userID, nullIfInvalidInt64(groupID), name)
+		_, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO tags(user_id, group_id, name) VALUES(?, ?, ?)", userID, nullIfInvalidInt64(groupID), name)
 		if err != nil {
 			return err
 		}
 		var tagID int
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM tags WHERE group_id IS ? AND user_id=? AND name=?", nullIfInvalidInt64(groupID), userID, name).Scan(&tagID); err != nil {
+		if err := i.queryRowContextTx(ctx, tx, "SELECT id FROM tags WHERE group_id IS ? AND user_id=? AND name=?", nullIfInvalidInt64(groupID), userID, name).Scan(&tagID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO file_tags(user_id, group_id, file_id, tag_id, is_exclusive) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, tagID, boolToInt(isExclusive)); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO file_tags(user_id, group_id, file_id, tag_id, is_exclusive) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, tagID, boolToInt(isExclusive)); err != nil {
 			return err
 		}
 	}
@@ -1133,11 +1141,11 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO links(user_id, group_id, from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, nullIfZero(toFileID), link.Kind, link.LineNo, link.Line); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "INSERT INTO links(user_id, group_id, from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, nullIfZero(toFileID), link.Kind, link.LineNo, link.Line); err != nil {
 			return err
 		}
 		if link.Kind == "wikilink" && toFileID == 0 {
-			if _, err := tx.ExecContext(ctx, "INSERT INTO broken_links(user_id, group_id, from_file_id, to_ref, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
+			if _, err := i.execContextTx(ctx, tx, "INSERT INTO broken_links(user_id, group_id, from_file_id, to_ref, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
 				return err
 			}
 		}
@@ -1158,7 +1166,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if due == "" {
 			due = defaultDue
 		}
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := i.execContextTx(ctx, tx, `
 			INSERT INTO tasks(user_id, group_id, file_id, line_no, text, hash, checked, due_date, updated_at)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			userID,
@@ -1177,10 +1185,10 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 
 	ownerClause, ownerArgs = ownerWhereClause(userID, groupID, "fts")
 	ownerArgs = append(ownerArgs, relPath)
-	if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO fts(user_id, group_id, path, title, body) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), relPath, meta.Title, string(content)); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "INSERT INTO fts(user_id, group_id, path, title, body) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), relPath, meta.Title, string(content)); err != nil {
 		return err
 	}
 
@@ -1199,7 +1207,7 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 	}
 	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
 	ownerArgs = append(ownerArgs, relPath)
-	err = i.db.QueryRowContext(ctx, "SELECT id, hash, mtime_unix, size FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).
+	err = i.queryRowContext(ctx, "SELECT id, hash, mtime_unix, size FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).
 		Scan(&rec.ID, &rec.Hash, &rec.MTimeUnix, &rec.Size)
 	if errors.Is(err, sql.ErrNoRows) {
 		return i.IndexNote(ctx, notePath, content, mtime, size)
@@ -1214,7 +1222,7 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 	hash := sha256.Sum256(content)
 	checksum := hex.EncodeToString(hash[:])
 	if checksum == rec.Hash {
-		_, err := i.db.ExecContext(ctx, "UPDATE files SET mtime_unix=?, size=? WHERE id=?", mtime.Unix(), size, rec.ID)
+		_, err := i.execContext(ctx, "UPDATE files SET mtime_unix=?, size=? WHERE id=?", mtime.Unix(), size, rec.ID)
 		return err
 	}
 	return i.IndexNote(ctx, notePath, content, mtime, size)
@@ -1231,7 +1239,7 @@ func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, erro
 	}
 	query += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ?"
 	args = append(args, limit)
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1272,7 +1280,7 @@ func (i *Index) RecentNotesPage(ctx context.Context, limit int, offset int) ([]N
 	}
 	query += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1371,7 +1379,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	sqlStr += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
-	rows, err := i.db.QueryContext(ctx, sqlStr, args...)
+	rows, err := i.queryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1436,7 +1444,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 				ORDER BY tasks.due_date ASC, tasks.updated_at DESC
 				LIMIT ?`
 			args = append(args, limit)
-			rows, err = i.db.QueryContext(ctx, query, args...)
+			rows, err = i.queryContext(ctx, query, args...)
 		} else {
 			exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
 			query := fmt.Sprintf(`
@@ -1464,7 +1472,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 				ORDER BY (tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC
 				LIMIT ?`
 			args = append(args, limit)
-			rows, err = i.db.QueryContext(ctx, query, args...)
+			rows, err = i.queryContext(ctx, query, args...)
 		}
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
@@ -1513,7 +1521,7 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			args = append(args, dueDate)
 		}
 		args = append(args, len(tags), limit)
-		rows, err = i.db.QueryContext(ctx, query, args...)
+		rows, err = i.queryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, err
@@ -1642,7 +1650,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 				LIMIT ?`
 			args = append(args, limit)
 		}
-		rows, err = i.db.QueryContext(ctx, query, args...)
+		rows, err = i.queryContext(ctx, query, args...)
 	} else {
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
@@ -1654,7 +1662,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 				JOIN file_histories ON files.id = file_histories.file_id
 				JOIN file_tags ON files.id = file_tags.file_id
 				JOIN tags ON tags.id = file_tags.tag_id
-				WHERE file_histories.action_date = ? AND tags.name IN (` + placeholders + `) AND ` + exclusiveClause + `
+				WHERE file_histories.action_date = ? AND tags.name IN (`+placeholders+`) AND `+exclusiveClause+`
 				GROUP BY files.id
 				HAVING COUNT(DISTINCT tags.name) = ?
 			)
@@ -1696,7 +1704,7 @@ func (i *Index) OpenTasksByDate(ctx context.Context, tags []string, limit int, d
 		} else {
 			args = append(args, limit)
 		}
-		rows, err = i.db.QueryContext(ctx, query, args...)
+		rows, err = i.queryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, err
@@ -1784,7 +1792,7 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND tags.name IN (` + placeholders + `)
+			WHERE tasks.checked = 0 AND tags.name IN (`+placeholders+`)
 		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		if len(accessClauses) > 0 {
@@ -1810,7 +1818,7 @@ func (i *Index) NotesWithOpenTasks(ctx context.Context, tags []string, limit int
 		args = append(args, len(tags), limit, offset)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1887,7 +1895,7 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 			JOIN tasks ON files.id = tasks.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (` + placeholders + `)
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND tags.name IN (`+placeholders+`)
 		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		args = make([]interface{}, 0, len(tags)+4+len(folderArgs))
@@ -1912,7 +1920,7 @@ func (i *Index) NotesWithDueTasks(ctx context.Context, tags []string, dueDate st
 		args = append(args, len(tags), limit, offset)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1995,7 +2003,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			WHERE tasks.checked = 0 AND file_histories.action_date = ? AND tags.name IN (`+placeholders+`)
 		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		args = make([]interface{}, 0, len(tags)+4+len(folderArgs))
@@ -2020,7 +2028,7 @@ func (i *Index) NotesWithOpenTasksByDate(ctx context.Context, tags []string, act
 		args = append(args, len(tags), limit, offset)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2106,7 +2114,7 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 			JOIN file_histories ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
 			JOIN tags ON tags.id = file_tags.tag_id
-			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (` + placeholders + `)
+			WHERE tasks.checked = 0 AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ? AND file_histories.action_date = ? AND tags.name IN (`+placeholders+`)
 		`, ownerNameExpr(), ownerJoins("files"))
 		query += " AND " + exclusiveClause
 		args = make([]interface{}, 0, len(tags)+5+len(folderArgs))
@@ -2131,7 +2139,7 @@ func (i *Index) NotesWithDueTasksByDate(ctx context.Context, tags []string, acti
 		args = append(args, len(tags), limit, offset)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2170,7 +2178,7 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 		WHERE %s
 		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "))
 	args = append(args, limit)
-	rows, err := i.db.QueryContext(ctx, queryStr, args...)
+	rows, err := i.queryContext(ctx, queryStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2226,7 +2234,7 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 			ORDER BY tags.name
 			LIMIT ?`
 		args = append(args, limit)
-		rows, err = i.db.QueryContext(ctx, query, args...)
+		rows, err = i.queryContext(ctx, query, args...)
 	} else {
 		query := `
 			SELECT tags.name, COUNT(file_tags.file_id)
@@ -2258,7 +2266,7 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 			ORDER BY tags.name
 			LIMIT ?`
 		args = append(args, limit)
-		rows, err = i.db.QueryContext(ctx, query, args...)
+		rows, err = i.queryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, err
@@ -2342,7 +2350,7 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	args = append(args, accessArgs...)
 	args = append(args, len(active), limit)
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2409,7 +2417,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 				ORDER BY tags.name
 				LIMIT ?`
 			args = append(args, limit)
-			rows, err = i.db.QueryContext(ctx, query, args...)
+			rows, err = i.queryContext(ctx, query, args...)
 		} else {
 			query := `
 				WITH matching_files AS (
@@ -2437,7 +2445,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 				ORDER BY tags.name
 				LIMIT ?`
 			args = append(args, limit)
-			rows, err = i.db.QueryContext(ctx, query, args...)
+			rows, err = i.queryContext(ctx, query, args...)
 		}
 		if err != nil {
 			return nil, err
@@ -2517,7 +2525,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	args = append(args, accessArgs...)
 	args = append(args, len(active), limit)
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2598,7 +2606,7 @@ func (i *Index) ListTagsWithOpenTasks(ctx context.Context, active []string, limi
 		args = append(args, len(active), limit)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2687,7 +2695,7 @@ func (i *Index) ListTagsWithOpenTasksByDate(ctx context.Context, active []string
 		args = append(args, len(active), limit)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2770,7 +2778,7 @@ func (i *Index) ListTagsWithDueTasks(ctx context.Context, active []string, dueDa
 		args = append(args, len(active), limit)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2862,7 +2870,7 @@ func (i *Index) ListTagsWithDueTasksByDate(ctx context.Context, active []string,
 		args = append(args, len(active), limit)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2888,7 +2896,7 @@ func (i *Index) ListFolders(ctx context.Context) ([]string, bool, error) {
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, false, err
 	}
@@ -2966,7 +2974,7 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 			ORDER BY file_histories.action_date DESC
 			LIMIT ?`
 		args = append(args, limit)
-		rows, err = i.db.QueryContext(ctx, query, args...)
+		rows, err = i.queryContext(ctx, query, args...)
 	} else {
 		query := `
 			SELECT file_histories.action_date, COUNT(DISTINCT file_histories.file_id)
@@ -2990,7 +2998,7 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 			ORDER BY file_histories.action_date DESC
 			LIMIT ?`
 		args = append(args, limit)
-		rows, err = i.db.QueryContext(ctx, query, args...)
+		rows, err = i.queryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, err
@@ -3031,7 +3039,7 @@ func (i *Index) ListUpdateDays(ctx context.Context, limit int, folder string, ro
 		ORDER BY updated_at DESC
 		LIMIT ?`
 	journalArgs = append(journalArgs, limit)
-	journalRows, err := i.db.QueryContext(ctx, journalQuery, journalArgs...)
+	journalRows, err := i.queryContext(ctx, journalQuery, journalArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -3136,7 +3144,7 @@ func (i *Index) CountNotesWithOpenTasks(ctx context.Context, tags []string, fold
 	}
 
 	var count int
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -3162,7 +3170,7 @@ func (i *Index) NoteSummaryByPath(ctx context.Context, notePath string) (NoteSum
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, files.uid, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
-	row := i.db.QueryRowContext(ctx, query, args...)
+	row := i.queryRowContext(ctx, query, args...)
 	var owner string
 	if err := row.Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID, &owner); err != nil {
 		return NoteSummary{}, err
@@ -3193,7 +3201,7 @@ func (i *Index) JournalNoteByDate(ctx context.Context, date string) (NoteSummary
 	var note NoteSummary
 	var mtimeUnix int64
 	var owner string
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID, &owner); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&note.Path, &note.Title, &mtimeUnix, &note.UID, &owner); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return NoteSummary{}, false, nil
 		}
@@ -3293,7 +3301,7 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 		args = append(args, len(tags), limit, offset)
 	}
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3322,7 +3330,7 @@ func (i *Index) JournalDates(ctx context.Context) ([]time.Time, error) {
 	if len(clauses) > 0 {
 		query += " AND " + strings.Join(clauses, " AND ")
 	}
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3364,7 +3372,7 @@ func (i *Index) CountJournalNotes(ctx context.Context, folder string, rootOnly b
 		args = append(args, folderArgs...)
 	}
 	var count int
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -3453,7 +3461,7 @@ func (i *Index) CountNotesWithOpenTasksByDate(ctx context.Context, tags []string
 	}
 
 	var count int
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -3529,7 +3537,7 @@ func (i *Index) CountTasks(ctx context.Context, filter TaskCountFilter) (int, er
 	}
 
 	var count int
-	err := i.db.QueryRowContext(ctx, sqlStr, args...).Scan(&count)
+	err := i.queryRowContext(ctx, sqlStr, args...).Scan(&count)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -3616,7 +3624,7 @@ func (i *Index) CountNotesWithDueTasks(ctx context.Context, tags []string, dueDa
 	}
 
 	var count int
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -3708,7 +3716,7 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 	}
 
 	var count int
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -3754,7 +3762,7 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string, ui
 	}
 	args = append(args, accessArgs...)
 
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3797,7 +3805,7 @@ func (i *Index) BrokenLinks(ctx context.Context) ([]BrokenLink, error) {
 		WHERE 1=1`+visibilityClause+accessClause+`
 		ORDER BY lower(broken_links.to_ref), lower(files.title), broken_links.line_no
 	`, ownerNameExpr(), ownerJoins("files"))
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3866,7 +3874,7 @@ func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, err
 		FROM files
 		%s
 	`, ownerNameExpr(), ownerJoins("files"))
-	rows, err := i.db.QueryContext(ctx, query)
+	rows, err := i.queryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -3888,19 +3896,19 @@ func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, err
 
 func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fileRecord, seen map[string]bool) (int, error) {
 	type missing struct {
-		id        int
-		userID    int
-		groupID   sql.NullInt64
-		path      string
+		id      int
+		userID  int
+		groupID sql.NullInt64
+		path    string
 	}
 	var missingRows []missing
 	for path, rec := range records {
 		if !seen[path] {
 			missingRows = append(missingRows, missing{
-				id:        rec.ID,
-				userID:    rec.UserID,
-				groupID:   rec.GroupID,
-				path:      rec.Path,
+				id:      rec.ID,
+				userID:  rec.UserID,
+				groupID: rec.GroupID,
+				path:    rec.Path,
 			})
 		}
 	}
@@ -3915,24 +3923,24 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 	defer tx.Rollback()
 
 	for _, row := range missingRows {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM file_tags WHERE file_id=?", row.id); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_tags WHERE file_id=?", row.id); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM links WHERE from_file_id=?", row.id); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM links WHERE from_file_id=?", row.id); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE file_id=?", row.id); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM tasks WHERE file_id=?", row.id); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM file_histories WHERE file_id=?", row.id); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_histories WHERE file_id=?", row.id); err != nil {
 			return 0, err
 		}
 		ownerClause, ownerArgs := ownerWhereClause(row.userID, row.groupID, "fts")
 		ownerArgs = append(ownerArgs, row.path)
-		if _, err := tx.ExecContext(ctx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE id=?", row.id); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM files WHERE id=?", row.id); err != nil {
 			return 0, err
 		}
 	}
@@ -3986,7 +3994,7 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := "SELECT files.id FROM files WHERE " + strings.Join(clauses, " AND ")
-	err = i.db.QueryRowContext(ctx, query, args...).Scan(&id)
+	err = i.queryRowContext(ctx, query, args...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -3996,18 +4004,14 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	return true, nil
 }
 
-type queryer interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, userID int, groupID sql.NullInt64, ref string) (int, error) {
+func (i *Index) resolveLinkTargetID(ctx context.Context, tx *sql.Tx, userID int, groupID sql.NullInt64, ref string) (int, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return 0, nil
 	}
 	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
 	var id int
-	err := q.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND uid=? LIMIT 1", append(ownerArgs, ref)...).Scan(&id)
+	err := i.queryRowContextTx(ctx, tx, "SELECT id FROM files WHERE "+ownerClause+" AND uid=? LIMIT 1", append(ownerArgs, ref)...).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -4023,7 +4027,7 @@ func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, userID int, 
 			candidates = append(candidates, path+".md")
 		}
 		for _, candidate := range candidates {
-			err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND lower(path)=lower(?) LIMIT 1", append(ownerArgs, candidate)...).Scan(&id)
+			err = i.queryRowContextTx(ctx, tx, "SELECT id FROM files WHERE "+ownerClause+" AND lower(path)=lower(?) LIMIT 1", append(ownerArgs, candidate)...).Scan(&id)
 			if err == nil {
 				return id, nil
 			}
@@ -4032,7 +4036,7 @@ func (i *Index) resolveLinkTargetID(ctx context.Context, q queryer, userID int, 
 			}
 		}
 	}
-	err = q.QueryRowContext(ctx, "SELECT id FROM files WHERE "+ownerClause+" AND lower(title)=lower(?) LIMIT 1", append(ownerArgs, ref)...).Scan(&id)
+	err = i.queryRowContextTx(ctx, tx, "SELECT id FROM files WHERE "+ownerClause+" AND lower(title)=lower(?) LIMIT 1", append(ownerArgs, ref)...).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -4061,7 +4065,7 @@ func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) 
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := "SELECT files.id FROM files WHERE " + strings.Join(clauses, " AND ")
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&id); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&id); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -4075,7 +4079,7 @@ func (i *Index) PathByFileID(ctx context.Context, id int) (string, error) {
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := fmt.Sprintf("SELECT files.path, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
 		return "", err
 	}
 	return joinOwnerPath(ownerName, relPath), nil
@@ -4093,7 +4097,7 @@ func (i *Index) PathByUID(ctx context.Context, uid string) (string, error) {
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := fmt.Sprintf("SELECT files.path, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
 		return "", err
 	}
 	return joinOwnerPath(ownerName, relPath), nil
@@ -4112,7 +4116,7 @@ func (i *Index) PathTitleByUID(ctx context.Context, uid string) (string, string,
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := fmt.Sprintf("SELECT files.path, files.title, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &title, &ownerName); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&relPath, &title, &ownerName); err != nil {
 		return "", "", err
 	}
 	return joinOwnerPath(ownerName, relPath), title, nil
@@ -4136,7 +4140,7 @@ func (i *Index) PathByTitleNewest(ctx context.Context, title string) (string, er
 		WHERE %s
 		ORDER BY files.updated_at DESC
 		LIMIT 1`, ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
-	if err := i.db.QueryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
+	if err := i.queryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
 		return "", err
 	}
 	return joinOwnerPath(ownerName, relPath), nil
@@ -4152,7 +4156,7 @@ func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
 	query += " ORDER BY files.path"
-	rows, err := i.db.QueryContext(ctx, query, args...)
+	rows, err := i.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

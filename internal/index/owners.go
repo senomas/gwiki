@@ -60,7 +60,7 @@ func (i *Index) SyncOwners(ctx context.Context, users []string, groups map[strin
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, "DELETE FROM group_members"); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM group_members"); err != nil {
 		return err
 	}
 	for groupName, members := range groups {
@@ -85,7 +85,7 @@ func (i *Index) SyncOwners(ctx context.Context, users []string, groups map[strin
 			if err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `
+			if _, err := i.execContextTx(ctx, tx, `
 				INSERT INTO group_members(group_id, user_id, access)
 				VALUES(?, ?, ?)
 			`, groupID, userID, access); err != nil {
@@ -121,7 +121,7 @@ func (i *Index) CanWriteOwner(ctx context.Context, ownerName, userName string) (
 		return false, err
 	}
 	var access string
-	err = i.db.QueryRowContext(ctx, `
+	err = i.queryRowContext(ctx, `
 		SELECT access
 		FROM group_members
 		WHERE group_id=? AND user_id=?
@@ -140,7 +140,7 @@ func (i *Index) ensureUser(ctx context.Context, name string) (int, error) {
 	if name == "" {
 		return 0, fmt.Errorf("empty user name")
 	}
-	if _, err := i.db.ExecContext(ctx, "INSERT OR IGNORE INTO users(name) VALUES(?)", name); err != nil {
+	if _, err := i.execContext(ctx, "INSERT OR IGNORE INTO users(name) VALUES(?)", name); err != nil {
 		return 0, err
 	}
 	return i.userIDByName(ctx, name)
@@ -155,33 +155,37 @@ func (i *Index) ensureGroup(ctx context.Context, name string) (int, error) {
 	if name == "" {
 		return 0, fmt.Errorf("empty group name")
 	}
-	if _, err := i.db.ExecContext(ctx, "INSERT OR IGNORE INTO groups(name) VALUES(?)", name); err != nil {
+	if _, err := i.execContext(ctx, "INSERT OR IGNORE INTO groups(name) VALUES(?)", name); err != nil {
 		return 0, err
 	}
 	return i.groupIDByName(ctx, name)
 }
 
 func (i *Index) userIDByName(ctx context.Context, name string) (int, error) {
-	return i.userIDByNameTx(ctx, i.db, name)
+	return i.userIDByNameTx(ctx, nil, name)
 }
 
 func (i *Index) groupIDByName(ctx context.Context, name string) (int, error) {
-	return i.groupIDByNameTx(ctx, i.db, name)
+	return i.groupIDByNameTx(ctx, nil, name)
 }
 
-type queryerTx interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
-func (i *Index) userIDByNameTx(ctx context.Context, q queryerTx, name string) (int, error) {
+func (i *Index) userIDByNameTx(ctx context.Context, tx *sql.Tx, name string) (int, error) {
 	var id int
-	err := q.QueryRowContext(ctx, "SELECT id FROM users WHERE name=?", name).Scan(&id)
+	if tx != nil {
+		err := i.queryRowContextTx(ctx, tx, "SELECT id FROM users WHERE name=?", name).Scan(&id)
+		return id, err
+	}
+	err := i.queryRowContext(ctx, "SELECT id FROM users WHERE name=?", name).Scan(&id)
 	return id, err
 }
 
-func (i *Index) groupIDByNameTx(ctx context.Context, q queryerTx, name string) (int, error) {
+func (i *Index) groupIDByNameTx(ctx context.Context, tx *sql.Tx, name string) (int, error) {
 	var id int
-	err := q.QueryRowContext(ctx, "SELECT id FROM groups WHERE name=?", name).Scan(&id)
+	if tx != nil {
+		err := i.queryRowContextTx(ctx, tx, "SELECT id FROM groups WHERE name=?", name).Scan(&id)
+		return id, err
+	}
+	err := i.queryRowContext(ctx, "SELECT id FROM groups WHERE name=?", name).Scan(&id)
 	return id, err
 }
 
@@ -245,7 +249,7 @@ func (i *Index) AccessFilterForUser(ctx context.Context, userName string) (int, 
 	if err != nil {
 		return 0, nil, err
 	}
-	rows, err := i.db.QueryContext(ctx, `
+	rows, err := i.queryContext(ctx, `
 		SELECT group_members.group_id
 		FROM group_members
 		WHERE group_members.user_id = ?
@@ -278,7 +282,7 @@ func (i *Index) WritableGroupsForUser(ctx context.Context, userName string) ([]s
 	if err != nil {
 		return nil, err
 	}
-	rows, err := i.db.QueryContext(ctx, `
+	rows, err := i.queryContext(ctx, `
 		SELECT groups.name
 		FROM group_members
 		JOIN groups ON groups.id = group_members.group_id
