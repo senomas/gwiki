@@ -21,6 +21,7 @@ import (
 type authEntry struct {
 	plain string
 	hash  *auth.Argon2idHash
+	roles []string
 }
 
 type Auth struct {
@@ -36,8 +37,8 @@ func newAuth(cfg config.Config) (*Auth, error) {
 		if err != nil {
 			return nil, err
 		}
-		for user, hash := range fileUsers {
-			users[user] = authEntry{hash: hash}
+		for user, entry := range fileUsers {
+			users[user] = authEntry{hash: entry.Hash, roles: entry.Roles}
 		}
 	}
 
@@ -65,7 +66,7 @@ func newAuth(cfg config.Config) (*Auth, error) {
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, ok := a.tokenUser(r); ok {
-			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true})
+			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true, Roles: a.rolesForUser(user)})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -76,7 +77,7 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
-			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true})
+			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true, Roles: a.rolesForUser(user)})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -98,6 +99,16 @@ func (a *Auth) verify(user, pass string) bool {
 
 func (a *Auth) Authenticate(user, pass string) bool {
 	return a.verify(user, pass)
+}
+
+func (a *Auth) rolesForUser(user string) []string {
+	entry, ok := a.users[user]
+	if !ok || len(entry.roles) == 0 {
+		return nil
+	}
+	out := make([]string, len(entry.roles))
+	copy(out, entry.roles)
+	return out
 }
 
 func (a *Auth) CreateToken(user string) (string, error) {

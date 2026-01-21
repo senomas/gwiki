@@ -9,6 +9,7 @@ const userKey contextKey = iota
 type User struct {
 	Name          string
 	Authenticated bool
+	Roles         []string
 }
 
 func WithUser(ctx context.Context, user User) context.Context {

@@ -78,16 +78,16 @@ The server creates `notes/` under `WIKI_REPO_PATH` and stores internal data unde
 - `WIKI_DATA_PATH` (internal data root; `index.sqlite` and auth file live here)
 - `WIKI_AUTH_USER`
 - `WIKI_AUTH_PASS`
-- `WIKI_AUTH_FILE` (per-line `user:$argon2id$...` hashes)
+- `WIKI_AUTH_FILE` (per-line `user:$argon2id$...[:role1,role2]`)
 - `WIKI_GIT_DEBOUNCE` (default: `3m`)
 - `WIKI_GIT_PUSH_DEBOUNCE` (default: `10m`)
 
 ### Auth file format
 
-Each non-empty, non-comment line is `user:argon2id_hash`:
+Each non-empty, non-comment line is `user:argon2id_hash` with optional roles:
 
 ```
-alice:$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$FqYyK9XjY6Z8w1mYp0KXcg
+alice:$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$FqYyK9XjY6Z8w1mYp0KXcg:admin,staff
 ```
 
 If both `WIKI_AUTH_FILE` and `WIKI_AUTH_USER`/`WIKI_AUTH_PASS` are set, both are

@@ -225,11 +225,16 @@ func userExists(path, user string) (bool, error) {
 	return ok, nil
 }
 
-func readAuthFile(path string) (map[string]string, error) {
+type authRecord struct {
+	Hash  string
+	Roles []string
+}
+
+func readAuthFile(path string) (map[string]authRecord, error) {
 	_, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]string{}, nil
+			return map[string]authRecord{}, nil
 		}
 		return nil, fmt.Errorf("stat auth file: %w", err)
 	}
@@ -239,7 +244,7 @@ func readAuthFile(path string) (map[string]string, error) {
 	}
 	defer f.Close()
 
-	users := make(map[string]string)
+	users := make(map[string]authRecord)
 	scanner := bufio.NewScanner(f)
 	lineNum := 0
 	for scanner.Scan() {
@@ -248,8 +253,8 @@ func readAuthFile(path string) (map[string]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 2 {
 			return nil, fmt.Errorf("invalid auth line %d: expected user:hash", lineNum)
 		}
 		user := strings.TrimSpace(parts[0])
@@ -260,7 +265,21 @@ func readAuthFile(path string) (map[string]string, error) {
 		if _, exists := users[user]; exists {
 			return nil, fmt.Errorf("duplicate user %q in auth file", user)
 		}
-		users[user] = hash
+		var roles []string
+		if len(parts) == 3 {
+			rawRoles := strings.TrimSpace(parts[2])
+			if rawRoles != "" {
+				items := strings.Split(rawRoles, ",")
+				for _, item := range items {
+					role := strings.TrimSpace(item)
+					if role == "" {
+						continue
+					}
+					roles = append(roles, role)
+				}
+			}
+		}
+		users[user] = authRecord{Hash: hash, Roles: roles}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read auth file: %w", err)
@@ -268,7 +287,7 @@ func readAuthFile(path string) (map[string]string, error) {
 	return users, nil
 }
 
-func writeAuthFile(path string, users map[string]string, removeUser string) error {
+func writeAuthFile(path string, users map[string]authRecord, removeUser string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create auth dir: %w", err)
@@ -283,7 +302,12 @@ func writeAuthFile(path string, users map[string]string, removeUser string) erro
 	sort.Strings(names)
 	lines := make([]string, 0, len(names))
 	for _, name := range names {
-		lines = append(lines, fmt.Sprintf("%s:%s", name, users[name]))
+		record := users[name]
+		line := fmt.Sprintf("%s:%s", name, record.Hash)
+		if len(record.Roles) > 0 {
+			line += ":" + strings.Join(record.Roles, ",")
+		}
+		lines = append(lines, line)
 	}
 	content := strings.Join(lines, "\n")
 	if content != "" {
@@ -335,13 +359,20 @@ func upsertAuthFile(path, user, hash string) error {
 				lines = append(lines, raw)
 				continue
 			}
-			parts := strings.SplitN(trim, ":", 2)
-			if len(parts) != 2 {
+			parts := strings.SplitN(trim, ":", 3)
+			if len(parts) < 2 {
 				f.Close()
 				return fmt.Errorf("invalid auth line %d: expected user:hash", lineNum)
 			}
 			if parts[0] == user {
-				lines = append(lines, fmt.Sprintf("%s:%s", user, hash))
+				line := fmt.Sprintf("%s:%s", user, hash)
+				if len(parts) == 3 {
+					roles := strings.TrimSpace(parts[2])
+					if roles != "" {
+						line += ":" + roles
+					}
+				}
+				lines = append(lines, line)
 				updated = true
 			} else {
 				lines = append(lines, raw)

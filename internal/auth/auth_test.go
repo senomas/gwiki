@@ -31,7 +31,7 @@ func TestLoadFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	content := "# comment\n\nalice:" + hash + "\n"
+	content := "# comment\n\nalice:" + hash + ":admin, staff\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write auth file: %v", err)
 	}
@@ -44,8 +44,11 @@ func TestLoadFile(t *testing.T) {
 	if !ok {
 		t.Fatal("expected user alice")
 	}
-	if !entry.Verify("secret") {
+	if !entry.Hash.Verify("secret") {
 		t.Fatal("expected password to verify for alice")
+	}
+	if len(entry.Roles) != 2 || entry.Roles[0] != "admin" || entry.Roles[1] != "staff" {
+		t.Fatalf("expected roles [admin staff], got %v", entry.Roles)
 	}
 }
 

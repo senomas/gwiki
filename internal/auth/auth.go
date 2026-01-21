@@ -30,6 +30,11 @@ type Argon2idHash struct {
 	sum  []byte
 }
 
+type UserEntry struct {
+	Hash  *Argon2idHash
+	Roles []string
+}
+
 func HashPassword(password string) (string, error) {
 	if password == "" {
 		return "", errors.New("password must not be empty")
@@ -114,14 +119,14 @@ func (h *Argon2idHash) Verify(password string) bool {
 	return subtle.ConstantTimeCompare(sum, h.sum) == 1
 }
 
-func LoadFile(path string) (map[string]*Argon2idHash, error) {
+func LoadFile(path string) (map[string]UserEntry, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open auth file: %w", err)
 	}
 	defer f.Close()
 
-	users := make(map[string]*Argon2idHash)
+	users := make(map[string]UserEntry)
 	scanner := bufio.NewScanner(f)
 	lineNum := 0
 	for scanner.Scan() {
@@ -130,8 +135,8 @@ func LoadFile(path string) (map[string]*Argon2idHash, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 2 {
 			return nil, fmt.Errorf("invalid auth line %d: expected user:hash", lineNum)
 		}
 		user := strings.TrimSpace(parts[0])
@@ -149,11 +154,35 @@ func LoadFile(path string) (map[string]*Argon2idHash, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid auth line %d: %w", lineNum, err)
 		}
-		users[user] = parsed
+		roles := parseRoles(parts)
+		users[user] = UserEntry{Hash: parsed, Roles: roles}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read auth file: %w", err)
 	}
 
 	return users, nil
+}
+
+func parseRoles(parts []string) []string {
+	if len(parts) < 3 {
+		return nil
+	}
+	raw := strings.TrimSpace(parts[2])
+	if raw == "" {
+		return nil
+	}
+	items := strings.Split(raw, ",")
+	roles := make([]string, 0, len(items))
+	for _, item := range items {
+		role := strings.TrimSpace(item)
+		if role == "" {
+			continue
+		}
+		roles = append(roles, role)
+	}
+	if len(roles) == 0 {
+		return nil
+	}
+	return roles
 }
