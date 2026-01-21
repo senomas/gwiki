@@ -233,9 +233,37 @@ func readAuthFile(path string) (map[string]string, error) {
 		}
 		return nil, fmt.Errorf("stat auth file: %w", err)
 	}
-	users, err := auth.LoadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open auth file: %w", err)
+	}
+	defer f.Close()
+
+	users := make(map[string]string)
+	scanner := bufio.NewScanner(f)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid auth line %d: expected user:hash", lineNum)
+		}
+		user := strings.TrimSpace(parts[0])
+		hash := strings.TrimSpace(parts[1])
+		if user == "" || hash == "" {
+			return nil, fmt.Errorf("invalid auth line %d: empty user or hash", lineNum)
+		}
+		if _, exists := users[user]; exists {
+			return nil, fmt.Errorf("duplicate user %q in auth file", user)
+		}
+		users[user] = hash
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read auth file: %w", err)
 	}
 	return users, nil
 }
