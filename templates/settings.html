@@ -1,10 +1,7 @@
 {{define "settings"}}
 <div class="app-shell relative min-h-screen overflow-hidden">
   <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
-  <div class="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-8 md:flex-row md:gap-10 md:px-6 md:py-10">
-    <div id="sidebar-slot" hx-get="/sidebar" hx-trigger="load" hx-swap="outerHTML">
-      {{template "sidebar_skeleton" .}}
-    </div>
+  <div class="relative mx-auto flex min-h-screen max-w-4xl flex-col gap-6 px-4 py-8 md:px-6 md:py-10">
 
     <section class="flex-1 space-y-6">
       <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
@@ -21,23 +18,51 @@
         <p class="text-sm text-slate-400">User preferences for your notes.</p>
       </header>
 
-      <form class="rounded-2xl border border-slate-800/70 bg-[#121417]/85 p-6 text-sm text-slate-300" action="/settings/save" method="post">
-        {{if .ReturnURL}}
-          <input type="hidden" name="return_url" value="{{.ReturnURL}}">
-        {{end}}
-        <div class="space-y-2">
-          <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">List view</label>
-          <select class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="list_view">
-            <option value="compact" {{if .CompactNoteList}}selected{{end}}>Compact</option>
-            <option value="full" {{if .CompactNoteList}}{{else}}selected{{end}}>Full</option>
-          </select>
-          <p class="text-xs text-slate-500">Compact hides long note bodies in lists.</p>
-        </div>
-        <div class="mt-6 flex justify-end gap-2">
-          <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Save</button>
-        </div>
-      </form>
+      <details class="js-settings-accordion rounded-2xl border border-slate-800/70 bg-[#121417]/85 p-6 text-sm text-slate-300" open>
+        <summary class="cursor-pointer list-none text-sm font-semibold uppercase tracking-[0.2em] text-slate-300" tabindex="0">Appearance</summary>
+        <form id="settings-form" class="mt-5 space-y-4" action="/settings/save" method="post">
+          {{if .ReturnURL}}
+            <input type="hidden" name="return_url" value="{{.ReturnURL}}">
+          {{end}}
+          <div class="space-y-2">
+            <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">List view</label>
+            <select class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="list_view">
+              <option value="compact" {{if .CompactNoteList}}selected{{end}}>Compact</option>
+              <option value="full" {{if .CompactNoteList}}{{else}}selected{{end}}>Full</option>
+            </select>
+            <p class="text-xs text-slate-500">Compact hides long note bodies in lists.</p>
+          </div>
+        </form>
+      </details>
+      <details class="js-settings-accordion rounded-2xl border border-slate-800/70 bg-[#121417]/60 p-6 text-sm text-slate-400">
+        <summary class="cursor-pointer list-none text-sm font-semibold uppercase tracking-[0.2em] text-slate-300" tabindex="0">Synchronization</summary>
+        <p class="mt-4 text-sm text-slate-500">Sync settings will live here.</p>
+      </details>
+      <div class="flex justify-end">
+        <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit" form="settings-form">Save</button>
+      </div>
     </section>
   </div>
 </div>
+<script>
+  (function () {
+    var items = document.querySelectorAll(".js-settings-accordion");
+    if (!items.length) {
+      return;
+    }
+    items.forEach(function (item) {
+      item.addEventListener("toggle", function () {
+        if (!item.open) {
+          return;
+        }
+        items.forEach(function (other) {
+          if (other !== item) {
+            other.open = false;
+          }
+        });
+      });
+    });
+    // keyboard handling is centralized in base layout
+  })();
+</script>
 {{end}}

@@ -1010,6 +1010,34 @@
   </div>
   <script>
     (function () {
+      document.addEventListener("keydown", function (event) {
+        if (!event.ctrlKey || event.metaKey || event.altKey) {
+          return;
+        }
+        if (event.key === "h" || event.key === "j" || event.key === "k" || event.key === "l" || event.key === "y") {
+          event.preventDefault();
+        }
+      }, true);
+
+      document.addEventListener("keydown", function (event) {
+        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+          return;
+        }
+        if (event.ctrlKey || event.metaKey || event.altKey) {
+          return;
+        }
+        if (event.key !== "j" && event.key !== "k") {
+          return;
+        }
+        if (window.isEditableTarget && window.isEditableTarget(event.target)) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        var delta = event.key === "j" ? 120 : -120;
+        window.scrollBy({top: delta, left: 0, behavior: "smooth"});
+      }, true);
+
       var launcher = document.getElementById("quick-launcher");
       var input = document.getElementById("quick-launcher-input");
       var actionList = document.getElementById("quick-launcher-actions");
@@ -2228,96 +2256,79 @@
   <script>
     (function () {
       var launcher = document.getElementById("quick-launcher");
-      function getNoteBody() {
+      function isVisibleItem(item) {
+        if (!item || item.hasAttribute("disabled")) {
+          return false;
+        }
+        if (item.getAttribute("tabindex") === "-1") {
+          return false;
+        }
+        if (item.closest && item.closest("#folder-suggest")) {
+          return false;
+        }
+        return item.getClientRects().length > 0;
+      }
+      function isFormContext(target) {
+        if (!target) {
+          return false;
+        }
+        if (target.closest && target.closest("form")) {
+          return true;
+        }
+        if (target.hasAttribute && target.hasAttribute("form")) {
+          return true;
+        }
+        if (target.tagName === "SUMMARY") {
+          var details = target.closest("details");
+          return !!(details && details.querySelector("form"));
+        }
+        return false;
+      }
+      function formTargets() {
+        var nodes = [];
+        var forms = document.querySelectorAll("form");
+        forms.forEach(function (form) {
+          var formNodes = form.querySelectorAll("input, textarea, select, button, a[href], summary, [tabindex]");
+          nodes = nodes.concat(Array.prototype.slice.call(formNodes));
+        });
+        var formLinked = document.querySelectorAll("[form]");
+        formLinked.forEach(function (node) {
+          nodes.push(node);
+        });
+        var details = document.querySelectorAll("details");
+        details.forEach(function (detail) {
+          if (!detail.querySelector("form")) {
+            return;
+          }
+          var summary = detail.querySelector("summary");
+          if (summary) {
+            nodes.push(summary);
+          }
+        });
+        return nodes.filter(isVisibleItem);
+      }
+      function noteListTargets() {
+        var list = document.querySelector("[data-note-list]");
+        if (!list) {
+          return [];
+        }
+        var links = list.querySelectorAll("h1 a[href], h2 a[href], a.js-search-result, a.js-note-actions");
+        return Array.prototype.filter.call(links, isVisibleItem);
+      }
+      function noteDetailTargets() {
         var body = document.querySelector(".note-body[data-note-id][data-note-path]");
-        if (!body) {
-          return null;
+        if (!body || body.closest("[data-note-list]")) {
+          return [];
         }
-        if (body.closest("#notes-feed")) {
-          return null;
-        }
-        return body;
-      }
-      function getNotesFeed() {
-        return document.getElementById("notes-feed");
-      }
-      function getSearchInput() {
-        return document.getElementById("search-page-input");
-      }
-      function getSearchResults() {
-        return document.getElementById("search-results");
-      }
-      function noteFocusables(noteBody) {
-        var summaries = noteBody.querySelectorAll("summary");
-        summaries.forEach(function (summary) {
-          if (!summary.hasAttribute("tabindex")) {
-            summary.setAttribute("tabindex", "0");
-          }
-        });
-        var items = noteBody.querySelectorAll("a[href], button, input, textarea, select, summary");
-        return Array.prototype.filter.call(items, function (item) {
-          if (item.hasAttribute("disabled")) {
-            return false;
-          }
-          if (item.getAttribute("tabindex") === "-1") {
-            return false;
-          }
-          var details = item.closest("details");
-          if (details && !details.open && item.tagName !== "SUMMARY") {
-            return false;
-          }
-          return item.getClientRects().length > 0;
-        });
-      }
-      function feedFocusables(feed) {
-        var items = feed.querySelectorAll("h1 a[href]");
-        return Array.prototype.filter.call(items, function (item) {
-          if (item.hasAttribute("disabled")) {
-            return false;
-          }
-          if (item.getAttribute("tabindex") === "-1") {
-            return false;
-          }
-          return item.getClientRects().length > 0;
-        });
-      }
-      function searchTargets() {
-        var input = getSearchInput();
-        var results = getSearchResults();
         var items = [];
-        if (input) {
-          items.push(input);
+        var links = body.querySelectorAll("a[href]");
+        items = items.concat(Array.prototype.slice.call(links));
+        var backlinks = document.querySelector(".note-backlinks");
+        if (backlinks) {
+          var backLinks = backlinks.querySelectorAll("a[href]");
+          items = items.concat(Array.prototype.slice.call(backLinks));
         }
-        if (results) {
-          var links = results.querySelectorAll("a.js-search-result");
-          Array.prototype.forEach.call(links, function (item) {
-            if (item.hasAttribute("disabled")) {
-              return;
-            }
-            if (item.getAttribute("tabindex") === "-1") {
-              return;
-            }
-            if (item.getClientRects().length === 0) {
-              return;
-            }
-            items.push(item);
-          });
-        }
-        return items;
-      }
-      function navigationTargets() {
-        if (getSearchInput()) {
-          return searchTargets();
-        }
-        var noteBody = getNoteBody();
-        if (noteBody) {
-          return noteFocusables(noteBody);
-        }
-        var feed = getNotesFeed();
-        if (feed) {
-          return feedFocusables(feed);
-        }
-        return [];
+        return items.filter(isVisibleItem);
       }
 
       function currentIndex(items) {
@@ -2330,8 +2341,7 @@
         return -1;
       }
 
-      function moveFocus(delta) {
-        var items = navigationTargets();
+      function moveFocus(items, delta) {
         if (!items.length) {
           return;
         }
@@ -2365,17 +2375,40 @@
         } else {
           return;
         }
-        if (window.isEditableTarget && window.isEditableTarget(event.target)) {
-          return;
-        }
-        if (!getNoteBody() && !getNotesFeed() && !getSearchInput()) {
-          return;
-        }
         if (launcher && launcher.classList.contains("is-open")) {
           return;
         }
         event.preventDefault();
-        moveFocus(direction);
+        if (isFormContext(event.target)) {
+          moveFocus(formTargets(), direction);
+          return;
+        }
+        var listItems = noteListTargets();
+        if (listItems.length) {
+          moveFocus(listItems, direction);
+          return;
+        }
+        var noteItems = noteDetailTargets();
+        if (noteItems.length) {
+          moveFocus(noteItems, direction);
+        }
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+          return;
+        }
+        if (event.key !== "Enter") {
+          return;
+        }
+        if (!event.target || event.target.tagName !== "SUMMARY") {
+          return;
+        }
+        if (!isFormContext(event.target)) {
+          return;
+        }
+        event.preventDefault();
+        event.target.click();
       });
 
     })();

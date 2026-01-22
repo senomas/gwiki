@@ -244,120 +244,12 @@
         textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
       }, 0);
     }
-    function focusScope() {
-      var scopes = [];
-      if (form) {
-        scopes.push(form);
-      }
-      var upload = document.getElementById("note-upload-form");
-      if (upload) {
-        scopes.push(upload);
-      }
-      return scopes;
-    }
-
-    function moveFormFocus(event) {
-      if (!event.target) {
-        return false;
-      }
-      var scopes = focusScope();
-      if (!scopes.length) {
-        return false;
-      }
-      var inside = false;
-      for (var s = 0; s < scopes.length; s++) {
-        if (scopes[s].contains(event.target)) {
-          inside = true;
-          break;
-        }
-      }
-      if (!inside) {
-        return false;
-      }
-      var items = [];
-      scopes.forEach(function (scope) {
-        var nodes = scope.querySelectorAll("input, textarea, select, button, a[href], [tabindex]");
-        items = items.concat(Array.prototype.slice.call(nodes));
-      });
-      var focusables = Array.prototype.filter.call(items, function (item) {
-        if (item.hasAttribute("disabled")) {
-          return false;
-        }
-        if (item.getAttribute("tabindex") === "-1") {
-          return false;
-        }
-        if (item.closest && item.closest("#folder-suggest")) {
-          return false;
-        }
-        return item.getClientRects().length > 0;
-      });
-      event.preventDefault();
-      event.stopPropagation();
-      if (!focusables.length) {
-        return true;
-      }
-      var index = -1;
-      for (var i = 0; i < focusables.length; i++) {
-        if (focusables[i] === event.target) {
-          index = i;
-          break;
-        }
-      }
-      if (index < 0) {
-        return true;
-      }
-      var delta = event.key === "j" ? 1 : -1;
-      var next = index + delta;
-      if (next < 0 || next >= focusables.length) {
-        return true;
-      }
-      focusables[next].focus({preventScroll: true});
-      focusables[next].scrollIntoView({block: "nearest"});
-      return true;
-    }
-
-    if (form) {
-      form.addEventListener("keydown", function (event) {
-        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
-          return;
-        }
-        if (!event.ctrlKey) {
-          return;
-        }
-        if (event.key === "j" || event.key === "k") {
-          moveFormFocus(event);
-        }
-      }, true);
-    }
-    var uploadForm = document.getElementById("note-upload-form");
-    if (uploadForm) {
-      uploadForm.addEventListener("keydown", function (event) {
-        if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
-          return;
-        }
-        if (!event.ctrlKey) {
-          return;
-        }
-        if (event.key === "j" || event.key === "k") {
-          moveFormFocus(event);
-        }
-      }, true);
-    }
-
     document.addEventListener("keydown", function (event) {
       if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
         return;
       }
       if (!event.ctrlKey) {
         return;
-      }
-      if (event.defaultPrevented) {
-        return;
-      }
-      if (event.key === "j" || event.key === "k") {
-        if (moveFormFocus(event)) {
-          return;
-        }
       }
       if (event.key === "Enter") {
         if (!form) {
