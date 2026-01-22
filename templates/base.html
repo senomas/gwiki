@@ -1493,13 +1493,21 @@
           if (event.key === "j") {
             event.preventDefault();
             event.stopPropagation();
-            moveEditableFocus(1);
+            if (isFormContext(event.target)) {
+              moveFocus(formTargets(), 1);
+            } else {
+              moveEditableFocus(1);
+            }
             return;
           }
           if (event.key === "k") {
             event.preventDefault();
             event.stopPropagation();
-            moveEditableFocus(-1);
+            if (isFormContext(event.target)) {
+              moveFocus(formTargets(), -1);
+            } else {
+              moveEditableFocus(-1);
+            }
             return;
           }
         }
@@ -2286,11 +2294,22 @@
       }
       function formTargets() {
         var nodes = [];
-        var forms = document.querySelectorAll("form");
-        forms.forEach(function (form) {
-          var formNodes = form.querySelectorAll("input, textarea, select, button, a[href], summary, [tabindex]");
-          nodes = nodes.concat(Array.prototype.slice.call(formNodes));
-        });
+        var editForm = document.getElementById("note-edit-form");
+        var uploadForm = document.getElementById("note-upload-form");
+        if (editForm) {
+          var editNodes = editForm.querySelectorAll("input, textarea, select, button, a[href], summary, [tabindex]");
+          nodes = nodes.concat(Array.prototype.slice.call(editNodes));
+          if (uploadForm) {
+            var uploadNodes = uploadForm.querySelectorAll("input, textarea, select, button, a[href], summary, [tabindex]");
+            nodes = nodes.concat(Array.prototype.slice.call(uploadNodes));
+          }
+        } else {
+          var forms = document.querySelectorAll("form");
+          forms.forEach(function (form) {
+            var formNodes = form.querySelectorAll("input, textarea, select, button, a[href], summary, [tabindex]");
+            nodes = nodes.concat(Array.prototype.slice.call(formNodes));
+          });
+        }
         var formLinked = document.querySelectorAll("[form]");
         formLinked.forEach(function (node) {
           nodes.push(node);
@@ -2378,18 +2397,21 @@
         if (launcher && launcher.classList.contains("is-open")) {
           return;
         }
-        event.preventDefault();
         if (isFormContext(event.target)) {
+          event.preventDefault();
+          event.stopPropagation();
           moveFocus(formTargets(), direction);
           return;
         }
         var listItems = noteListTargets();
         if (listItems.length) {
+          event.preventDefault();
           moveFocus(listItems, direction);
           return;
         }
         var noteItems = noteDetailTargets();
         if (noteItems.length) {
+          event.preventDefault();
           moveFocus(noteItems, direction);
         }
       });
