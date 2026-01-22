@@ -6228,6 +6228,16 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		s.handleNoteDetailFragment(w, r, resolved)
 		return
 	}
+	if strings.HasSuffix(pathPart, "/backlinks") {
+		base := strings.TrimSuffix(pathPart, "/backlinks")
+		resolved, err := s.resolveNotePath(r.Context(), base)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.handleNoteBacklinksFragment(w, r, resolved)
+		return
+	}
 
 	resolved, err := s.resolveNotePath(r.Context(), pathPart)
 	if err != nil {
@@ -6263,6 +6273,20 @@ func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "note_detail", data)
+}
+
+func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Request, notePath string) {
+	data, status, err := s.buildNoteViewData(r, notePath, false)
+	if err != nil {
+		if status == http.StatusNotFound {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "note_backlinks", data)
 }
 
 func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, notePath string) {

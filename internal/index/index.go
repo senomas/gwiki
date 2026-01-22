@@ -3728,6 +3728,25 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string, ui
 		relPath = rel
 	}
 	candidates := backlinkCandidates(relPath, title, uid)
+	if notePath != relPath {
+		candidates = append(candidates, backlinkCandidates(notePath, title, uid)...)
+	}
+	if len(candidates) > 0 {
+		seen := make(map[string]struct{}, len(candidates))
+		unique := candidates[:0]
+		for _, candidate := range candidates {
+			key := strings.ToLower(strings.TrimSpace(candidate))
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			unique = append(unique, candidate)
+		}
+		candidates = unique
+	}
 	if len(candidates) == 0 {
 		return nil, nil
 	}
