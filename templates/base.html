@@ -2290,6 +2290,9 @@
         if (target.hasAttribute && target.hasAttribute("form")) {
           return true;
         }
+        if (target.classList && target.classList.contains("js-form-summary")) {
+          return true;
+        }
         if (target.tagName === "SUMMARY") {
           var details = target.closest("details");
           return !!(details && details.querySelector("form"));
@@ -2328,7 +2331,30 @@
             nodes.push(summary);
           }
         });
-        return nodes.filter(isVisibleItem);
+        var summaries = document.querySelectorAll(".js-form-summary");
+        summaries.forEach(function (summary) {
+          nodes.push(summary);
+        });
+        var filtered = nodes.filter(isVisibleItem);
+        filtered.sort(function (a, b) {
+          if (a === b) {
+            return 0;
+          }
+          if (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) {
+            return -1;
+          }
+          return 1;
+        });
+        var unique = [];
+        var seen = new Set();
+        filtered.forEach(function (item) {
+          if (seen.has(item)) {
+            return;
+          }
+          seen.add(item);
+          unique.push(item);
+        });
+        return unique;
       }
       function noteListTargets() {
         var list = document.querySelector("[data-note-list]");
