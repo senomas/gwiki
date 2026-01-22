@@ -12,6 +12,7 @@ type ViewData struct {
 	ContentHTML      template.HTML
 	AuthEnabled      bool
 	IsAuthenticated  bool
+	IsAdmin          bool
 	CurrentUser      User
 	NotePath         string
 	NoteTitle        string
@@ -84,11 +85,17 @@ type ViewData struct {
 	CompactNoteList  bool
 	ToastItems       []Toast
 	Groups           []string
+	SettingsUsers    []UserSummary
 }
 
 type OwnerOption struct {
 	Name  string
 	Label string
+}
+
+type UserSummary struct {
+	Name  string
+	Roles []string
 }
 
 type BacklinkView struct {

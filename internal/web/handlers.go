@@ -117,6 +117,7 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	if user, ok := CurrentUser(r.Context()); ok {
 		data.CurrentUser = user
 		data.IsAuthenticated = user.Authenticated
+		data.IsAdmin = hasRole(user.Roles, "admin")
 	}
 	cfg, err := s.loadUserConfig(r.Context())
 	if err != nil {
@@ -131,6 +132,19 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 			data.Groups = groups
 		}
 	}
+}
+
+func hasRole(roles []string, role string) bool {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return false
+	}
+	for _, candidate := range roles {
+		if strings.EqualFold(strings.TrimSpace(candidate), role) {
+			return true
+		}
+	}
+	return false
 }
 
 func currentUserName(ctx context.Context) string {
@@ -5256,6 +5270,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.attachViewData(r, &data)
+	if data.IsAdmin {
+		data.SettingsUsers = s.auth.ListUsers()
+	}
 	s.views.RenderPage(w, data)
 }
 

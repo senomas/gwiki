@@ -61,6 +61,24 @@
     details[open] > .journal-tree__summary::before {
       transform: rotate(90deg);
     }
+    .js-form-summary {
+      display: block;
+      width: 100%;
+      padding: 0.25rem 0.5rem;
+      margin: -0.25rem -0.5rem;
+      border-radius: 0.75rem;
+      outline: none;
+    }
+    .js-form-summary:focus {
+      outline: none;
+      box-shadow: none;
+      background: rgba(30, 41, 59, 0.4);
+    }
+    .js-form-target:focus {
+      outline: none;
+      box-shadow: none;
+      background: rgba(30, 41, 59, 0.4);
+    }
     .note-body h3 {
       font-size: 1.125rem;
     }
@@ -2334,6 +2352,10 @@
         var summaries = document.querySelectorAll(".js-form-summary");
         summaries.forEach(function (summary) {
           nodes.push(summary);
+        });
+        var focusTargets = document.querySelectorAll(".js-form-target");
+        focusTargets.forEach(function (item) {
+          nodes.push(item);
         });
         var filtered = nodes.filter(isVisibleItem);
         filtered.sort(function (a, b) {

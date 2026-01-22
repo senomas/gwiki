@@ -38,6 +38,41 @@
         <summary class="js-form-summary cursor-pointer list-none text-sm font-semibold uppercase tracking-[0.2em] text-slate-300" tabindex="0">Synchronization</summary>
         <p class="mt-4 text-sm text-slate-500">Sync settings will live here.</p>
       </details>
+      {{if .IsAdmin}}
+        <details class="js-settings-accordion rounded-2xl border border-slate-800/70 bg-[#121417]/60 p-6 text-sm text-slate-400">
+        <summary class="js-form-summary cursor-pointer list-none text-sm font-semibold uppercase tracking-[0.2em] text-slate-300" tabindex="0">User Management</summary>
+          <div class="mt-4 space-y-3">
+            {{if .SettingsUsers}}
+              <div class="overflow-hidden rounded-xl border border-slate-800/70 bg-[#0f1216]/80">
+                <table class="min-w-full text-left text-xs">
+                  <thead class="bg-[#0c0f12] text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                    <tr>
+                      <th class="px-4 py-2 font-semibold">Username</th>
+                      <th class="px-4 py-2 font-semibold">Roles</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800/70 text-slate-300">
+                    {{range .SettingsUsers}}
+                      <tr class="js-form-target outline-none focus:outline-none focus:ring-0 focus:bg-slate-800/40" tabindex="0">
+                        <td class="px-4 py-2 font-medium text-slate-100">{{.Name}}</td>
+                        <td class="px-4 py-2 text-slate-400">
+                          {{if .Roles}}
+                            {{range $i, $role := .Roles}}{{if $i}}, {{end}}{{$role}}{{end}}
+                          {{else}}
+                            —
+                          {{end}}
+                        </td>
+                      </tr>
+                    {{end}}
+                  </tbody>
+                </table>
+              </div>
+            {{else}}
+              <p class="text-sm text-slate-500">No users found.</p>
+            {{end}}
+          </div>
+        </details>
+      {{end}}
       <div class="flex justify-end">
         <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit" form="settings-form">Save</button>
       </div>

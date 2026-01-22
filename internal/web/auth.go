@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -98,6 +99,22 @@ func (a *Auth) rolesForUser(user string) []string {
 	out := make([]string, len(entry.roles))
 	copy(out, entry.roles)
 	return out
+}
+
+func (a *Auth) ListUsers() []UserSummary {
+	if a == nil || len(a.users) == 0 {
+		return nil
+	}
+	users := make([]UserSummary, 0, len(a.users))
+	for name, entry := range a.users {
+		roles := make([]string, len(entry.roles))
+		copy(roles, entry.roles)
+		users = append(users, UserSummary{Name: name, Roles: roles})
+	}
+	sort.Slice(users, func(i, j int) bool {
+		return strings.ToLower(users[i].Name) < strings.ToLower(users[j].Name)
+	})
+	return users
 }
 
 func (a *Auth) CreateToken(user string) (string, error) {
