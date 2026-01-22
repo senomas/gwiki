@@ -218,6 +218,10 @@
       border-color: rgba(125, 211, 252, 0.6);
       box-shadow: 0 20px 40px -30px rgba(125, 211, 252, 0.5);
     }
+    .combobox-option.combobox-option--active {
+      background: #1c2430;
+      color: #f8fafc;
+    }
     .note-body .youtube-card__thumb {
       width: 160px;
       flex-shrink: 0;
@@ -2397,12 +2401,6 @@
         if (launcher && launcher.classList.contains("is-open")) {
           return;
         }
-        if (isFormContext(event.target)) {
-          event.preventDefault();
-          event.stopPropagation();
-          moveFocus(formTargets(), direction);
-          return;
-        }
         var listItems = noteListTargets();
         if (listItems.length) {
           event.preventDefault();
@@ -2413,6 +2411,13 @@
         if (noteItems.length) {
           event.preventDefault();
           moveFocus(noteItems, direction);
+          return;
+        }
+        var formItems = formTargets();
+        if (formItems.length) {
+          event.preventDefault();
+          event.stopPropagation();
+          moveFocus(formItems, direction);
         }
       });
 

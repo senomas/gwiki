@@ -85,15 +85,19 @@
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Folder</label>
           <div class="relative">
-            <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" value="{{.NoteMeta.Folder}}" autocomplete="off" {{if .FolderOptions}}list="folder-options"{{end}}>
-          </div>
-          {{if .FolderOptions}}
-          <datalist id="folder-options">
-            {{range .FolderOptions}}
-              <option value="{{.}}"></option>
+            <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="folder" value="{{.NoteMeta.Folder}}" data-folder-input autocomplete="off">
+            {{if .FolderOptions}}
+            <div class="combobox-menu absolute z-10 mt-2 hidden w-full rounded-xl border border-slate-700/80 bg-[#0f1216] p-1 text-sm text-slate-100 shadow-[0_12px_30px_-20px_rgba(15,23,42,0.9)]">
+              <div class="max-h-56 overflow-auto">
+                {{range .FolderOptions}}
+                  <div class="combobox-option flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-[#1c2430] hover:text-slate-100" role="option" tabindex="-1" data-folder-option data-folder-name="{{.}}">
+                    <span>{{.}}</span>
+                  </div>
+                {{end}}
+              </div>
+            </div>
             {{end}}
-          </datalist>
-          {{end}}
+          </div>
         </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Priority</label>
@@ -562,7 +566,156 @@
 </script>
 <script>
   (function () {
-    // datalist handles folder suggestions
+    var input = document.querySelector("[data-folder-input]");
+    var suggest = document.querySelector(".combobox-menu");
+    if (!input || !suggest) {
+      return;
+    }
+    var options = Array.from(suggest.querySelectorAll(".combobox-option"));
+    var activeIndex = -1;
+    function fuzzyMatch(term, candidate) {
+      if (term === "") {
+        return true;
+      }
+      var normalize = function (value) {
+        return value.replace(/[^a-z0-9]+/g, "");
+      };
+      var subseq = function (needle, haystack) {
+        var ni = 0;
+        var hi = 0;
+        while (ni < needle.length && hi < haystack.length) {
+          if (needle.charAt(ni) === haystack.charAt(hi)) {
+            ni += 1;
+          }
+          hi += 1;
+        }
+        return ni === needle.length;
+      };
+      var termClean = normalize(term);
+      var candidateClean = normalize(candidate);
+      if (subseq(termClean, candidateClean)) {
+        return true;
+      }
+      var initials = candidate
+        .split(/[^a-z0-9]+/g)
+        .filter(Boolean)
+        .map(function (part) {
+          return part.charAt(0);
+        })
+        .join("");
+      return subseq(termClean, initials);
+    }
+    function applyFilter(query) {
+      var term = query.trim().toLowerCase();
+      var visible = 0;
+      options.forEach(function (option) {
+        var name = option.getAttribute("data-folder-name") || option.textContent || "";
+        var match = fuzzyMatch(term, name.toLowerCase());
+        option.style.display = match ? "" : "none";
+        if (match) {
+          visible += 1;
+        }
+      });
+      if (visible > 0) {
+        suggest.classList.remove("hidden");
+      } else {
+        suggest.classList.add("hidden");
+      }
+      activeIndex = -1;
+      options.forEach(function (option) {
+        option.classList.remove("combobox-option--active");
+      });
+    }
+    function visibleOptions() {
+      return options.filter(function (option) {
+        return option.style.display !== "none";
+      });
+    }
+    function setActive(index) {
+      var visible = visibleOptions();
+      visible.forEach(function (option) {
+        option.classList.remove("combobox-option--active");
+      });
+      if (!visible.length) {
+        activeIndex = -1;
+        return;
+      }
+      if (index < 0) {
+        index = visible.length - 1;
+      }
+      if (index >= visible.length) {
+        index = 0;
+      }
+      activeIndex = index;
+      var target = visible[index];
+      target.classList.add("combobox-option--active");
+      target.scrollIntoView({block: "nearest"});
+    }
+    function applySelection(option) {
+      if (!option) {
+        return;
+      }
+      var name = option.getAttribute("data-folder-name") || option.textContent || "";
+      input.value = name;
+      suggest.classList.add("hidden");
+    }
+    input.addEventListener("focus", function () {
+      applyFilter(input.value);
+    });
+    input.addEventListener("input", function () {
+      applyFilter(input.value);
+    });
+    input.addEventListener("keydown", function (event) {
+      if (suggest.classList.contains("hidden")) {
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActive(activeIndex + 1);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActive(activeIndex - 1);
+        return;
+      }
+      if (event.key === "Enter") {
+        var visible = visibleOptions();
+        if (!visible.length) {
+          return;
+        }
+        event.preventDefault();
+        var option = visible[activeIndex >= 0 ? activeIndex : 0];
+        applySelection(option);
+      }
+    });
+    input.addEventListener("blur", function () {
+      window.setTimeout(function () {
+        suggest.classList.add("hidden");
+      }, 100);
+    });
+    suggest.addEventListener("mousedown", function (event) {
+      event.preventDefault();
+    });
+    suggest.addEventListener("click", function (event) {
+      var option = event.target.closest(".combobox-option");
+      if (!option) {
+        return;
+      }
+      applySelection(option);
+      input.focus();
+    });
+    suggest.addEventListener("mousemove", function (event) {
+      var option = event.target.closest(".combobox-option");
+      if (!option) {
+        return;
+      }
+      var visible = visibleOptions();
+      var idx = visible.indexOf(option);
+      if (idx >= 0 && idx !== activeIndex) {
+        setActive(idx);
+      }
+    });
   })();
 </script>
 <script>
