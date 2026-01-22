@@ -70,17 +70,6 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		user, pass, ok := r.BasicAuth()
-		if ok {
-			if !a.verify(user, pass) {
-				w.Header().Set("WWW-Authenticate", `Basic realm="gwiki"`)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true, Roles: a.rolesForUser(user)})
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
 		ctx := index.WithPublicVisibility(r.Context())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

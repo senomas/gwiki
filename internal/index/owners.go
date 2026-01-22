@@ -312,6 +312,45 @@ func (i *Index) WritableGroupsForUser(ctx context.Context, userName string) ([]s
 	return groups, nil
 }
 
+func (i *Index) GroupsForUser(ctx context.Context, userName string) ([]string, error) {
+	userName = strings.TrimSpace(userName)
+	if userName == "" {
+		return nil, fmt.Errorf("empty user name")
+	}
+	userID, err := i.userIDByName(ctx, userName)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := i.queryContext(ctx, `
+		SELECT groups.name
+		FROM group_members
+		JOIN groups ON groups.id = group_members.group_id
+		WHERE group_members.user_id = ?
+		ORDER BY groups.name
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		groups = append(groups, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
 func (i *Index) actorUserID(ctx context.Context) (int, error) {
 	if filter, ok := accessFilterFromContext(ctx); ok && filter.userID > 0 {
 		return filter.userID, nil

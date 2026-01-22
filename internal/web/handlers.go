@@ -123,6 +123,14 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 		slog.Warn("load user config", "err", err)
 	}
 	data.CompactNoteList = cfg.CompactNoteListValue()
+	if data.IsAuthenticated {
+		groups, err := s.idx.GroupsForUser(r.Context(), data.CurrentUser.Name)
+		if err != nil {
+			slog.Warn("load groups", "err", err)
+		} else {
+			data.Groups = groups
+		}
+	}
 }
 
 func currentUserName(ctx context.Context) string {
@@ -374,7 +382,6 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	if IsAuthenticated(r.Context()) {
 		return true
 	}
-	w.Header().Set("WWW-Authenticate", `Basic realm="gwiki"`)
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	return false
 }
@@ -5437,6 +5444,23 @@ func (s *Server) handleToastDismiss(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderTemplate(w, "toast", data)
 }
 
+func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sidebarReq, basePath := sidebarRequest(r)
+	data := ViewData{
+		ContentTemplate: "sidebar",
+	}
+	if err := s.populateSidebarData(sidebarReq, basePath, &data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.attachViewData(sidebarReq, &data)
+	s.views.RenderTemplate(w, "sidebar", data)
+}
+
 func extractFirstListItem(htmlStr string) string {
 	start := strings.Index(htmlStr, "<li")
 	if start == -1 {
@@ -8284,4 +8308,33 @@ func sanitizeReturnURL(r *http.Request, raw string) string {
 		return parsed.Path
 	}
 	return ""
+}
+
+func sidebarRequest(r *http.Request) (*http.Request, string) {
+	raw := strings.TrimSpace(r.Header.Get("HX-Current-URL"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.Referer())
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed == nil {
+		return r, "/"
+	}
+	basePath := sidebarBasePath(parsed.Path)
+	clone := *r
+	clone.URL = parsed
+	return &clone, basePath
+}
+
+func sidebarBasePath(path string) string {
+	if strings.HasPrefix(path, "/daily/") {
+		return path
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
 }

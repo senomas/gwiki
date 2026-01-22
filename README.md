@@ -91,7 +91,7 @@ alice:$argon2id$v=19$m=65536,t=3,p=1$c2FsdA$FqYyK9XjY6Z8w1mYp0KXcg:admin,staff
 ```
 
 If both `WIKI_AUTH_FILE` and `WIKI_AUTH_USER`/`WIKI_AUTH_PASS` are set, both are
-accepted (env wins on duplicate usernames).
+accepted (env wins on duplicate usernames). Authentication uses the built-in login flow.
 
 ### Add, list, or remove a user
 

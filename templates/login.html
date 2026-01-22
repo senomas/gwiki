@@ -13,21 +13,85 @@
         {{.ErrorMessage}}
       </div>
       {{end}}
-      <form class="mt-6 space-y-4" action="/login" method="post">
+      <form id="login-form" class="mt-6 space-y-4" action="/login" method="post">
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Username</label>
-          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="username" autocomplete="username" required>
+          <input id="login-username" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="username" autocomplete="username" required>
         </div>
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Password</label>
-          <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="password" name="password" autocomplete="current-password" required>
+          <input id="login-password" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="password" name="password" autocomplete="current-password" required>
         </div>
-        <div class="flex justify-end gap-2">
-          <a class="rounded-xl border border-slate-700/70 bg-[#121417] px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="/">Cancel</a>
+        <div class="flex justify-end">
           <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Login</button>
         </div>
       </form>
     </section>
   </div>
 </div>
+<script>
+  (function () {
+    var form = document.getElementById("login-form");
+    var username = document.getElementById("login-username");
+    if (username) {
+      window.setTimeout(function () {
+        username.focus();
+      }, 0);
+    }
+    if (!form) {
+      return;
+    }
+    function focusables() {
+      var items = form.querySelectorAll("input, textarea, select, button, a[href], [tabindex]");
+      return Array.prototype.filter.call(items, function (item) {
+        if (item.hasAttribute("disabled")) {
+          return false;
+        }
+        if (item.getAttribute("tabindex") === "-1") {
+          return false;
+        }
+        return item.getClientRects().length > 0;
+      });
+    }
+    function moveFocus(delta) {
+      var items = focusables();
+      if (!items.length) {
+        return;
+      }
+      var active = document.activeElement;
+      var index = -1;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i] === active) {
+          index = i;
+          break;
+        }
+      }
+      if (index < 0) {
+        return;
+      }
+      var next = index + delta;
+      if (next < 0 || next >= items.length) {
+        return;
+      }
+      items[next].focus({preventScroll: true});
+      items[next].scrollIntoView({block: "nearest"});
+    }
+    form.addEventListener("keydown", function (event) {
+      if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
+        return;
+      }
+      if (event.ctrlKey && (event.key === "j" || event.key === "k")) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveFocus(event.key === "j" ? 1 : -1);
+        return;
+      }
+      if (event.key === "Enter" && (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA")) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveFocus(1);
+      }
+    }, true);
+  })();
+</script>
 {{end}}

@@ -83,6 +83,7 @@ type ViewData struct {
 	BuildVersion     string
 	CompactNoteList  bool
 	ToastItems       []Toast
+	Groups           []string
 }
 
 type OwnerOption struct {

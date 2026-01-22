@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -291,15 +293,34 @@ func TestAttachmentAndAssetAccessControl(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	assertStatus := func(path string, want int, withAuth bool) {
-		req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+	loginClient := func() *http.Client {
+		jar, err := cookiejar.New(nil)
 		if err != nil {
-			t.Fatalf("new request: %v", err)
+			t.Fatalf("cookie jar: %v", err)
 		}
+		client := &http.Client{Jar: jar}
+		form := url.Values{}
+		form.Set("username", "alice")
+		form.Set("password", "secret")
+		resp, err := client.PostForm(ts.URL+"/login", form)
+		if err != nil {
+			t.Fatalf("login request: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther && resp.StatusCode != http.StatusOK {
+			t.Fatalf("login status: %d", resp.StatusCode)
+		}
+		return client
+	}
+
+	authClient := loginClient()
+
+	assertStatus := func(path string, want int, withAuth bool) {
+		client := http.DefaultClient
 		if withAuth {
-			req.SetBasicAuth("alice", "secret")
+			client = authClient
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Get(ts.URL + path)
 		if err != nil {
 			t.Fatalf("do request: %v", err)
 		}

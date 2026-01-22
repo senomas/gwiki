@@ -137,6 +137,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/toast/", s.handleToastDismiss)
 	s.mux.HandleFunc("/settings", s.handleSettings)
 	s.mux.HandleFunc("/settings/save", s.handleSettingsSave)
+	s.mux.HandleFunc("/sidebar", s.handleSidebar)
 	s.mux.HandleFunc("/", s.handleHome)
 	s.mux.HandleFunc("/search", s.handleSearch)
 	s.mux.HandleFunc("/notes/new", s.handleNewNote)

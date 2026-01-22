@@ -14,7 +14,9 @@
 >
   {{template "sidebar_content" .}}
 </aside>
-{{end}} {{define "sidebar_content"}}
+{{end}}
+
+{{define "sidebar_content"}}
 <div>
   <div
     class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-500"
@@ -103,6 +105,22 @@
   </div>
 </div>
 
+{{if .Groups}}
+<div>
+  <div
+    class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500"
+  >
+    <span>Groups</span>
+    <span class="text-slate-600">.</span>
+  </div>
+  <div class="mt-3 flex flex-wrap gap-2 text-xs">
+    {{range .Groups}}
+      <span class="rounded-full border border-slate-800/70 bg-[#15181c]/60 px-2.5 py-1 text-slate-300">{{.}}</span>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
 <div>
   <div
     class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500"
@@ -161,6 +179,34 @@
 
 <div class="text-xs uppercase tracking-[0.2em] text-slate-600">
   GWIKI v{{.BuildVersion}}
+</div>
+{{end}}
+
+{{define "sidebar_skeleton"}}
+<div class="w-full rounded-3xl border border-slate-800/70 bg-[#121417]/60 p-5 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)] backdrop-blur">
+  <div class="space-y-6 animate-pulse text-xs text-slate-600">
+    <div class="h-4 w-24 rounded bg-slate-800/70"></div>
+    <div class="space-y-2">
+      <div class="h-3 w-full rounded bg-slate-800/70"></div>
+      <div class="h-3 w-5/6 rounded bg-slate-800/70"></div>
+      <div class="h-3 w-2/3 rounded bg-slate-800/70"></div>
+    </div>
+    <div class="space-y-2">
+      <div class="h-3 w-20 rounded bg-slate-800/70"></div>
+      <div class="flex flex-wrap gap-2">
+        <div class="h-6 w-14 rounded-full bg-slate-800/70"></div>
+        <div class="h-6 w-20 rounded-full bg-slate-800/70"></div>
+        <div class="h-6 w-12 rounded-full bg-slate-800/70"></div>
+      </div>
+    </div>
+    <div class="space-y-2">
+      <div class="h-3 w-16 rounded bg-slate-800/70"></div>
+      <div class="space-y-2">
+        <div class="h-3 w-full rounded bg-slate-800/70"></div>
+        <div class="h-3 w-4/5 rounded bg-slate-800/70"></div>
+      </div>
+    </div>
+  </div>
 </div>
 {{end}}
 
