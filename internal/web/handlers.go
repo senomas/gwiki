@@ -4863,6 +4863,9 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		}
 		contentBytes, err := os.ReadFile(fullPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				_ = s.idx.RemoveNoteByPath(r.Context(), path)
+			}
 			continue
 		}
 		snippet := index.UncheckedTasksSnippet(string(contentBytes))
@@ -5500,6 +5503,10 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 		}
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				_ = s.idx.RemoveNoteByPath(ctx, note.Path)
+				continue
+			}
 			return nil, offset, false, err
 		}
 		normalized := normalizeLineEndings(string(content))
