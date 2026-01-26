@@ -47,6 +47,7 @@ Open Settings from the launcher. You can switch the list view between compact an
 - Each user can store git credentials in `WIKI_DATA_PATH/<username>.cred`.
 - The file format matches `.git-credentials` so `git credential-store` can write to it.
 - Sync runs one at a time; if another sync is active, the UI shows a "sync already in progress" message after a short wait.
+- The server runs a built-in scheduler (`WIKI_GIT_SCHEDULE`, default `10m`) for all users and groups with repos. Set it to `0` to disable.
 
 ## Markdown Basics
 

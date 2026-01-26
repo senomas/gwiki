@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"gwiki/internal/auth"
 	"gwiki/internal/config"
 	"gwiki/internal/index"
+	"gwiki/internal/syncer"
 	"gwiki/internal/web"
 
 	"golang.org/x/term"
@@ -44,8 +46,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	dataPath, err := resolveDataPath(cfg)
+	if err != nil {
+		slog.Error("resolve data path", "err", err)
+		os.Exit(1)
+	}
+	cfg.DataPath = dataPath
 	if err := os.MkdirAll(cfg.DataPath, 0o755); err != nil {
-		slog.Error("create .wiki dir", "err", err)
+		slog.Error("create data dir", "err", err)
 		os.Exit(1)
 	}
 
@@ -77,7 +85,9 @@ func main() {
 		os.Exit(1)
 	}
 	groupMembers := make(map[string][]index.GroupMember, len(groupFile))
+	groupNames := make([]string, 0, len(groupFile))
 	for group, members := range groupFile {
+		groupNames = append(groupNames, group)
 		list := make([]index.GroupMember, 0, len(members))
 		for _, member := range members {
 			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
@@ -97,6 +107,7 @@ func main() {
 		slog.Error("auth init", "err", err)
 		os.Exit(1)
 	}
+	startGitScheduler(cfg, idx, users, groupNames)
 	slog.Info("listening", "addr", cfg.ListenAddr)
 	if err := http.ListenAndServe(cfg.ListenAddr, srv.Handler()); err != nil {
 		slog.Error("server error", "err", err)
@@ -131,6 +142,139 @@ func selectLogWriter() (io.Writer, io.Closer) {
 		return os.Stdout, nil
 	}
 	return file, file
+}
+
+func resolveDataPath(cfg config.Config) (string, error) {
+	dataPath := strings.TrimSpace(cfg.DataPath)
+	if dataPath == "" && cfg.RepoPath != "" {
+		dataPath = filepath.Join(cfg.RepoPath, ".wiki")
+	}
+	if dataPath == "" {
+		return "", fmt.Errorf("data path is required")
+	}
+	return filepath.Abs(dataPath)
+}
+
+type syncTarget struct {
+	Owner string
+	Path  string
+}
+
+func startGitScheduler(cfg config.Config, idx *index.Index, users []string, groups []string) {
+	if cfg.GitSchedule <= 0 {
+		slog.Info("git scheduler disabled")
+		return
+	}
+	ctx := context.Background()
+	ticker := time.NewTicker(cfg.GitSchedule)
+	slog.Info("git scheduler enabled", "interval", cfg.GitSchedule.String())
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				runScheduledSync(ctx, cfg, idx, users, groups)
+			}
+		}
+	}()
+}
+
+func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, users []string, groups []string) {
+	targets, err := discoverSyncTargets(cfg.RepoPath, users, groups)
+	if err != nil {
+		slog.Warn("sync schedule: list targets failed", "err", err)
+		return
+	}
+	if len(targets) == 0 {
+		return
+	}
+	anySuccess := false
+	for _, target := range targets {
+		unlock, err := syncer.Acquire(10 * time.Second)
+		if err != nil {
+			slog.Warn("sync schedule: busy", "owner", target.Owner, "err", err)
+			continue
+		}
+		opts := syncer.Options{
+			HomeDir:            cfg.DataPath,
+			GitCredentialsFile: filepath.Join(cfg.DataPath, target.Owner+".cred"),
+			GitConfigGlobal:    filepath.Join(cfg.DataPath, target.Owner+".gitconfig"),
+		}
+		output, runErr := syncer.RunWithOptions(ctx, target.Path, opts)
+		unlock()
+		if runErr != nil {
+			slog.Warn("sync schedule failed", "owner", target.Owner, "err", runErr)
+			continue
+		}
+		logSyncOutput(target.Owner, output)
+		anySuccess = true
+	}
+	if anySuccess {
+		scanned, updated, cleaned, recheckErr := idx.RecheckFromFS(ctx, cfg.RepoPath)
+		if recheckErr != nil {
+			slog.Warn("sync schedule recheck failed", "err", recheckErr)
+			return
+		}
+		slog.Info("sync schedule recheck", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+	}
+}
+
+func discoverSyncTargets(repoPath string, users []string, groups []string) ([]syncTarget, error) {
+	owners := make(map[string]struct{})
+	for _, user := range users {
+		user = strings.TrimSpace(user)
+		if user == "" {
+			continue
+		}
+		owners[user] = struct{}{}
+	}
+	for _, group := range groups {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		owners[group] = struct{}{}
+	}
+	if len(owners) == 0 {
+		return nil, nil
+	}
+	targets := make([]syncTarget, 0, len(owners))
+	for owner := range owners {
+		if strings.HasPrefix(owner, ".") {
+			continue
+		}
+		repoDir := filepath.Join(repoPath, owner)
+		if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
+			continue
+		}
+		targets = append(targets, syncTarget{Owner: owner, Path: repoDir})
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].Owner < targets[j].Owner
+	})
+	return targets, nil
+}
+
+func logSyncOutput(owner string, output string) {
+	if strings.TrimSpace(output) == "" {
+		return
+	}
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		switch {
+		case strings.HasPrefix(trimmed, "$ "):
+			slog.Info("sync cmd", "owner", owner, "cmd", strings.TrimPrefix(trimmed, "$ "))
+		case strings.Contains(lower, "-> error") || strings.HasPrefix(lower, "error:"):
+			slog.Error("sync cmd error", "owner", owner, "line", trimmed)
+		default:
+			slog.Info("sync cmd output", "owner", owner, "line", trimmed)
+		}
+	}
 }
 
 type prettyHandler struct {
