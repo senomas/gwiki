@@ -4413,7 +4413,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string) ([]QuickLau
 	isAuth := IsAuthenticated(r.Context())
 	authEnabled := s.auth != nil
 	currentURL := quickLauncherURL(r)
-	basePath, activeTags, _, _, _, _ := quickLauncherContext(currentURL)
+	basePath, activeTags, _, _, activeFolder, activeRoot := quickLauncherContext(currentURL)
 	notePath, hasNote := quickLauncherNotePath(basePath)
 
 	actions := []QuickLauncherEntry{}
@@ -4517,6 +4517,27 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string) ([]QuickLau
 		})
 	}
 
+	folders, _, err := s.idx.ListFolders(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	for _, folder := range folders {
+		if strings.TrimSpace(folder) == "" {
+			continue
+		}
+		if !fuzzyMatchTag(normalized, strings.ToLower(folder)) {
+			continue
+		}
+		folderHref := quickLauncherFolderURL(currentURL, folder, activeFolder, activeRoot)
+		entries = append(entries, QuickLauncherEntry{
+			Kind:  "folder",
+			Label: folder,
+			Hint:  "Folder",
+			Icon:  "F",
+			Href:  folderHref,
+		})
+	}
+
 	notes, err := s.idx.Search(r.Context(), query, 12)
 	if err != nil {
 		return nil, err
@@ -4587,6 +4608,25 @@ func quickLauncherTagURL(parsed *url.URL, tags []string) string {
 		q.Del("t")
 	} else {
 		q.Set("t", strings.Join(tags, ","))
+	}
+	next.RawQuery = q.Encode()
+	if next.RawQuery == "" {
+		return next.Path
+	}
+	return next.Path + "?" + next.RawQuery
+}
+
+func quickLauncherFolderURL(parsed *url.URL, folder string, activeFolder string, activeRoot bool) string {
+	if parsed == nil {
+		return "/"
+	}
+	next := *parsed
+	q := next.Query()
+	folder = strings.TrimSpace(folder)
+	if folder == "" || (activeFolder == folder && !activeRoot) {
+		q.Del("f")
+	} else {
+		q.Set("f", folder)
 	}
 	next.RawQuery = q.Encode()
 	if next.RawQuery == "" {
