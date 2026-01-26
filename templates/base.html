@@ -2385,11 +2385,42 @@
         }, 200);
       }
 
+      document.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!target || target.tagName !== "SUMMARY") {
+          return;
+        }
+        var section = target.closest("details.note-section");
+        if (!section) {
+          return;
+        }
+        section.dataset.userToggle = "1";
+      }, true);
+
+      document.addEventListener("keydown", function (event) {
+        if (!event || (event.key !== "Enter" && event.key !== " ")) {
+          return;
+        }
+        var target = event.target;
+        if (!target || target.tagName !== "SUMMARY") {
+          return;
+        }
+        var section = target.closest("details.note-section");
+        if (!section) {
+          return;
+        }
+        section.dataset.userToggle = "1";
+      }, true);
+
       document.addEventListener("toggle", function (event) {
         var target = event.target;
         if (!target || target.tagName !== "DETAILS" || !target.classList.contains("note-section")) {
           return;
         }
+        if (!target.dataset.userToggle) {
+          return;
+        }
+        delete target.dataset.userToggle;
         var noteBody = target.closest(".note-body");
         if (!noteBody) {
           return;
