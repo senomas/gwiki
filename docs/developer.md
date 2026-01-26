@@ -48,6 +48,10 @@ Key pieces:
 - `templates/quick_launcher_entries.html`: shared rendering fragment.
 - `templates/base.html`: quick launcher UI + HTMX wiring.
 
+## Git sync and credentials
+
+Sync runs through `internal/syncer` and is guarded by a process-wide lock so only one sync happens at a time (the caller waits up to ~10s). Each user can have their own git credentials file stored at `WIKI_DATA_PATH/<username>.cred` (same format as `.git-credentials`). Sync uses `GIT_CONFIG_GLOBAL` pointing at `WIKI_DATA_PATH/<username>.gitconfig`, and writes `credential.helper` to store credentials in that per-user `.cred` file.
+
 ## `internal/auth/auth_test.go`
 Auth unit tests.
 

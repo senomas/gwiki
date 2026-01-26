@@ -5509,10 +5509,43 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 	if ownerRepo == "" {
 		ownerRepo = s.cfg.RepoPath
 	}
+	unlock, err := syncer.Acquire(10 * time.Second)
+	if err != nil {
+		data := ViewData{
+			SyncError:    "Sync already in progress. Please try again.",
+			SyncDuration: "0s",
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "sync_result", data)
+		return
+	}
+	defer unlock()
+	dataPath := strings.TrimSpace(s.cfg.DataPath)
+	if dataPath == "" && s.cfg.RepoPath != "" {
+		dataPath = filepath.Join(s.cfg.RepoPath, ".wiki")
+	}
+	if dataPath != "" {
+		if absPath, err := filepath.Abs(dataPath); err == nil {
+			dataPath = absPath
+		}
+		_ = os.MkdirAll(dataPath, 0o755)
+	}
+	userName := currentUserName(r.Context())
+	credPath := ""
+	gitConfig := ""
+	if dataPath != "" && userName != "" {
+		credPath = filepath.Join(dataPath, userName+".cred")
+		gitConfig = filepath.Join(dataPath, userName+".gitconfig")
+	}
+	opts := syncer.Options{
+		HomeDir:            dataPath,
+		GitCredentialsFile: credPath,
+		GitConfigGlobal:    gitConfig,
+	}
 	start := time.Now()
-	output, err := syncer.Run(r.Context(), ownerRepo)
+	output, err := syncer.RunWithOptions(r.Context(), ownerRepo, opts)
 	if err == nil {
-		logOutput, logErr := syncer.LogGraph(r.Context(), ownerRepo, 10)
+		logOutput, logErr := syncer.LogGraphWithOptions(r.Context(), ownerRepo, 10, opts)
 		output += logOutput
 		if logErr != nil {
 			err = logErr

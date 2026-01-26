@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,42 +15,48 @@ import (
 	"time"
 )
 
+var ErrSyncBusy = errors.New("sync already in progress")
+var syncLock = make(chan struct{}, 1)
+
+type Options struct {
+	RepoDir            string
+	LogFile            string
+	CommitMessage      string
+	MainBranch         string
+	PushBranch         string
+	HomeDir            string
+	GitConfigGlobal    string
+	GitCredentialsFile string
+}
+
+func Acquire(timeout time.Duration) (func(), error) {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case syncLock <- struct{}{}:
+		return func() { <-syncLock }, nil
+	case <-timer.C:
+		return nil, ErrSyncBusy
+	}
+}
+
 func Run(ctx context.Context, repoPath string) (string, error) {
-	repoDir := strings.TrimSpace(os.Getenv("REPO_DIR"))
-	if repoDir == "" {
-		repoDir = repoPath
-	}
-	if repoDir == "" {
-		repoDir = "/notes"
-	}
-	logFile := strings.TrimSpace(os.Getenv("LOG_FILE"))
-	if logFile == "" {
-		logFile = filepath.Join(repoDir, ".git", "auto-sync.log")
-	}
-	commitMessage := os.Getenv("COMMIT_MESSAGE")
-	if commitMessage == "" {
-		commitMessage = "auto: notes"
-	}
-	mainBranch := os.Getenv("MAIN_BRANCH")
-	if mainBranch == "" {
-		mainBranch = "master"
-	}
-	pushBranch := os.Getenv("PUSH_BRANCH")
-	if pushBranch == "" {
-		pushBranch = "gwiki"
-	}
-	homeDir := os.Getenv("HOME")
-	if homeDir == "" {
-		homeDir = "/home/gwiki"
-	}
-	gitConfigGlobal := os.Getenv("GIT_CONFIG_GLOBAL")
-	if gitConfigGlobal == "" {
-		gitConfigGlobal = filepath.Join(homeDir, ".gitconfig")
-	}
-	gitCredentialsFile := os.Getenv("GIT_CREDENTIALS_FILE")
-	if gitCredentialsFile == "" {
-		gitCredentialsFile = filepath.Join(homeDir, ".git-credentials")
-	}
+	return RunWithOptions(ctx, repoPath, Options{})
+}
+
+func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string, error) {
+	opts = resolveOptions(repoPath, opts)
+	repoDir := opts.RepoDir
+	logFile := opts.LogFile
+	commitMessage := opts.CommitMessage
+	mainBranch := opts.MainBranch
+	pushBranch := opts.PushBranch
+	homeDir := opts.HomeDir
+	gitConfigGlobal := opts.GitConfigGlobal
+	gitCredentialsFile := opts.GitCredentialsFile
 
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
 		return "", fmt.Errorf("auto-sync: no git repo in %s", repoDir)
@@ -73,13 +80,39 @@ func Run(ctx context.Context, repoPath string) (string, error) {
 
 	env := append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
-		"HOME="+homeDir,
-		"GIT_CONFIG_GLOBAL="+gitConfigGlobal,
-		"GIT_CREDENTIALS_FILE="+gitCredentialsFile,
 	)
+	if strings.TrimSpace(homeDir) != "" {
+		env = append(env, "HOME="+homeDir)
+	}
+	if strings.TrimSpace(gitConfigGlobal) != "" {
+		env = append(env, "GIT_CONFIG_GLOBAL="+gitConfigGlobal)
+	}
+	if strings.TrimSpace(gitCredentialsFile) != "" {
+		env = append(env, "GIT_CREDENTIALS_FILE="+gitCredentialsFile)
+	}
+
+	if strings.TrimSpace(gitConfigGlobal) != "" {
+		if err := os.MkdirAll(filepath.Dir(gitConfigGlobal), 0o755); err != nil {
+			return "", err
+		}
+		if _, err := os.Stat(gitConfigGlobal); err != nil && os.IsNotExist(err) {
+			file, createErr := os.OpenFile(gitConfigGlobal, os.O_CREATE|os.O_RDWR, 0o644)
+			if createErr != nil {
+				return "", createErr
+			}
+			_ = file.Close()
+		}
+	}
+	if strings.TrimSpace(gitCredentialsFile) != "" {
+		if err := os.MkdirAll(filepath.Dir(gitCredentialsFile), 0o755); err != nil {
+			return "", err
+		}
+	}
 
 	writeLine("auto-sync: start %s", time.Now().Format(time.RFC3339))
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--global", "credential.helper", "store --file="+gitCredentialsFile)
+	if strings.TrimSpace(gitCredentialsFile) != "" {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--global", "credential.helper", "store --file="+gitCredentialsFile)
+	}
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "notes/")
 
@@ -120,25 +153,15 @@ func Run(ctx context.Context, repoPath string) (string, error) {
 }
 
 func LogGraph(ctx context.Context, repoPath string, limit int) (string, error) {
-	repoDir := strings.TrimSpace(os.Getenv("REPO_DIR"))
-	if repoDir == "" {
-		repoDir = repoPath
-	}
-	if repoDir == "" {
-		repoDir = "/notes"
-	}
-	homeDir := os.Getenv("HOME")
-	if homeDir == "" {
-		homeDir = "/home/gwiki"
-	}
-	gitConfigGlobal := os.Getenv("GIT_CONFIG_GLOBAL")
-	if gitConfigGlobal == "" {
-		gitConfigGlobal = filepath.Join(homeDir, ".gitconfig")
-	}
-	gitCredentialsFile := os.Getenv("GIT_CREDENTIALS_FILE")
-	if gitCredentialsFile == "" {
-		gitCredentialsFile = filepath.Join(homeDir, ".git-credentials")
-	}
+	return LogGraphWithOptions(ctx, repoPath, limit, Options{})
+}
+
+func LogGraphWithOptions(ctx context.Context, repoPath string, limit int, opts Options) (string, error) {
+	opts = resolveOptions(repoPath, opts)
+	repoDir := opts.RepoDir
+	homeDir := opts.HomeDir
+	gitConfigGlobal := opts.GitConfigGlobal
+	gitCredentialsFile := opts.GitCredentialsFile
 	env := append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 		"HOME="+homeDir,
@@ -148,6 +171,61 @@ func LogGraph(ctx context.Context, repoPath string, limit int) (string, error) {
 	var output bytes.Buffer
 	_, err := runGitCommand(ctx, repoDir, env, &output, "git", "log", "--graph", "--decorate", "--all", "-n", strconv.Itoa(limit))
 	return output.String(), err
+}
+
+func resolveOptions(repoPath string, opts Options) Options {
+	if strings.TrimSpace(opts.RepoDir) == "" {
+		opts.RepoDir = strings.TrimSpace(os.Getenv("REPO_DIR"))
+	}
+	if strings.TrimSpace(opts.RepoDir) == "" {
+		opts.RepoDir = repoPath
+	}
+	if strings.TrimSpace(opts.RepoDir) == "" {
+		opts.RepoDir = "/notes"
+	}
+	if strings.TrimSpace(opts.LogFile) == "" {
+		opts.LogFile = strings.TrimSpace(os.Getenv("LOG_FILE"))
+	}
+	if strings.TrimSpace(opts.LogFile) == "" {
+		opts.LogFile = filepath.Join(opts.RepoDir, ".git", "auto-sync.log")
+	}
+	if strings.TrimSpace(opts.CommitMessage) == "" {
+		opts.CommitMessage = strings.TrimSpace(os.Getenv("COMMIT_MESSAGE"))
+	}
+	if strings.TrimSpace(opts.CommitMessage) == "" {
+		opts.CommitMessage = "auto: notes"
+	}
+	if strings.TrimSpace(opts.MainBranch) == "" {
+		opts.MainBranch = strings.TrimSpace(os.Getenv("MAIN_BRANCH"))
+	}
+	if strings.TrimSpace(opts.MainBranch) == "" {
+		opts.MainBranch = "master"
+	}
+	if strings.TrimSpace(opts.PushBranch) == "" {
+		opts.PushBranch = strings.TrimSpace(os.Getenv("PUSH_BRANCH"))
+	}
+	if strings.TrimSpace(opts.PushBranch) == "" {
+		opts.PushBranch = "gwiki"
+	}
+	if strings.TrimSpace(opts.HomeDir) == "" {
+		opts.HomeDir = strings.TrimSpace(os.Getenv("HOME"))
+	}
+	if strings.TrimSpace(opts.HomeDir) == "" {
+		opts.HomeDir = "/home/gwiki"
+	}
+	if strings.TrimSpace(opts.GitConfigGlobal) == "" {
+		opts.GitConfigGlobal = strings.TrimSpace(os.Getenv("GIT_CONFIG_GLOBAL"))
+	}
+	if strings.TrimSpace(opts.GitConfigGlobal) == "" {
+		opts.GitConfigGlobal = filepath.Join(opts.HomeDir, ".gitconfig")
+	}
+	if strings.TrimSpace(opts.GitCredentialsFile) == "" {
+		opts.GitCredentialsFile = strings.TrimSpace(os.Getenv("GIT_CREDENTIALS_FILE"))
+	}
+	if strings.TrimSpace(opts.GitCredentialsFile) == "" {
+		opts.GitCredentialsFile = filepath.Join(opts.HomeDir, ".git-credentials")
+	}
+	return opts
 }
 
 func gitHasStagedChanges(ctx context.Context, dir string, env []string, writer io.Writer) (bool, error) {
