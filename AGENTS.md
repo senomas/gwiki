@@ -35,6 +35,8 @@ Non-goals (v1)
    - Always run tests before any commit.
 6. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
+7. **Response structure**
+   - Always provide a deep-dive analysis, an implementation plan, and test cases for the requested change.
 
 ---
 
