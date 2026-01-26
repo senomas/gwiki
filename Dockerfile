@@ -26,7 +26,6 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_TAG}" -o /out/wiki ./cmd/wiki
-RUN CGO_ENABLED=0 go build -o /out/sync ./cmd/sync
 RUN CGO_ENABLED=0 go build -o /out/user ./cmd/user
 
 FROM alpine:${ALPINE_VERSION}
@@ -37,7 +36,6 @@ COPY templates /app/templates
 COPY static /app/static
 COPY --from=assets /app/static /app/static
 COPY --from=build /out/wiki /usr/local/bin/wiki
-COPY --from=build /out/sync /usr/local/bin/sync
 COPY --from=build /out/user /usr/local/bin/gwiki-user
 ENV WIKI_LISTEN_ADDR=0.0.0.0:8080
 ENV WIKI_REPO_PATH=/data
