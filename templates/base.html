@@ -1695,6 +1695,30 @@
   </script>
   <script>
     (function () {
+      function syncSidebarDetails() {
+        var isDesktop = window.matchMedia("(min-width: 768px)").matches;
+        document.querySelectorAll("details[data-sidebar]").forEach(function (panel) {
+          panel.open = isDesktop;
+        });
+      }
+
+      syncSidebarDetails();
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", syncSidebarDetails, {once: true});
+      }
+      document.body.addEventListener("htmx:afterSwap", function (event) {
+        if (!event || !event.target) {
+          return;
+        }
+        if (event.target.id === "sidebar-slot" || event.target.querySelector("details[data-sidebar]")) {
+          syncSidebarDetails();
+        }
+      });
+      window.addEventListener("resize", syncSidebarDetails);
+    })();
+  </script>
+  <script>
+    (function () {
       var launcher = document.getElementById("wiki-link-launcher");
       var input = document.getElementById("wiki-link-input");
       var actionList = document.getElementById("wiki-link-actions");
