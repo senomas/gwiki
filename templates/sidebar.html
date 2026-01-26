@@ -176,14 +176,7 @@
 {{end}}
 
 {{define "calendar"}}
-<div
-  id="sidebar-calendar"
-  class="calendar-panel"
-  data-calendar
-  hx-get="/calendar"
-  hx-trigger="revealed delay:500ms"
-  hx-swap="outerHTML"
->
+<div id="sidebar-calendar" class="calendar-panel" data-calendar>
   <div
     class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-500"
   >
@@ -240,7 +233,14 @@
 {{end}}
 
 {{define "calendar_skeleton"}}
-<div id="sidebar-calendar" class="calendar-panel" data-calendar>
+<div
+  id="sidebar-calendar"
+  class="calendar-panel"
+  data-calendar
+  hx-get="/calendar"
+  hx-trigger="load delay:500ms"
+  hx-swap="outerHTML"
+>
   <div class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-500">
     <span>{{.CalendarMonth.Label}}</span>
   </div>
