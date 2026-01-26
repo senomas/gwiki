@@ -17,7 +17,7 @@
 {{end}}
 
 {{define "sidebar_content"}}
-<div id="sidebar-calendar" hx-get="/calendar-skeleton" hx-trigger="load" hx-swap="outerHTML"></div>
+<div id="sidebar-calendar" hx-get="/calendar-skeleton" hx-trigger="revealed delay:200ms" hx-swap="outerHTML"></div>
 
 <div>
   <div
