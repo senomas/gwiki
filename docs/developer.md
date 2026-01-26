@@ -469,7 +469,6 @@ HTTP handlers, markdown rendering, embeds, and UI helpers.
 - `handleHomeNotesPage`: HTTP handler for home notes page
 - `handleTasks`: HTTP handler for tasks
 - `handleTodo`: HTTP handler for todo
-- `handleDue`: HTTP handler for due
 - `handleToggleTask`: HTTP handler for toggle task
 - `loadHomeNotes`: loads home notes
 - `handleNewNote`: HTTP handler for new note

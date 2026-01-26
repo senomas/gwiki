@@ -15,7 +15,7 @@ This page covers everyday use of gwiki: keyboard navigation, quick launcher, and
 - `J` / `K`: scroll down/up (disabled inside inputs).
 - `Y`: scroll to top (disabled inside inputs).
 
-Tip: on index/todo/due pages, navigation focuses note titles. On note pages it focuses note content links, checkboxes, and section toggles.
+Tip: on index/todo pages, navigation focuses note titles. On note pages it focuses note content links, checkboxes, and section toggles.
 
 ## Quick Launcher
 
