@@ -139,6 +139,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/settings/save", s.handleSettingsSave)
 	s.mux.HandleFunc("/sidebar", s.handleSidebar)
 	s.mux.HandleFunc("/calendar", s.handleCalendar)
+	s.mux.HandleFunc("/calendar-skeleton", s.handleCalendarSkeleton)
 	s.mux.HandleFunc("/", s.handleHome)
 	s.mux.HandleFunc("/search", s.handleSearch)
 	s.mux.HandleFunc("/notes/new", s.handleNewNote)

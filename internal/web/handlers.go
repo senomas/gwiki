@@ -5805,6 +5805,15 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderTemplate(w, "calendar", data)
 }
 
+func (s *Server) handleCalendarSkeleton(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cacheControl := "public, max-age=300, stale-while-revalidate=600"
+	s.views.RenderTemplateWithCache(w, "calendar_skeleton", ViewData{}, cacheControl)
+}
+
 func extractFirstListItem(htmlStr string) string {
 	start := strings.Index(htmlStr, "<li")
 	if start == -1 {
