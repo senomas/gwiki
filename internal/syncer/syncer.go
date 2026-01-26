@@ -113,6 +113,7 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	if strings.TrimSpace(gitCredentialsFile) != "" {
 		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--global", "credential.helper", "store --file="+gitCredentialsFile)
 	}
+	hasOrigin := gitHasOriginRemote(ctx, repoDir, env, writer)
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "notes/")
 
@@ -121,13 +122,17 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 		return output.String(), err
 	}
 	if !hasChanges {
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
-		if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
-			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
-			writeLine("auto-sync: rebase failed")
-			_ = trimLogFile(logFile, 1000)
-			return output.String(), nil
+		if hasOrigin {
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
+			if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
+				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
+				writeLine("auto-sync: rebase failed")
+				_ = trimLogFile(logFile, 1000)
+				return output.String(), nil
+			}
+		} else {
+			writeLine("auto-sync: no remote origin")
 		}
 		writeLine("auto-sync: no changes")
 		_ = trimLogFile(logFile, 1000)
@@ -135,17 +140,21 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	}
 
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "commit", "-m", commitMessage)
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
+	if hasOrigin {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
 
-	if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
-		writeLine("auto-sync: rebase failed")
-		_ = trimLogFile(logFile, 1000)
-		return output.String(), nil
+		if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
+			writeLine("auto-sync: rebase failed")
+			_ = trimLogFile(logFile, 1000)
+			return output.String(), nil
+		}
+
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", mainBranch)
+	} else {
+		writeLine("auto-sync: no remote origin")
 	}
-
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", mainBranch)
 	_ = trimLogFile(logFile, 1000)
 	writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
 
@@ -252,6 +261,25 @@ func gitHasStagedChanges(ctx context.Context, dir string, env []string, writer i
 	_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
 	_, _ = fmt.Fprintln(writer)
 	return false, err
+}
+
+func gitHasOriginRemote(ctx context.Context, dir string, env []string, writer io.Writer) bool {
+	writeCommand(writer, "git", "remote", "get-url", "origin")
+	cmd := exec.CommandContext(ctx, "git", "remote", "get-url", "origin")
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_, _ = writer.Write(output)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+		_, _ = fmt.Fprintln(writer)
+		return false
+	}
+	_, _ = fmt.Fprintln(writer, "-> ok")
+	_, _ = fmt.Fprintln(writer)
+	return true
 }
 
 func runGitCommand(ctx context.Context, dir string, env []string, writer io.Writer, name string, args ...string) (string, error) {
