@@ -4754,13 +4754,18 @@ func fuzzyMatchAction(term string, label string, hint string) bool {
 }
 
 func quickLauncherURL(r *http.Request) *url.URL {
-	raw := strings.TrimSpace(r.Header.Get("HX-Current-URL"))
-	if raw == "" {
-		raw = strings.TrimSpace(r.Referer())
+	if r == nil {
+		return &url.URL{Path: "/"}
 	}
-	if raw != "" {
-		if parsed, err := url.Parse(raw); err == nil {
-			return parsed
+	if isHTMX(r) {
+		raw := strings.TrimSpace(r.Header.Get("HX-Current-URL"))
+		if raw == "" {
+			raw = strings.TrimSpace(r.Referer())
+		}
+		if raw != "" {
+			if parsed, err := url.Parse(raw); err == nil {
+				return parsed
+			}
 		}
 	}
 	return r.URL
