@@ -8261,6 +8261,10 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 	if trimmed != ref && trimmed != "" {
 		candidates = append(candidates, trimmed)
 	}
+	candidates, err := s.expandWikiLinkCandidates(ctx, candidates)
+	if err != nil {
+		return "", "", err
+	}
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
 		for _, variant := range []string{candidate, fs.EnsureMDExt(candidate)} {
@@ -8285,6 +8289,62 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 		}
 	}
 	return "", "", nil
+}
+
+func (s *Server) expandWikiLinkCandidates(ctx context.Context, candidates []string) ([]string, error) {
+	owner := currentUserName(ctx)
+	if owner == "" {
+		return candidates, nil
+	}
+	out := make([]string, 0, len(candidates)*2)
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		out = append(out, candidate)
+		first, ok := leadingPathSegment(candidate)
+		if ok {
+			isOwner, err := s.isOwnerName(ctx, first)
+			if err != nil {
+				return nil, err
+			}
+			if isOwner {
+				continue
+			}
+		}
+		out = append(out, owner+"/"+candidate)
+	}
+	return out, nil
+}
+
+func (s *Server) isOwnerName(ctx context.Context, name string) (bool, error) {
+	if strings.TrimSpace(name) == "" {
+		return false, nil
+	}
+	_, _, err := s.idx.LookupOwnerIDs(ctx, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func leadingPathSegment(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	parts := strings.SplitN(value, "/", 2)
+	if len(parts) < 2 {
+		return "", false
+	}
+	if strings.TrimSpace(parts[0]) == "" {
+		return "", false
+	}
+	return parts[0], true
 }
 
 func slugify(input string) string {
