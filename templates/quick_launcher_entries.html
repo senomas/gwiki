@@ -1,0 +1,25 @@
+{{define "quick_launcher_entries"}}
+{{if .QuickEntries}}
+  {{range .QuickEntries}}
+    {{if eq .Kind "form"}}
+      <form {{if .ID}}id="{{.ID}}"{{end}} class="quick-launcher__action-form" action="{{.Href}}" method="post">
+        <button class="quick-launcher__item quick-launcher__item--danger{{if .Hidden}} hidden{{end}}" type="submit" data-label="{{.Label}}">
+          <span class="quick-launcher__icon">{{.Icon}}</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">{{.Label}}</span>
+            {{if .Hint}}<span class="quick-launcher__hint">{{.Hint}}</span>{{end}}
+          </span>
+        </button>
+      </form>
+    {{else}}
+      <a {{if .ID}}id="{{.ID}}"{{end}} class="quick-launcher__item{{if .Hidden}} hidden{{end}}" href="{{if .Href}}{{.Href}}{{else}}#{{end}}" data-label="{{.Label}}" {{if .Action}}data-action="{{.Action}}"{{end}} {{if .Tag}}data-tag="{{.Tag}}"{{end}} {{if .NotePath}}data-note-path="{{.NotePath}}"{{end}} {{if .NoteTitle}}data-note-title="{{.NoteTitle}}"{{end}}>
+        <span class="quick-launcher__icon">{{.Icon}}</span>
+        <span class="quick-launcher__meta">
+          <span class="quick-launcher__label">{{.Label}}</span>
+          {{if .Hint}}<span class="quick-launcher__hint">{{.Hint}}</span>{{end}}
+        </span>
+      </a>
+    {{end}}
+  {{end}}
+{{end}}
+{{end}}

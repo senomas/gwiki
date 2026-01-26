@@ -86,11 +86,26 @@ type ViewData struct {
 	ToastItems       []Toast
 	Groups           []string
 	SettingsUsers    []UserSummary
+	QuickEntries     []QuickLauncherEntry
 }
 
 type OwnerOption struct {
 	Name  string
 	Label string
+}
+
+type QuickLauncherEntry struct {
+	ID        string
+	Kind      string
+	Label     string
+	Hint      string
+	Icon      string
+	Href      string
+	Action    string
+	Tag       string
+	NotePath  string
+	NoteTitle string
+	Hidden    bool
 }
 
 type UserSummary struct {

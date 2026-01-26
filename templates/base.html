@@ -846,132 +846,7 @@
     <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
       <input id="quick-launcher-input" class="quick-launcher__input" type="search" placeholder="Search..." autocomplete="off">
       <div id="quick-launcher-actions" class="quick-launcher__list">
-        <a id="quick-launcher-create-note" class="quick-launcher__item hidden" href="#" data-label="create note" data-fixed="true" data-action="wiki-create">
-          <span class="quick-launcher__icon">+</span>
-          <span class="quick-launcher__meta">
-            <span class="quick-launcher__label">Create note</span>
-            <span class="quick-launcher__hint">New</span>
-          </span>
-        </a>
-        {{if eq .ContentTemplate "view"}}
-          <a class="quick-launcher__item" href="/notes/new" data-label="new note">
-            <span class="quick-launcher__icon">+</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">New note</span>
-              <span class="quick-launcher__hint">Create</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/" data-label="home">
-            <span class="quick-launcher__icon">H</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Home</span>
-              <span class="quick-launcher__hint">Index</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="#top" data-label="scroll to top" data-action="scroll-top">
-            <span class="quick-launcher__icon">T</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Scroll to top</span>
-              <span class="quick-launcher__hint">Jump</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/settings" data-label="settings">
-            <span class="quick-launcher__icon">S</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Settings</span>
-              <span class="quick-launcher__hint">Config</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/notes/{{if .NoteMeta.ID}}{{.NoteMeta.ID}}{{else}}{{.NotePath}}{{end}}/edit" data-label="edit">
-            <span class="quick-launcher__icon">E</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Edit</span>
-              <span class="quick-launcher__hint">Modify</span>
-            </span>
-          </a>
-          <form id="quick-action-delete" class="quick-launcher__action-form" action="/notes/{{if .NoteMeta.ID}}{{.NoteMeta.ID}}{{else}}{{.NotePath}}{{end}}/delete" method="post">
-            <button class="quick-launcher__item quick-launcher__item--danger" type="submit" data-label="delete">
-              <span class="quick-launcher__icon">D</span>
-              <span class="quick-launcher__meta">
-                <span class="quick-launcher__label">Delete</span>
-                <span class="quick-launcher__hint">Remove</span>
-              </span>
-            </button>
-          </form>
-        {{else}}
-          {{if and .AuthEnabled .IsAuthenticated}}
-          <a class="quick-launcher__item" href="/notes/new" data-label="new note">
-            <span class="quick-launcher__icon">+</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">New note</span>
-              <span class="quick-launcher__hint">Create</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/todo" data-label="todo">
-            <span class="quick-launcher__icon">T</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Todo</span>
-              <span class="quick-launcher__hint">Tasks</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/sync" data-label="sync">
-            <span class="quick-launcher__icon">G</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Sync</span>
-              <span class="quick-launcher__hint">Git</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/settings" data-label="settings">
-            <span class="quick-launcher__icon">S</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Settings</span>
-              <span class="quick-launcher__hint">Config</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/search" data-label="search">
-            <span class="quick-launcher__icon">F</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Search</span>
-              <span class="quick-launcher__hint">Find</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/broken" data-label="broken links">
-            <span class="quick-launcher__icon">B</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Broken links</span>
-              <span class="quick-launcher__hint">Fix</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="#top" data-label="scroll to top" data-action="scroll-top">
-            <span class="quick-launcher__icon">T</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Scroll to top</span>
-              <span class="quick-launcher__hint">Jump</span>
-            </span>
-          </a>
-          <a class="quick-launcher__item" href="/logout" data-label="logout">
-            <span class="quick-launcher__icon">L</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Logout</span>
-                <span class="quick-launcher__hint">Session</span>
-              </span>
-            </a>
-          {{else if .AuthEnabled}}
-            <a class="quick-launcher__item" href="/login" data-label="login">
-              <span class="quick-launcher__icon">I</span>
-              <span class="quick-launcher__meta">
-                <span class="quick-launcher__label">Login</span>
-                <span class="quick-launcher__hint">Session</span>
-              </span>
-            </a>
-          {{end}}
-        {{end}}
-      </div>
-      <div id="quick-launcher-note-row" class="quick-launcher__note-row">
-        <div id="quick-launcher-notes" class="quick-launcher__list hidden"></div>
-      </div>
-      <div id="quick-launcher-tags" class="quick-launcher__tags hidden">
-        <div id="quick-tag-suggest"></div>
+        {{template "quick_launcher_entries" .}}
       </div>
     </div>
     <div id="quick-launcher-submenu-modal" class="quick-launcher__submenu-modal" aria-hidden="true">
@@ -1079,7 +954,6 @@
       var launcher = document.getElementById("quick-launcher");
       var input = document.getElementById("quick-launcher-input");
       var actionList = document.getElementById("quick-launcher-actions");
-      var notesList = document.getElementById("quick-launcher-notes");
       var submenu = document.getElementById("quick-launcher-submenu-modal");
       var createNote = document.getElementById("quick-launcher-create-note");
       var noteOpen = document.getElementById("quick-note-open");
@@ -1087,16 +961,50 @@
       var noteDelete = document.getElementById("quick-note-delete");
       var submenuPanel = submenu.querySelector(".quick-launcher__submenu-panel");
       var actionDelete = document.getElementById("quick-action-delete");
-      var tagWrap = document.getElementById("quick-launcher-tags");
-      var tagSuggest = document.getElementById("quick-tag-suggest");
-      if (!launcher || !input || !actionList || !notesList || !submenu || !noteOpen || !noteEdit || !noteDelete || !submenuPanel || !tagWrap || !tagSuggest || !createNote) {
+      if (!launcher || !input || !actionList || !submenu || !noteOpen || !noteEdit || !noteDelete || !submenuPanel || !createNote) {
         return;
       }
+      var defaultEntriesHTML = actionList.innerHTML;
 
       var wikiLinkMode = false;
       var wikiLinkRef = "";
       var wikiLinkElement = null;
       var wikiLinkNotePath = "";
+
+      function refreshCreateNoteEntry() {
+        createNote = document.getElementById("quick-launcher-create-note");
+        if (!createNote) {
+          return;
+        }
+        if (!wikiLinkMode) {
+          createNote.classList.add("hidden");
+          createNote.removeAttribute("href");
+          return;
+        }
+        var targetPath = ensureNotePath(wikiLinkRef);
+        var owner = "";
+        if (wikiLinkNotePath) {
+          owner = wikiLinkNotePath.split("/")[0] || "";
+        }
+        var createHref = "/notes/new?path=" + encodeURIComponent(targetPath);
+        if (owner) {
+          createHref += "&owner=" + encodeURIComponent(owner);
+        }
+        createNote.classList.remove("hidden");
+        createNote.setAttribute("href", createHref);
+      }
+
+      function refreshActionDelete() {
+        actionDelete = document.getElementById("quick-action-delete");
+        if (!actionDelete) {
+          return;
+        }
+        actionDelete.addEventListener("submit", function (event) {
+          if (!confirm("Delete this note?")) {
+            event.preventDefault();
+          }
+        });
+      }
 
       function openLauncher() {
         if (!wikiLinkMode) {
@@ -1105,13 +1013,13 @@
         launcher.classList.add("is-open");
         launcher.setAttribute("aria-hidden", "false");
         input.value = "";
-        notesList.classList.add("hidden");
-        notesList.innerHTML = "";
         submenu.classList.remove("is-open");
         submenu.setAttribute("aria-hidden", "true");
-        tagWrap.classList.add("hidden");
         actionList.classList.remove("hidden");
-        filterActions("");
+        actionList.innerHTML = defaultEntriesHTML;
+        clearActive(actionList);
+        refreshCreateNoteEntry();
+        refreshActionDelete();
         input.focus();
       }
 
@@ -1126,8 +1034,7 @@
         wikiLinkRef = "";
         wikiLinkElement = null;
         wikiLinkNotePath = "";
-        createNote.classList.add("hidden");
-        createNote.removeAttribute("href");
+        refreshCreateNoteEntry();
       }
 
       function ensureNotePath(raw) {
@@ -1172,62 +1079,24 @@
         var body = element ? element.closest(".note-body") : null;
         wikiLinkNotePath = body ? (body.getAttribute("data-note-path") || "") : "";
         var targetPath = ensureNotePath(ref);
-        createNote.classList.remove("hidden");
-        var owner = "";
-        if (wikiLinkNotePath) {
-          owner = wikiLinkNotePath.split("/")[0] || "";
-        }
-        var createHref = "/notes/new?path=" + encodeURIComponent(targetPath);
-        if (owner) {
-          createHref += "&owner=" + encodeURIComponent(owner);
-        }
-        createNote.setAttribute("href", createHref);
+        refreshCreateNoteEntry();
         openLauncher();
         input.value = ref;
         input.dispatchEvent(new Event("input", {bubbles: true}));
         activateCombined(0);
       }
 
-      function filterActions(value) {
-        var query = value.toLowerCase().trim();
-        var items = actionList.querySelectorAll(".quick-launcher__item");
-        items.forEach(function (item) {
-          if (item.getAttribute("data-fixed") === "true") {
-            if (!wikiLinkMode && item === createNote) {
-              item.classList.add("hidden");
-              return;
-            }
-            if (wikiLinkMode && item !== createNote) {
-              item.classList.add("hidden");
-              return;
-            }
-            item.classList.remove("hidden");
-            return;
-          }
-          if (wikiLinkMode) {
-            item.classList.add("hidden");
-            return;
-          }
-          var label = item.getAttribute("data-label") || "";
-          if (!query || label.indexOf(query) !== -1) {
-            item.classList.remove("hidden");
-          } else {
-            item.classList.add("hidden");
-          }
-        });
-      }
-
       function listVisibleItems(list) {
         if (!list) {
           return [];
         }
-        return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item, button[data-tag]"), function (item) {
+        return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item"), function (item) {
           return !item.classList.contains("hidden");
         });
       }
 
       function listCombinedItems() {
-        return listVisibleItems(actionList).concat(listVisibleItems(notesList));
+        return listVisibleItems(actionList);
       }
 
       function clearActive(list) {
@@ -1303,10 +1172,8 @@
           nextIndex = 0;
         }
         activateItem(list, nextIndex);
-        if (list === notesList) {
-          submenu.classList.remove("is-open");
-          submenu.setAttribute("aria-hidden", "true");
-        }
+        submenu.classList.remove("is-open");
+        submenu.setAttribute("aria-hidden", "true");
       }
 
       function moveCombined(delta) {
@@ -1330,30 +1197,8 @@
         submenu.setAttribute("aria-hidden", "true");
       }
 
-      function handleTagSuggest(term) {
-        var query = term.replace(/^#/, "");
-        htmx.ajax("GET", "/tags/suggest?q=" + encodeURIComponent(query), "#quick-tag-suggest");
-      }
-
       function activateFirstAction() {
         var item = actionList.querySelector(".quick-launcher__item:not(.hidden)");
-        if (!item) {
-          return;
-        }
-        window.location.href = item.getAttribute("href");
-      }
-
-      function activateFirstTag() {
-        var tagButton = tagSuggest.querySelector("[data-tag]");
-        if (!tagButton) {
-          return;
-        }
-        var tag = tagButton.getAttribute("data-tag");
-        window.location.href = "/?t=" + encodeURIComponent(tag);
-      }
-
-      function activateFirstNote() {
-        var item = notesList.querySelector(".quick-launcher__item");
         if (!item) {
           return;
         }
@@ -1386,6 +1231,11 @@
         }
         var tag = target.getAttribute("data-tag");
         if (tag) {
+          var href = target.getAttribute("href");
+          if (href) {
+            window.location.href = href;
+            return;
+          }
           window.location.href = "/?t=" + encodeURIComponent(tag);
           return;
         }
@@ -1635,59 +1485,50 @@
           return;
         }
         if (event.key === "Enter") {
-          if (!tagWrap.classList.contains("hidden")) {
-            activateSelected(tagSuggest, activateFirstTag);
-          } else if (submenu.classList.contains("is-open")) {
+          if (submenu.classList.contains("is-open")) {
             var items = listVisibleItems(submenuPanel);
             if (items.length) {
               var index = activeIndex(submenuPanel);
               var target = index >= 0 ? items[index] : items[0];
               target.click();
             }
-          } else if (!notesList.classList.contains("hidden")) {
-            var combined = listCombinedItems();
-            if (!combined.length) {
-              return;
-            }
-            var combinedIndex = activeCombinedIndex();
-            var combinedTarget = combinedIndex >= 0 ? combined[combinedIndex] : combined[0];
-            if (notesList.contains(combinedTarget)) {
-              if (wikiLinkMode) {
-                applyWikiLinkSelection(combinedTarget);
-              } else {
-                updateSubmenu(combinedTarget);
-              }
-            } else {
-              activateActionTarget(combinedTarget);
-            }
-          } else {
-            activateSelected(actionList, activateFirstAction);
+            return;
           }
+          var combined = listCombinedItems();
+          if (!combined.length) {
+            return;
+          }
+          var combinedIndex = activeCombinedIndex();
+          var combinedTarget = combinedIndex >= 0 ? combined[combinedIndex] : combined[0];
+          if (!combinedTarget) {
+            return;
+          }
+          if (combinedTarget.getAttribute("data-note-path")) {
+            if (wikiLinkMode) {
+              applyWikiLinkSelection(combinedTarget);
+            } else {
+              updateSubmenu(combinedTarget);
+            }
+            return;
+          }
+          activateActionTarget(combinedTarget);
           return;
         }
         if (event.key === "ArrowDown") {
           event.preventDefault();
-          if (!tagWrap.classList.contains("hidden")) {
-            moveActive(tagSuggest, 1);
-          } else if (submenu.classList.contains("is-open")) {
+          if (submenu.classList.contains("is-open")) {
             moveActive(submenuPanel, 1);
-          } else if (!notesList.classList.contains("hidden")) {
-            moveCombined(1);
           } else {
-            moveActive(actionList, 1);
+            moveCombined(1);
           }
           return;
         }
         if (event.key === "ArrowUp") {
           event.preventDefault();
-          if (!tagWrap.classList.contains("hidden")) {
-            moveActive(tagSuggest, -1);
-          } else if (submenu.classList.contains("is-open")) {
+          if (submenu.classList.contains("is-open")) {
             moveActive(submenuPanel, -1);
-          } else if (!notesList.classList.contains("hidden")) {
-            moveCombined(-1);
           } else {
-            moveActive(actionList, -1);
+            moveCombined(-1);
           }
           return;
         }
@@ -1699,65 +1540,49 @@
         }
       });
 
-      notesList.addEventListener("click", function (event) {
+      actionList.addEventListener("click", function (event) {
         var target = event.target.closest(".quick-launcher__item");
         if (!target) {
           return;
         }
         event.preventDefault();
         clearActive(actionList);
-        clearActive(notesList);
         target.classList.add("is-active");
-        if (wikiLinkMode) {
-          applyWikiLinkSelection(target);
+        if (target.getAttribute("data-note-path")) {
+          if (wikiLinkMode) {
+            applyWikiLinkSelection(target);
+            return;
+          }
+          updateSubmenu(target);
           return;
         }
-        updateSubmenu(target);
+        activateActionTarget(target);
       });
 
       // no-op
 
       input.addEventListener("input", function (event) {
         var value = event.target.value || "";
-        if (value.startsWith("#")) {
-          actionList.classList.remove("hidden");
-          filterActions("");
-          notesList.classList.add("hidden");
-          submenu.classList.remove("is-open");
-          submenu.setAttribute("aria-hidden", "true");
-          tagWrap.classList.remove("hidden");
-          clearActive(tagSuggest);
-          handleTagSuggest(value);
-          return;
-        }
         if (value.trim() === "") {
-          tagWrap.classList.add("hidden");
-          notesList.classList.add("hidden");
+          actionList.innerHTML = defaultEntriesHTML;
+          clearActive(actionList);
+          activateCombined(0);
           submenu.classList.remove("is-open");
           submenu.setAttribute("aria-hidden", "true");
-          actionList.classList.remove("hidden");
-          clearActive(actionList);
-          filterActions(value);
           return;
         }
-        actionList.classList.remove("hidden");
-        tagWrap.classList.add("hidden");
-        notesList.classList.remove("hidden");
         submenu.classList.remove("is-open");
         submenu.setAttribute("aria-hidden", "true");
-        clearActive(notesList);
         clearActive(actionList);
-        filterActions(value);
-        htmx.ajax("GET", "/quick/notes?q=" + encodeURIComponent(value), "#quick-launcher-notes");
+        htmx.ajax("GET", "/quick/launcher?q=" + encodeURIComponent(value), "#quick-launcher-actions");
       });
-
-      tagSuggest.addEventListener("click", function (event) {
-        var target = event.target.closest("[data-tag]");
-        if (!target) {
-          return;
+      actionList.addEventListener("htmx:afterSwap", function (event) {
+        if (event.target && event.target.id === "quick-launcher-actions") {
+          clearActive(actionList);
+          activateCombined(0);
+          refreshCreateNoteEntry();
+          refreshActionDelete();
         }
-        var tag = target.getAttribute("data-tag");
-        window.location.href = "/?t=" + encodeURIComponent(tag);
       });
 
       noteDelete.addEventListener("submit", function (event) {
@@ -1765,30 +1590,12 @@
           event.preventDefault();
         }
       });
-      if (actionDelete) {
-        actionDelete.addEventListener("submit", function (event) {
-          if (!confirm("Delete this note?")) {
-            event.preventDefault();
-          }
-        });
-      }
+      refreshActionDelete();
 
       submenu.addEventListener("click", function (event) {
         if (event.target === submenu) {
           submenu.classList.remove("is-open");
           submenu.setAttribute("aria-hidden", "true");
-        }
-      });
-
-      document.body.addEventListener("htmx:afterSwap", function (event) {
-        if (!launcher.classList.contains("is-open")) {
-          return;
-        }
-        if (event.target === notesList) {
-          activateCombined(0);
-        }
-        if (event.target === tagSuggest) {
-          activateItem(tagSuggest, 0);
         }
       });
 

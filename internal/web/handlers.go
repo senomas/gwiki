@@ -119,6 +119,13 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 		data.IsAuthenticated = user.Authenticated
 		data.IsAdmin = hasRole(user.Roles, "admin")
 	}
+	if data.QuickEntries == nil {
+		if entries, err := s.quickLauncherEntries(r, ""); err == nil {
+			data.QuickEntries = entries
+		} else {
+			slog.Warn("quick launcher entries", "err", err)
+		}
+	}
 	cfg, err := s.loadUserConfig(r.Context())
 	if err != nil {
 		slog.Warn("load user config", "err", err)
@@ -4374,6 +4381,22 @@ func (s *Server) handleQuickNotes(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderTemplate(w, "quick_notes", ViewData{RecentNotes: matches})
 }
 
+func (s *Server) handleQuickLauncher(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	entries, err := s.quickLauncherEntries(r, query)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := ViewData{QuickEntries: entries}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "quick_launcher_entries", data)
+}
+
 func normalizeFuzzyTerm(value string) string {
 	var b strings.Builder
 	for _, r := range value {
@@ -4382,6 +4405,231 @@ func normalizeFuzzyTerm(value string) string {
 		}
 	}
 	return b.String()
+}
+
+func (s *Server) quickLauncherEntries(r *http.Request, query string) ([]QuickLauncherEntry, error) {
+	query = strings.TrimSpace(query)
+	normalized := normalizeFuzzyTerm(strings.ToLower(query))
+	isAuth := IsAuthenticated(r.Context())
+	authEnabled := s.auth != nil
+	currentURL := quickLauncherURL(r)
+	basePath, activeTags, _, _, _, _ := quickLauncherContext(currentURL)
+	notePath, hasNote := quickLauncherNotePath(basePath)
+
+	actions := []QuickLauncherEntry{}
+	addAction := func(entry QuickLauncherEntry) {
+		if entry.Hidden {
+			actions = append(actions, entry)
+			return
+		}
+		if query == "" {
+			actions = append(actions, entry)
+			return
+		}
+		if fuzzyMatchAction(normalized, entry.Label, entry.Hint) {
+			actions = append(actions, entry)
+		}
+	}
+
+	if authEnabled && !isAuth {
+		addAction(QuickLauncherEntry{
+			ID:     "quick-launcher-create-note",
+			Kind:   "action",
+			Label:  "Create note",
+			Hint:   "New",
+			Icon:   "+",
+			Action: "wiki-create",
+			Href:   "#",
+			Hidden: true,
+		})
+		addAction(QuickLauncherEntry{
+			Kind:  "action",
+			Label: "Login",
+			Hint:  "Session",
+			Icon:  "I",
+			Href:  "/login",
+		})
+	} else {
+		addAction(QuickLauncherEntry{
+			ID:     "quick-launcher-create-note",
+			Kind:   "action",
+			Label:  "Create note",
+			Hint:   "New",
+			Icon:   "+",
+			Action: "wiki-create",
+			Href:   "#",
+			Hidden: true,
+		})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: "/notes/new"})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: "/"})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: "/todo"})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "Sync", Hint: "Git", Icon: "G", Href: "/sync"})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "Settings", Hint: "Config", Icon: "S", Href: "/settings"})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "Search", Hint: "Find", Icon: "F", Href: "/search"})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "Broken links", Hint: "Fix", Icon: "B", Href: "/broken"})
+		addAction(QuickLauncherEntry{Kind: "action", Label: "Scroll to top", Hint: "Jump", Icon: "T", Href: "#top", Action: "scroll-top"})
+		if isAuth && hasNote {
+			addAction(QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: "/notes/" + notePath + "/edit"})
+			addAction(QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: "/notes/" + notePath + "/delete"})
+		}
+		if authEnabled {
+			addAction(QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
+		}
+	}
+
+	if query == "" {
+		return actions, nil
+	}
+
+	entries := make([]QuickLauncherEntry, 0, len(actions)+20)
+	entries = append(entries, actions...)
+
+	tags, err := s.idx.ListTags(r.Context(), 200, "", false, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, tag := range tags {
+		if !fuzzyMatchTag(normalized, strings.ToLower(tag.Name)) {
+			continue
+		}
+		nextTags := toggleTag(activeTags, tag.Name)
+		tagHref := quickLauncherTagURL(currentURL, nextTags)
+		entries = append(entries, QuickLauncherEntry{
+			Kind:  "tag",
+			Label: "#" + tag.Name,
+			Hint:  "Tag",
+			Icon:  "#",
+			Href:  tagHref,
+			Tag:   tag.Name,
+		})
+	}
+	journalLower := strings.ToLower(journalTagName)
+	if fuzzyMatchTag(normalized, journalLower) {
+		nextTags := toggleTag(activeTags, journalTagName)
+		tagHref := quickLauncherTagURL(currentURL, nextTags)
+		entries = append(entries, QuickLauncherEntry{
+			Kind:  "tag",
+			Label: "#" + journalTagName,
+			Hint:  "Tag",
+			Icon:  "#",
+			Href:  tagHref,
+			Tag:   journalTagName,
+		})
+	}
+
+	notes, err := s.idx.Search(r.Context(), query, 12)
+	if err != nil {
+		return nil, err
+	}
+	for _, note := range notes {
+		label := note.Title
+		if label == "" {
+			label = note.Path
+		}
+		entries = append(entries, QuickLauncherEntry{
+			Kind:      "note",
+			Label:     label,
+			Hint:      note.Path,
+			Icon:      "N",
+			Href:      "/notes/" + note.Path,
+			NotePath:  note.Path,
+			NoteTitle: note.Title,
+		})
+	}
+	return entries, nil
+}
+
+func fuzzyMatchAction(term string, label string, hint string) bool {
+	if term == "" {
+		return true
+	}
+	candidate := strings.ToLower(strings.TrimSpace(label + " " + hint))
+	candidateNormalized := normalizeFuzzyTerm(candidate)
+	if fuzzySubsequence(term, candidateNormalized) {
+		return true
+	}
+	return strings.Contains(candidate, term)
+}
+
+func quickLauncherURL(r *http.Request) *url.URL {
+	raw := strings.TrimSpace(r.Header.Get("HX-Current-URL"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.Referer())
+	}
+	if raw != "" {
+		if parsed, err := url.Parse(raw); err == nil {
+			return parsed
+		}
+	}
+	return r.URL
+}
+
+func quickLauncherContext(parsed *url.URL) (string, []string, string, string, string, bool) {
+	path := parsed.Path
+	if path == "" {
+		path = "/"
+	}
+	query := parsed.Query()
+	activeTags := parseTagsParam(query.Get("t"))
+	activeFolder, activeRoot := parseFolderParam(query.Get("f"))
+	activeSearch := strings.TrimSpace(query.Get("s"))
+	activeDate := strings.TrimSpace(query.Get("d"))
+	return path, activeTags, activeDate, activeSearch, activeFolder, activeRoot
+}
+
+func quickLauncherTagURL(parsed *url.URL, tags []string) string {
+	if parsed == nil {
+		return "/"
+	}
+	next := *parsed
+	q := next.Query()
+	if len(tags) == 0 {
+		q.Del("t")
+	} else {
+		q.Set("t", strings.Join(tags, ","))
+	}
+	next.RawQuery = q.Encode()
+	if next.RawQuery == "" {
+		return next.Path
+	}
+	return next.Path + "?" + next.RawQuery
+}
+
+func quickLauncherNotePath(path string) (string, bool) {
+	if !strings.HasPrefix(path, "/notes/") {
+		return "", false
+	}
+	rest := strings.TrimPrefix(path, "/notes/")
+	if rest == "" {
+		return "", false
+	}
+	blocked := []string{"/edit", "/preview", "/save", "/wikilink", "/detail", "/card", "/collapsed", "/backlinks"}
+	for _, suffix := range blocked {
+		if strings.HasSuffix(rest, suffix) {
+			return "", false
+		}
+	}
+	return rest, true
+}
+
+func toggleTag(tags []string, target string) []string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return tags
+	}
+	next := make([]string, 0, len(tags)+1)
+	found := false
+	for _, tag := range tags {
+		if tag == target {
+			found = true
+			continue
+		}
+		next = append(next, tag)
+	}
+	if !found {
+		next = append(next, target)
+	}
+	return next
 }
 
 func applyRenderReplacements(input string) string {
