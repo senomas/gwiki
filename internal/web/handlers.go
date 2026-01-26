@@ -5810,8 +5810,24 @@ func (s *Server) handleCalendarSkeleton(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	pageURL := quickLauncherURL(r)
+	if pageURL == nil {
+		pageURL = r.URL
+	}
+	basePath := sidebarBasePath(pageURL.Path)
+	if basePath == "/calendar-skeleton" {
+		basePath = "/"
+	}
+	pageReq := *r
+	pageReq.URL = pageURL
+	baseURL := baseURLForLinks(&pageReq, basePath)
+	activeDate := parseDateParam(pageURL.Query().Get("d"))
+	calendar := buildCalendarMonth(calendarReferenceDate(&pageReq), nil, baseURL, activeDate)
+	data := ViewData{
+		CalendarMonth: calendar,
+	}
 	cacheControl := "public, max-age=300, stale-while-revalidate=600"
-	s.views.RenderTemplateWithCache(w, "calendar_skeleton", ViewData{}, cacheControl)
+	s.views.RenderTemplateWithCache(w, "calendar_skeleton", data, cacheControl)
 }
 
 func extractFirstListItem(htmlStr string) string {
