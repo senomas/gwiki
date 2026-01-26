@@ -32,6 +32,11 @@ type NoteSummary struct {
 	UID   string
 }
 
+type NoteHashSummary struct {
+	Hash      string
+	UpdatedAt time.Time
+}
+
 type NoteListFilter struct {
 	Tags        []string
 	Date        string
@@ -3178,6 +3183,35 @@ func (i *Index) NoteSummaryByPath(ctx context.Context, notePath string) (NoteSum
 	note.Path = joinOwnerPath(owner, relPath)
 	note.MTime = time.Unix(mtimeUnix, 0)
 	return note, nil
+}
+
+func (i *Index) NoteHashByPath(ctx context.Context, notePath string) (NoteHashSummary, error) {
+	ownerName, relPath, err := splitOwnerPath(notePath)
+	if err != nil {
+		return NoteHashSummary{}, err
+	}
+	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	if err != nil {
+		return NoteHashSummary{}, err
+	}
+	clauses := []string{}
+	args := []interface{}{}
+	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	clauses = append(clauses, ownerClause, "files.path = ?")
+	args = append(args, ownerArgs...)
+	args = append(args, relPath)
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := "SELECT files.hash, files.updated_at FROM files WHERE " + strings.Join(clauses, " AND ")
+	var hash string
+	var updatedUnix int64
+	if err := i.queryRowContext(ctx, query, args...).Scan(&hash, &updatedUnix); err != nil {
+		return NoteHashSummary{}, err
+	}
+	return NoteHashSummary{
+		Hash:      hash,
+		UpdatedAt: time.Unix(updatedUnix, 0),
+	}, nil
 }
 
 func (i *Index) JournalNoteByDate(ctx context.Context, date string) (NoteSummary, bool, error) {

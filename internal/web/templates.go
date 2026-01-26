@@ -114,9 +114,24 @@ func (t *Templates) RenderTemplate(w http.ResponseWriter, name string, data View
 	}
 }
 
+func (t *Templates) RenderTemplateWithCache(w http.ResponseWriter, name string, data ViewData, cacheControl string) {
+	setCacheHeaders(w, cacheControl)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := t.all.ExecuteTemplate(w, name, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func setNoCacheHeaders(w http.ResponseWriter) {
 	headers := w.Header()
 	headers.Set("Cache-Control", "no-store")
 	headers.Set("Pragma", "no-cache")
 	headers.Set("Expires", "0")
+}
+
+func setCacheHeaders(w http.ResponseWriter, cacheControl string) {
+	headers := w.Header()
+	headers.Set("Cache-Control", cacheControl)
+	headers.Del("Pragma")
+	headers.Del("Expires")
 }

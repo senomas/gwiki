@@ -30,6 +30,7 @@ type ViewData struct {
 	RenderedHTML     template.HTML
 	SearchQuery      string
 	NoteMeta         index.FrontmatterAttrs
+	NoteHash         string
 	SearchResults    []index.SearchResult
 	RecentNotes      []index.NoteSummary
 	HomeNotes        []NoteCard

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -787,6 +788,17 @@ func buildTodoLink(raw string) string {
 		return "/todo"
 	}
 	return "/todo?" + u.RawQuery
+}
+
+func noteCardETag(meta index.FrontmatterAttrs, hash string) string {
+	if hash == "" {
+		return ""
+	}
+	updated := meta.Updated
+	if updated.IsZero() {
+		updated = time.Unix(0, 0)
+	}
+	return fmt.Sprintf("\"%s-%d-%s\"", meta.ID, updated.Unix(), hash)
 }
 
 func currentURLString(r *http.Request) string {
@@ -6683,7 +6695,17 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 	}
 	s.attachViewData(r, &data)
 	data.Short = data.CompactNoteList
-	s.views.RenderTemplate(w, "note_detail", data)
+	etag := noteCardETag(data.NoteMeta, data.NoteHash)
+	if etag != "" && strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+	}
+	s.views.RenderTemplateWithCache(w, "note_detail", data, "private, max-age=0, must-revalidate")
 }
 
 func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, error) {
@@ -6960,12 +6982,26 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 		}
 	}
 
+	noteHash := ""
+	if summary, err := s.idx.NoteHashByPath(r.Context(), notePath); err == nil {
+		noteHash = summary.Hash
+		if !summary.UpdatedAt.IsZero() {
+			noteMeta.Updated = summary.UpdatedAt
+		}
+	} else {
+		if len(content) > 0 {
+			sum := sha256.Sum256(content)
+			noteHash = hex.EncodeToString(sum[:])
+		}
+	}
+
 	noteURL := baseURLForLinks(r, "/notes/"+notePath)
 
 	data := ViewData{
 		NotePath:     notePath,
 		NoteTitle:    meta.Title,
 		NoteMeta:     noteMeta,
+		NoteHash:     noteHash,
 		RenderedHTML: template.HTML(htmlStr),
 		NoteURL:      noteURL,
 		FolderLabel:  folderLabel,
