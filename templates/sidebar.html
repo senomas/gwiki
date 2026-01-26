@@ -17,45 +17,45 @@
 {{end}}
 
 {{define "sidebar_content"}}
-<div>
-  <div
-    class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-500"
-  >
-    <span>{{.CalendarMonth.Label}}</span>
-    <span class="flex items-center gap-2 text-slate-600">
-      <span class="rounded-full border border-slate-700 px-2 py-0.5">&lt;</span>
-      <span class="rounded-full border border-slate-700 px-2 py-0.5">&gt;</span>
-    </span>
-  </div>
-  <div
-    class="mt-3 grid grid-cols-7 gap-1 text-[10px] uppercase tracking-[0.2em] text-slate-600"
-  >
-    <span class="text-center">Sun</span>
-    <span class="text-center">Mon</span>
-    <span class="text-center">Tue</span>
-    <span class="text-center">Wed</span>
-    <span class="text-center">Thu</span>
-    <span class="text-center">Fri</span>
-    <span class="text-center">Sat</span>
-  </div>
-  <div class="mt-2 grid grid-cols-7 gap-1 text-xs">
-    {{range .CalendarMonth.Weeks}}
-      {{range .Days}}
-        {{if .HasUpdates}}
-          <a
-            class="flex h-7 w-7 items-center justify-center rounded-md transition {{if .Active}}ring-1 ring-sky-400/70 bg-[#2a2f35] text-slate-100{{else}}bg-[#2a2f35] text-slate-100 hover:bg-[#3a4149]{{end}}"
-            href="{{.URL}}"
-            title="{{.UpdateCount}} updates"
-          >
-            {{.Day}}
-          </a>
-        {{else}}
-          <div class="flex h-7 w-7 items-center justify-center rounded-md transition {{if .InMonth}}text-slate-300 hover:bg-[#1c2026]{{else}}text-slate-600{{end}}">
-            {{.Day}}
-          </div>
-        {{end}}
-      {{end}}
-    {{end}}
+<div
+  id="sidebar-calendar"
+  hx-get="/calendar"
+  hx-trigger="load"
+  hx-swap="outerHTML"
+>
+  <div class="calendar-panel" data-calendar>
+    <div class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-600">
+      <div class="h-3 w-24 rounded bg-slate-800/70"></div>
+      <div class="flex items-center gap-2">
+        <div class="h-4 w-6 rounded-full bg-slate-800/70"></div>
+        <div class="h-4 w-6 rounded-full bg-slate-800/70"></div>
+      </div>
+    </div>
+    <div class="mt-3 grid grid-cols-7 gap-1 text-[10px] uppercase tracking-[0.2em] text-slate-700">
+      <div class="h-3 w-full rounded bg-slate-800/60"></div>
+      <div class="h-3 w-full rounded bg-slate-800/60"></div>
+      <div class="h-3 w-full rounded bg-slate-800/60"></div>
+      <div class="h-3 w-full rounded bg-slate-800/60"></div>
+      <div class="h-3 w-full rounded bg-slate-800/60"></div>
+      <div class="h-3 w-full rounded bg-slate-800/60"></div>
+      <div class="h-3 w-full rounded bg-slate-800/60"></div>
+    </div>
+    <div class="mt-2 grid grid-cols-7 gap-1 text-xs">
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+      <div class="h-7 w-7 rounded bg-slate-800/60"></div>
+    </div>
   </div>
 </div>
 
@@ -63,7 +63,7 @@
   <div
     class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500"
   >
-    <a class="text-slate-500 transition hover:text-slate-300" href="/todo{{if .FilterQuery}}?{{.FilterQuery}}{{end}}">Todo ({{.DueCount}} / {{.TodoCount}})</a>
+    <a class="text-slate-500 transition hover:text-slate-300" href="{{.TodoURL}}" data-preserve-month="true">Todo ({{.DueCount}} / {{.TodoCount}})</a>
     <span class="text-slate-600">.</span>
   </div>
 </div>
@@ -83,6 +83,7 @@
     >
     {{else}}
     <a
+      data-preserve-month="true"
       class="rounded-full border px-2.5 py-1 transition {{if .Active}}border-sky-500 bg-sky-500/20 text-sky-200{{else}}border-slate-700/70 bg-[#15181c] text-slate-300 hover:border-slate-500{{end}}"
       href="{{.URL}}"
       >#{{.Name}} ({{.Count}})</a
@@ -160,7 +161,7 @@
   <details class="space-y-2" {{if .Expanded}}open{{end}}>
     <summary
       class="journal-tree__summary cursor-pointer list-none text-slate-300 transition hover:text-slate-100"
-      hx-get="/journal/month/{{printf "%04d-%02d" .Year .Month}}{{if $.FilterQuery}}?{{$.FilterQuery}}{{end}}"
+      hx-get="/journal/month/{{printf "%04d-%02d" .Year .Month}}{{if $.RawQuery}}?{{$.RawQuery}}{{end}}"
       hx-target="#journal-month-{{printf "%04d-%02d" .Year .Month}}"
       hx-swap="innerHTML"
       hx-trigger="click once"
@@ -176,7 +177,7 @@
 {{define "journal_month"}}
 {{range .JournalMonth.Days}}
 <li>
-  <a class="text-slate-300 transition hover:text-slate-100" href="{{.URL}}{{if $.FilterQuery}}?{{$.FilterQuery}}{{end}}">{{.Label}}</a>
+  <a class="text-slate-300 transition hover:text-slate-100" href="{{.URL}}{{if $.RawQuery}}?{{$.RawQuery}}{{end}}">{{.Label}}</a>
 </li>
 {{end}}
 {{end}}
@@ -195,7 +196,7 @@
 {{range .}}
 <li>
   {{if .URL}}
-    <a class="{{if .Active}}text-sky-200{{end}}" href="{{.URL}}">{{.Name}}</a>
+    <a class="{{if .Active}}text-sky-200{{end}}" href="{{.URL}}" data-preserve-month="true">{{.Name}}</a>
   {{else}}
     <span>{{.Name}}</span>
   {{end}}
@@ -206,4 +207,61 @@
   {{end}}
 </li>
 {{end}}
+{{end}}
+
+{{define "calendar"}}
+<div id="sidebar-calendar" class="calendar-panel" data-calendar>
+  <div
+    class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-500"
+  >
+    <span>{{.CalendarMonth.Label}}</span>
+    <span class="flex items-center gap-2 text-slate-600">
+      <a
+        class="rounded-full border border-slate-700 px-2 py-0.5 transition hover:border-slate-500 hover:text-slate-200"
+        href="{{.CalendarPrevURL}}"
+      >&lt;</a>
+      {{if .CalendarTodayURL}}
+        <a
+          class="rounded-full border border-slate-700 px-2 py-0.5 text-xs transition hover:border-slate-500 hover:text-slate-200"
+          href="{{.CalendarTodayURL}}"
+          title="Current month"
+        >•</a>
+      {{end}}
+      <a
+        class="rounded-full border border-slate-700 px-2 py-0.5 transition hover:border-slate-500 hover:text-slate-200"
+        href="{{.CalendarNextURL}}"
+      >&gt;</a>
+    </span>
+  </div>
+  <div
+    class="mt-3 grid grid-cols-7 gap-1 text-[10px] uppercase tracking-[0.2em] text-slate-600"
+  >
+    <span class="text-center">Sun</span>
+    <span class="text-center">Mon</span>
+    <span class="text-center">Tue</span>
+    <span class="text-center">Wed</span>
+    <span class="text-center">Thu</span>
+    <span class="text-center">Fri</span>
+    <span class="text-center">Sat</span>
+  </div>
+  <div class="mt-2 grid grid-cols-7 gap-1 text-xs">
+    {{range .CalendarMonth.Weeks}}
+      {{range .Days}}
+        {{if .HasUpdates}}
+          <a
+            class="flex h-7 w-7 items-center justify-center rounded-md transition {{if .Active}}ring-1 ring-sky-400/70 bg-[#2a2f35] text-slate-100{{else}}{{if .Today}}ring-1 ring-sky-300/80 bg-sky-500/20 text-sky-100{{else}}bg-[#2a2f35] text-slate-100 hover:bg-[#3a4149]{{end}}{{end}}"
+            href="{{.URL}}"
+            title="{{.UpdateCount}} updates"
+          >
+            {{.Day}}
+          </a>
+        {{else}}
+          <div class="flex h-7 w-7 items-center justify-center rounded-md transition {{if .InMonth}}{{if .Today}}ring-1 ring-sky-300/80 bg-sky-500/20 text-sky-100{{else}}text-slate-300 hover:bg-[#1c2026]{{end}}{{else}}text-slate-600{{end}}">
+            {{.Day}}
+          </div>
+        {{end}}
+      {{end}}
+    {{end}}
+  </div>
+</div>
 {{end}}

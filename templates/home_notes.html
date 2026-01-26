@@ -6,9 +6,9 @@
     <div class="flex items-start justify-between gap-4">
       <div class="flex-1">
         {{ $noteURL := printf "/notes/%s" .Path }}
-        {{ if $.FilterQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.FilterQuery }}{{ end }}
+        {{ if $.RawQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.RawQuery }}{{ end }}
         {{ $cardURL := printf "/notes/%s/card" .Path }}
-        {{ if $.FilterQuery }}{{ $cardURL = printf "/notes/%s/card?%s" .Path $.FilterQuery }}{{ end }}
+        {{ if $.RawQuery }}{{ $cardURL = printf "/notes/%s/card?%s" .Path $.RawQuery }}{{ end }}
         <div
           hx-get="{{ $cardURL }}"
           hx-trigger="revealed"

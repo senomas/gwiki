@@ -2,15 +2,18 @@ package web
 
 import (
 	"net/url"
-	"strings"
 	"time"
 
 	"gwiki/internal/index"
 )
 
 type CalendarMonth struct {
-	Label string
-	Weeks []CalendarWeek
+	Label        string
+	PrevMonth    string
+	NextMonth    string
+	CurrentMonth string
+	IsCurrent    bool
+	Weeks        []CalendarWeek
 }
 
 type CalendarWeek struct {
@@ -25,12 +28,16 @@ type CalendarDay struct {
 	UpdateCount int
 	URL         string
 	Active      bool
+	Today       bool
 }
 
-func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePath string, tagQuery string, activeDate string, activeSearch string, folderQuery string) CalendarMonth {
+func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, baseURL string, activeDate string) CalendarMonth {
 	now = now.UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthEnd := monthStart.AddDate(0, 1, -1)
+	current := time.Now().In(now.Location())
+	currentMonthKey := current.Format("2006-01")
+	todayKey := current.Format("2006-01-02")
 	updateMap := map[string]int{}
 	for _, update := range updates {
 		updateMap[update.Day] = update.Count
@@ -47,7 +54,7 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 		url := ""
 		isActive := activeDate == dateKey && count > 0
 		if count > 0 {
-			url = buildDailyURL(dateKey, tagQuery, folderQuery)
+			url = buildDailyURL(baseURL, dateKey)
 		}
 		days = append(days, CalendarDay{
 			Date:        dateKey,
@@ -57,6 +64,7 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 			UpdateCount: count,
 			URL:         url,
 			Active:      isActive,
+			Today:       dateKey == todayKey,
 		})
 
 		if len(days) == 7 {
@@ -69,25 +77,24 @@ func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, basePat
 	}
 
 	return CalendarMonth{
-		Label: monthStart.Format("January 2006"),
-		Weeks: weeks,
+		Label:        monthStart.Format("January 2006"),
+		PrevMonth:    monthStart.AddDate(0, -1, 0).Format("2006-01"),
+		NextMonth:    monthStart.AddDate(0, 1, 0).Format("2006-01"),
+		CurrentMonth: currentMonthKey,
+		IsCurrent:    monthStart.Format("2006-01") == currentMonthKey,
+		Weeks:        weeks,
 	}
 }
 
-func buildDailyURL(date string, tagQuery string, folderQuery string) string {
+func buildDailyURL(baseURL string, date string) string {
 	if date == "" {
 		return "/"
 	}
-	params := make([]string, 0, 2)
-	if tagQuery != "" {
-		params = append(params, "t="+tagQuery)
+	u, err := url.Parse(baseURL)
+	if err != nil || u == nil {
+		u = &url.URL{Path: "/"}
 	}
-	if folderQuery != "" {
-		params = append(params, "f="+url.QueryEscape(folderQuery))
-	}
-	target := "/daily/" + date
-	if len(params) == 0 {
-		return target
-	}
-	return target + "?" + strings.Join(params, "&")
+	u.Path = "/daily/" + date
+	u.RawPath = ""
+	return u.String()
 }

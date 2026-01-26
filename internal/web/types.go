@@ -38,6 +38,9 @@ type ViewData struct {
 	Tags             []index.TagSummary
 	UpdateDays       []index.UpdateDaySummary
 	CalendarMonth    CalendarMonth
+	CalendarPrevURL  string
+	CalendarNextURL  string
+	CalendarTodayURL string
 	OpenTasks        []index.TaskItem
 	TodoTasks        []TaskView
 	TodoNotes        []NoteCard
@@ -56,6 +59,8 @@ type ViewData struct {
 	ActiveFolder     string
 	FolderQuery      string
 	FilterQuery      string
+	TodoURL          string
+	RawQuery         string
 	HomeURL          string
 	NoteURL          string
 	ReturnURL        string
