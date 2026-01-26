@@ -37,6 +37,17 @@ Authentication helpers and password verification.
 
 Groups are discovered by scanning top-level folders under `WIKI_REPO_PATH` for a `.member.txt` file. The folder name becomes the group name; each line is `user:access` with access `ro` or `rw`.
 
+## Quick launcher pipeline
+
+Quick launcher entries are generated server-side and rendered immediately on page load (no network on open). When the user types, the client calls `GET /quick/launcher?q=...` to fetch a unified list ordered as actions → tags → folders → notes. Actions are also filtered by the query.
+
+Tag and folder results toggle filters on the current page by mutating only the `t` or `f` query params while preserving other params. Notes are searched via FTS (`Index.Search`). The `JOURNAL` tag is injected into results when it matches the query.
+
+Key pieces:
+- `internal/web/handlers.go`: `quickLauncherEntries`, `handleQuickLauncher`, and URL toggle helpers.
+- `templates/quick_launcher_entries.html`: shared rendering fragment.
+- `templates/base.html`: quick launcher UI + HTMX wiring.
+
 ## `internal/auth/auth_test.go`
 Auth unit tests.
 
@@ -293,6 +304,8 @@ Embed rendering tests.
 ## `internal/web/handlers.go`
 HTTP handlers, markdown rendering, embeds, and UI helpers.
 
+- `quickLauncherEntries`: builds quick launcher results
+- `handleQuickLauncher`: HTMX endpoint for quick launcher search
 - `Extend`: helper for extend
 - `Transform`: helper for transform
 - `shouldOpenNewTab`: helper for should open new tab
@@ -522,4 +535,4 @@ HTML template parsing and rendering.
 ## `internal/web/types.go`
 View models and UI types.
 
-- (no functions)
+- `QuickLauncherEntry`: quick launcher item model

@@ -20,11 +20,10 @@ Tip: on index/todo/due pages, navigation focuses note titles. On note pages it f
 ## Quick Launcher
 
 - Open with `Ctrl+Space` or click your username (top right).
-- Type to search recent notes (fuzzy match).
-- Start with `#` to search tags.
+- Type to search actions, tags, folders, and notes (ordered: actions → tags → folders → notes).
 - Use Arrow Up/Down and Enter to select.
 - Selecting a note opens a submenu (Open/Edit/Delete). Enter activates the focused item.
-- Toggle list view (compact/full) from the launcher; it remembers your choice.
+- Tag and folder results toggle filters on the current page (they keep your existing query params).
 
 ## Groups
 
@@ -38,6 +37,10 @@ charlie:ro
 ```
 
 Valid access values are `rw` and `ro`. Users listed with `rw` can create and edit notes in that group; `ro` users can only view notes.
+
+## Settings
+
+Open Settings from the launcher. You can switch the list view between compact and full. Admin users also see a User Management section.
 
 ## Markdown Basics
 
@@ -96,5 +99,4 @@ Supported embeds include YouTube, TikTok, Instagram, Google Maps, and video atta
 ## Tips and Tricks
 
 - Use the quick launcher for fast navigation and actions.
-- Use `#` in the editor or launcher to search tags quickly.
 - Keep task lines short; the badge rendering works best on one line.
