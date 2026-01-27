@@ -131,6 +131,7 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	}
 	hasOrigin := gitHasOriginRemote(ctx, repoDir, env, writer)
 	if hasOrigin {
+		writeLine("auto-sync: fetch %s", mainBranch)
 		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", mainBranch)
 	}
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
@@ -150,6 +151,7 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 				_ = trimLogFile(logFile, 1000)
 				return output.String(), nil
 			}
+			writeLine("auto-sync: push %s", mainBranch)
 			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", mainBranch)
 		} else {
 			writeLine("auto-sync: no remote origin")
@@ -171,6 +173,7 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 			return output.String(), nil
 		}
 
+		writeLine("auto-sync: push %s", mainBranch)
 		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", mainBranch)
 	} else {
 		writeLine("auto-sync: no remote origin")
