@@ -130,6 +130,9 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 		}
 	}
 	hasOrigin := gitHasOriginRemote(ctx, repoDir, env, writer)
+	if hasOrigin {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", mainBranch)
+	}
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "notes/")
 
