@@ -37,6 +37,7 @@ func main() {
 	}
 
 	cfg := config.Load()
+	index.SetBuildVersion(web.BuildVersion)
 	if cfg.RepoPath == "" {
 		slog.Error("WIKI_REPO_PATH is required")
 		os.Exit(1)

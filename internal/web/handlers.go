@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -7535,8 +7534,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 		}
 	} else {
 		if len(content) > 0 {
-			sum := sha256.Sum256(content)
-			noteHash = hex.EncodeToString(sum[:])
+			noteHash = index.ContentHash(content)
 		}
 	}
 

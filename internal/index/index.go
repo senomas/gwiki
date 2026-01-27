@@ -2,9 +2,7 @@ package index
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -1033,7 +1031,7 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) (int, int, i
 				return err
 			}
 			rec, ok := records[notePath]
-			if ok && rec.MTimeUnix == info.ModTime().Unix() && rec.Size == info.Size() {
+			if ok && rec.MTimeUnix == info.ModTime().Unix() && rec.Size == info.Size() && hashMatchesBuildVersion(rec.Hash) {
 				return nil
 			}
 			content, err := os.ReadFile(path)
@@ -1071,8 +1069,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	meta := ParseContent(string(content))
 	attrs := FrontmatterAttributes(string(content))
 	uid := strings.TrimSpace(attrs.ID)
-	hash := sha256.Sum256(content)
-	checksum := hex.EncodeToString(hash[:])
+	checksum := ContentHash(content)
 	isJournal := 0
 	if isJournalPath(relPath) {
 		isJournal = 1
@@ -1302,12 +1299,11 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 	if err != nil {
 		return err
 	}
-	if rec.MTimeUnix == mtime.Unix() && rec.Size == size {
+	if rec.MTimeUnix == mtime.Unix() && rec.Size == size && hashMatchesBuildVersion(rec.Hash) {
 		return nil
 	}
 
-	hash := sha256.Sum256(content)
-	checksum := hex.EncodeToString(hash[:])
+	checksum := ContentHash(content)
 	if checksum == rec.Hash {
 		_, err := i.execContext(ctx, "UPDATE files SET mtime_unix=?, size=? WHERE id=?", mtime.Unix(), size, rec.ID)
 		return err
