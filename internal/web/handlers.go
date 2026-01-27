@@ -2232,7 +2232,7 @@ func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader t
 		if !isEmbedParagraphParent(para.Parent()) {
 			continue
 		}
-		urlText, label, ok := paragraphOnlyLink(para, source)
+		urlText, label, _, ok := paragraphOnlyMedia(para, source)
 		if !ok {
 			continue
 		}
@@ -2629,6 +2629,59 @@ func paragraphOnlyLink(para *ast.Paragraph, source []byte) (string, string, bool
 		label = urlText
 	}
 	return strings.Trim(urlText, "<>"), label, true
+}
+
+func paragraphOnlyMedia(para *ast.Paragraph, source []byte) (string, string, ast.Node, bool) {
+	var (
+		foundNode ast.Node
+		urlText   string
+	)
+	for child := para.FirstChild(); child != nil; child = child.NextSibling() {
+		switch node := child.(type) {
+		case *ast.Link:
+			if foundNode != nil {
+				return "", "", nil, false
+			}
+			foundNode = node
+			urlText = strings.TrimSpace(string(node.Destination))
+		case *ast.AutoLink:
+			if node.AutoLinkType != ast.AutoLinkURL {
+				return "", "", nil, false
+			}
+			if foundNode != nil {
+				return "", "", nil, false
+			}
+			foundNode = node
+			urlText = strings.TrimSpace(string(node.URL(source)))
+		case *ast.Image:
+			if foundNode != nil {
+				return "", "", nil, false
+			}
+			foundNode = node
+			urlText = strings.TrimSpace(string(node.Destination))
+		case *ast.Text:
+			if strings.TrimSpace(string(node.Segment.Value(source))) == "" {
+				continue
+			}
+			return "", "", nil, false
+		default:
+			return "", "", nil, false
+		}
+	}
+	if foundNode == nil || urlText == "" {
+		return "", "", nil, false
+	}
+	label := ""
+	switch node := foundNode.(type) {
+	case *ast.Link:
+		label = extractTextFromNode(node, source)
+	case *ast.Image:
+		label = strings.TrimSpace(string(node.Title))
+	}
+	if label == "" {
+		label = urlText
+	}
+	return strings.Trim(urlText, "<>"), label, foundNode, true
 }
 
 func extractTextFromNode(node ast.Node, source []byte) string {
@@ -7455,6 +7508,18 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	if isHTMX(r) {
+		attachments := listAttachmentNames(s.noteAttachmentsDir(ownerName, meta.ID))
+		attachmentBase := "/" + filepath.ToSlash(filepath.Join("attachments", meta.ID))
+		data := ViewData{
+			NotePath:       notePath,
+			Attachments:    attachments,
+			AttachmentBase: attachmentBase,
+		}
+		s.views.RenderTemplate(w, "attachments_list", data)
+		return
+	}
+
 	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
 }
 
@@ -7539,6 +7604,18 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 	if err := os.Rename(tmpPath, targetPath); err != nil {
 		_ = os.Remove(tmpPath)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if isHTMX(r) {
+		attachments := listAttachmentNames(s.tempAttachmentsDir(ownerName, token))
+		data := ViewData{
+			Attachments:   attachments,
+			UploadToken:   token,
+			OwnerOptions:  []OwnerOption{{Name: ownerName, Label: ownerName}},
+			SelectedOwner: ownerName,
+		}
+		s.views.RenderTemplate(w, "attachments_list", data)
 		return
 	}
 
