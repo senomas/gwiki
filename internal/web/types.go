@@ -125,7 +125,7 @@ type GitRemoteCred struct {
 	URL   string
 	Host  string
 	User  string
-	Token string
+	HasToken bool
 }
 
 type BacklinkView struct {

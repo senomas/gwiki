@@ -62,9 +62,13 @@
                       name="git_token_{{$i}}"
                       form="settings-form"
                       type="password"
-                      value="{{$remote.Token}}"
+                      value=""
+                      {{if $remote.HasToken}}placeholder="••••••••"{{end}}
                       spellcheck="false"
                     >
+                    {{if $remote.HasToken}}
+                      <input type="hidden" name="git_token_has_{{$i}}" value="1" form="settings-form">
+                    {{end}}
                   </div>
                 </div>
               </div>

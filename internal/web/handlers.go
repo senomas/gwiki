@@ -5652,7 +5652,8 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 			credPath := filepath.Join(dataPath, owner+".cred")
 			remotes, err := listGitRemotes(ownerRepo)
 			if err == nil {
-				entries := buildGitCredentialEntries(remotes, r.Form)
+				existing := parseGitCredentialsFile(credPath)
+				entries := buildGitCredentialEntries(remotes, existing, r.Form)
 				content := strings.Join(entries, "\n")
 				if content != "" {
 					content += "\n"
@@ -8677,7 +8678,7 @@ func mergeGitRemoteCreds(remotes []GitRemoteCred, creds []gitCredentialEntry) []
 		for _, cred := range creds {
 			if remotes[i].Host == cred.Host {
 				remotes[i].User = cred.User
-				remotes[i].Token = cred.Pass
+				remotes[i].HasToken = cred.Pass != ""
 				break
 			}
 		}
@@ -8685,12 +8686,31 @@ func mergeGitRemoteCreds(remotes []GitRemoteCred, creds []gitCredentialEntry) []
 	return remotes
 }
 
-func buildGitCredentialEntries(remotes []GitRemoteCred, form url.Values) []string {
+func buildGitCredentialEntries(remotes []GitRemoteCred, existing []gitCredentialEntry, form url.Values) []string {
+	existingByHost := map[string]gitCredentialEntry{}
+	for _, cred := range existing {
+		if cred.Host == "" {
+			continue
+		}
+		existingByHost[cred.Host] = cred
+	}
 	entries := make([]string, 0, len(remotes))
 	for i, remote := range remotes {
+		if remote.Host == "" {
+			continue
+		}
 		user := strings.TrimSpace(form.Get(fmt.Sprintf("git_user_%d", i)))
 		token := strings.TrimSpace(form.Get(fmt.Sprintf("git_token_%d", i)))
-		if user == "" || token == "" || remote.Host == "" {
+		hasToken := strings.TrimSpace(form.Get(fmt.Sprintf("git_token_has_%d", i))) != ""
+		if token == "" && hasToken {
+			if existingCred, ok := existingByHost[remote.Host]; ok {
+				token = existingCred.Pass
+				if user == "" {
+					user = existingCred.User
+				}
+			}
+		}
+		if user == "" || token == "" {
 			continue
 		}
 		u := &url.URL{
