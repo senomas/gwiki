@@ -150,6 +150,7 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 				_ = trimLogFile(logFile, 1000)
 				return output.String(), nil
 			}
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", mainBranch)
 		} else {
 			writeLine("auto-sync: no remote origin")
 		}
