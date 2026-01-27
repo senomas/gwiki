@@ -177,6 +177,111 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	return output.String(), nil
 }
 
+func CommitOnly(ctx context.Context, repoPath string) (string, error) {
+	return CommitOnlyWithOptions(ctx, repoPath, Options{})
+}
+
+func CommitOnlyWithOptions(ctx context.Context, repoPath string, opts Options) (string, error) {
+	opts = resolveOptions(repoPath, opts)
+	repoDir := opts.RepoDir
+	logFile := opts.LogFile
+	commitMessage := opts.CommitMessage
+	mainBranch := opts.MainBranch
+	homeDir := opts.HomeDir
+	gitConfigGlobal := opts.GitConfigGlobal
+	gitCredentialsFile := opts.GitCredentialsFile
+	userName := strings.TrimSpace(opts.UserName)
+	emailDomain := strings.TrimSpace(opts.EmailDomain)
+
+	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
+		return "", fmt.Errorf("auto-sync: no git repo in %s", repoDir)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
+		return "", err
+	}
+	logHandle, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return "", err
+	}
+	defer logHandle.Close()
+
+	var output bytes.Buffer
+	writer := io.MultiWriter(&output, logHandle)
+	writeLine := func(format string, args ...any) {
+		_, _ = fmt.Fprintf(writer, format, args...)
+		_, _ = fmt.Fprintln(writer)
+	}
+
+	env := append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+	)
+	if strings.TrimSpace(homeDir) != "" {
+		env = append(env, "HOME="+homeDir)
+	}
+	if strings.TrimSpace(gitConfigGlobal) != "" {
+		env = append(env, "GIT_CONFIG_GLOBAL="+gitConfigGlobal)
+	}
+	if strings.TrimSpace(gitCredentialsFile) != "" {
+		env = append(env, "GIT_CREDENTIALS_FILE="+gitCredentialsFile)
+	}
+
+	if strings.TrimSpace(gitConfigGlobal) != "" {
+		if err := os.MkdirAll(filepath.Dir(gitConfigGlobal), 0o755); err != nil {
+			return "", err
+		}
+		if _, err := os.Stat(gitConfigGlobal); err != nil && os.IsNotExist(err) {
+			file, createErr := os.OpenFile(gitConfigGlobal, os.O_CREATE|os.O_RDWR, 0o644)
+			if createErr != nil {
+				return "", createErr
+			}
+			_ = file.Close()
+		}
+	}
+	if strings.TrimSpace(gitCredentialsFile) != "" {
+		if err := os.MkdirAll(filepath.Dir(gitCredentialsFile), 0o755); err != nil {
+			return "", err
+		}
+	}
+
+	writeLine("auto-sync: commit-only start %s", time.Now().Format(time.RFC3339))
+	if strings.TrimSpace(gitCredentialsFile) != "" {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--local", "credential.helper", "store --file="+gitCredentialsFile)
+	}
+	if userName != "" {
+		if emailDomain == "" {
+			emailDomain = "gwiki.org"
+		}
+		if ok, _ := gitConfigLocalDefined(ctx, repoDir, env, writer, "user.name"); !ok {
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--local", "user.name", userName)
+		}
+		if ok, _ := gitConfigLocalDefined(ctx, repoDir, env, writer, "user.email"); !ok {
+			email := fmt.Sprintf("%s@%s", userName, emailDomain)
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--local", "user.email", email)
+		}
+	}
+	if strings.TrimSpace(mainBranch) != "" {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
+	}
+	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "notes/")
+	hasChanges, err := gitHasStagedChanges(ctx, repoDir, env, writer)
+	if err != nil {
+		return output.String(), err
+	}
+	if !hasChanges {
+		writeLine("auto-sync: no changes")
+		_ = trimLogFile(logFile, 1000)
+		return output.String(), nil
+	}
+	if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "commit", "-m", commitMessage); err != nil {
+		_ = trimLogFile(logFile, 1000)
+		return output.String(), err
+	}
+	_ = trimLogFile(logFile, 1000)
+	writeLine("auto-sync: commit-only done %s", time.Now().Format(time.RFC3339))
+	return output.String(), nil
+}
+
 func LogGraph(ctx context.Context, repoPath string, limit int) (string, error) {
 	return LogGraphWithOptions(ctx, repoPath, limit, Options{})
 }

@@ -260,6 +260,7 @@ WIKI_GIT_PUSH_DEBOUNCE=10m
 
 - Use Go `slog`.
 - Log: save events, indexing duration, git commit/push results, errors.
+- When implementing new features, add useful debug logs for key steps and decisions.
 - Avoid logging full note contents.
 
 ---

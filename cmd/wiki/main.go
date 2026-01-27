@@ -201,6 +201,7 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 			GitCredentialsFile: filepath.Join(cfg.DataPath, target.Owner+".cred"),
 			GitConfigGlobal:    filepath.Join(cfg.DataPath, target.Owner+".gitconfig"),
 			UserName:           target.Owner,
+			CommitMessage:      "scheduler sync",
 		}
 		output, runErr := syncer.RunWithOptions(ctx, target.Path, opts)
 		unlock()

@@ -6468,6 +6468,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			if info, err := os.Stat(fullPath); err == nil {
 				_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 			}
+			s.commitOwnerRepoAsync(ownerName, "save "+notePath)
 			s.addToast(r, Toast{
 				ID:              uuid.NewString(),
 				Message:         "Journal entry saved.",
@@ -6749,6 +6750,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		_ = s.idx.IndexNote(r.Context(), notePath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
+	s.commitOwnerRepoAsync(ownerName, "create "+notePath)
 
 	s.addToast(r, Toast{
 		ID:              uuid.NewString(),
@@ -7435,6 +7437,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 		_ = os.RemoveAll(attachmentPath)
 	}
 	_ = s.idx.RemoveNoteByPath(ctx, notePath)
+	s.commitOwnerRepoAsync(ownerName, "delete "+notePath)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -8575,6 +8578,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if err == nil {
 		_ = s.idx.IndexNote(ctx, targetPath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
+	s.commitOwnerRepoAsync(ownerName, "save "+targetPath)
 
 	s.addToast(r, Toast{
 		ID:              uuid.NewString(),
@@ -8671,6 +8675,64 @@ func commitRepoIfDirty(ctx context.Context, repoPath string, message string, pat
 		return fmt.Errorf("git commit failed: %s", msg)
 	}
 	return nil
+}
+
+func (s *Server) commitOwnerRepoAsync(ownerName string, message string) {
+	ownerName = strings.TrimSpace(ownerName)
+	if ownerName == "" {
+		return
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "auto: notes"
+	}
+	repoPath := s.ownerRepoPath(ownerName)
+	if repoPath == "" {
+		return
+	}
+	slog.Debug("commit queued", "owner", ownerName)
+	go func() {
+		unlock, err := syncer.Acquire(10 * time.Second)
+		if err != nil {
+			slog.Debug("commit skipped", "owner", ownerName, "err", err)
+			return
+		}
+		defer unlock()
+		opts := syncer.Options{
+			HomeDir:            s.cfg.DataPath,
+			GitCredentialsFile: filepath.Join(s.cfg.DataPath, ownerName+".cred"),
+			GitConfigGlobal:    filepath.Join(s.cfg.DataPath, ownerName+".gitconfig"),
+			UserName:           ownerName,
+			CommitMessage:      message,
+		}
+		output, err := syncer.CommitOnlyWithOptions(context.Background(), repoPath, opts)
+		logCommitOutput(ownerName, output, err)
+	}()
+}
+
+func logCommitOutput(owner string, output string, runErr error) {
+	if runErr != nil {
+		slog.Warn("commit failed", "owner", owner, "err", runErr)
+	}
+	if strings.TrimSpace(output) == "" {
+		return
+	}
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		switch {
+		case strings.HasPrefix(trimmed, "$ "):
+			slog.Debug("commit cmd", "owner", owner, "cmd", strings.TrimPrefix(trimmed, "$ "))
+		case strings.Contains(lower, "-> error") || strings.HasPrefix(lower, "error:"):
+			slog.Warn("commit cmd error", "owner", owner, "line", trimmed)
+		default:
+			slog.Debug("commit cmd output", "owner", owner, "line", trimmed)
+		}
+	}
 }
 
 func gitPathspecs(repoPath string, paths []string) ([]string, error) {

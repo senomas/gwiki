@@ -76,14 +76,16 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 	}
 	ownerClause, ownerArgs := ownerWhereClause(ownerUserID, ownerGroupID, "files")
 
-	args := []string{
-		"log",
-		"--since=@" + strconv.FormatInt(lastSync, 10),
+	args := []string{"log"}
+	if lastSync > 0 {
+		args = append(args, "--since=@"+strconv.FormatInt(lastSync, 10))
+	}
+	args = append(args,
 		"--name-only",
 		"--pretty=format:%at",
 		"--",
 		"notes/",
-	}
+	)
 	slog.Debug("git history log", "owner", ownerName, "repo", repoDir, "args", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repoDir
