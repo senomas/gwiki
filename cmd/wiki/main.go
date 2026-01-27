@@ -209,6 +209,11 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 			slog.Warn("sync schedule failed", "owner", target.Owner, "err", runErr)
 			continue
 		}
+		logOutput, logErr := syncer.LogGraphWithOptions(ctx, target.Path, 10, opts)
+		output += logOutput
+		if logErr != nil {
+			slog.Warn("sync schedule log graph failed", "owner", target.Owner, "err", logErr)
+		}
 		logSyncOutput(target.Owner, output)
 		if inserted, histErr := idx.SyncGitHistory(ctx, target.Owner, target.Path); histErr != nil {
 			slog.Warn("sync schedule history failed", "owner", target.Owner, "err", histErr)
