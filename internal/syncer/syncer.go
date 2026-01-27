@@ -27,6 +27,8 @@ type Options struct {
 	HomeDir            string
 	GitConfigGlobal    string
 	GitCredentialsFile string
+	UserName           string
+	EmailDomain        string
 }
 
 func Acquire(timeout time.Duration) (func(), error) {
@@ -57,6 +59,8 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	homeDir := opts.HomeDir
 	gitConfigGlobal := opts.GitConfigGlobal
 	gitCredentialsFile := opts.GitCredentialsFile
+	userName := strings.TrimSpace(opts.UserName)
+	emailDomain := strings.TrimSpace(opts.EmailDomain)
 
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
 		return "", fmt.Errorf("auto-sync: no git repo in %s", repoDir)
@@ -111,7 +115,19 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 
 	writeLine("auto-sync: start %s", time.Now().Format(time.RFC3339))
 	if strings.TrimSpace(gitCredentialsFile) != "" {
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--global", "credential.helper", "store --file="+gitCredentialsFile)
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--local", "credential.helper", "store --file="+gitCredentialsFile)
+	}
+	if userName != "" {
+		if emailDomain == "" {
+			emailDomain = "gwiki.org"
+		}
+		if ok, _ := gitConfigLocalDefined(ctx, repoDir, env, writer, "user.name"); !ok {
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--local", "user.name", userName)
+		}
+		if ok, _ := gitConfigLocalDefined(ctx, repoDir, env, writer, "user.email"); !ok {
+			email := fmt.Sprintf("%s@%s", userName, emailDomain)
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "config", "--local", "user.email", email)
+		}
 	}
 	hasOrigin := gitHasOriginRemote(ctx, repoDir, env, writer)
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
@@ -234,7 +250,40 @@ func resolveOptions(repoPath string, opts Options) Options {
 	if strings.TrimSpace(opts.GitCredentialsFile) == "" {
 		opts.GitCredentialsFile = filepath.Join(opts.HomeDir, ".git-credentials")
 	}
+	if strings.TrimSpace(opts.EmailDomain) == "" {
+		opts.EmailDomain = strings.TrimSpace(os.Getenv("WIKI_EMAIL_DOMAIN"))
+	}
+	if strings.TrimSpace(opts.EmailDomain) == "" {
+		opts.EmailDomain = strings.TrimSpace(os.Getenv("WIKI_DOMAIN"))
+	}
+	if strings.TrimSpace(opts.EmailDomain) == "" {
+		opts.EmailDomain = "gwiki.org"
+	}
 	return opts
+}
+
+func gitConfigLocalDefined(ctx context.Context, dir string, env []string, writer io.Writer, key string) (bool, error) {
+	writeCommand(writer, "git", "config", "--local", "--get", key)
+	cmd := exec.CommandContext(ctx, "git", "config", "--local", "--get", key)
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_, _ = writer.Write(output)
+	}
+	if err == nil {
+		_, _ = fmt.Fprintln(writer, "-> ok")
+		_, _ = fmt.Fprintln(writer)
+		return strings.TrimSpace(string(output)) != "", nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		_, _ = fmt.Fprintln(writer, "-> not set")
+		_, _ = fmt.Fprintln(writer)
+		return false, nil
+	}
+	_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+	_, _ = fmt.Fprintln(writer)
+	return false, err
 }
 
 func gitHasStagedChanges(ctx context.Context, dir string, env []string, writer io.Writer) (bool, error) {
