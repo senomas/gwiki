@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,7 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 	if err != nil {
 		return 0, err
 	}
+	slog.Debug("git history sync start", "owner", ownerName, "since", lastSync)
 	userName, err := gitConfigLocal(ctx, repoDir, "user.name")
 	if err != nil {
 		return 0, err
@@ -82,6 +84,7 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 		"--",
 		"notes/",
 	}
+	slog.Debug("git history log", "owner", ownerName, "repo", repoDir, "args", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
@@ -115,6 +118,7 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 			if ts > maxTime {
 				maxTime = ts
 			}
+			slog.Debug("git history commit", "owner", ownerName, "time", currentTime)
 			continue
 		}
 		if currentTime == 0 {
@@ -128,6 +132,7 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 		if !strings.HasSuffix(strings.ToLower(relPath), ".md") {
 			continue
 		}
+		slog.Debug("git history file", "owner", ownerName, "path", relPath)
 		var fileID int
 		args := append([]interface{}{}, ownerArgs...)
 		args = append(args, relPath)
@@ -148,6 +153,7 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 		}
 		if rows, _ := res.RowsAffected(); rows > 0 {
 			inserted++
+			slog.Debug("git history insert", "owner", ownerName, "file_id", fileID, "user_id", actorID, "action_date", actionDate)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -168,6 +174,7 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	slog.Debug("git history sync done", "owner", ownerName, "inserted", inserted, "last_sync", maxTime)
 	return inserted, nil
 }
 
