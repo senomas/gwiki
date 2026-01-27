@@ -89,6 +89,10 @@ cache 4
 
   Call me at https://wa.me/628129777287 thanks
 
+  - [x] finished subtask
+
+    ignored details
+
 - foo
 
   https://chatgpt.com/s/t_696d2140457c819180ea7dfed7e578d9

@@ -124,9 +124,24 @@ func UncheckedTasksSnippet(input string) string {
 		}
 		paragraph := []string{line}
 		baseIndent := indent + 2
+		skipIndent := -1
 		for j := i + 1; j < len(lines); j++ {
 			next := lines[j]
 			nextIndent := countIndentSpaces(next)
+			if skipIndent >= 0 {
+				if nextIndent > skipIndent {
+					continue
+				}
+				if next == "" && j+1 < len(lines) && countIndentSpaces(lines[j+1]) > skipIndent {
+					continue
+				}
+				skipIndent = -1
+			}
+			nextTrimmed := strings.TrimSpace(next)
+			if strings.HasPrefix(nextTrimmed, "- [x]") || strings.HasPrefix(nextTrimmed, "- [X]") {
+				skipIndent = nextIndent
+				continue
+			}
 			if next == "" && j+1 < len(lines) && countIndentSpaces(lines[j+1]) >= baseIndent {
 				paragraph = append(paragraph, next)
 				continue
