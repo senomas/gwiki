@@ -37,8 +37,8 @@ func TestEnsureFrontmatterAddsFields(t *testing.T) {
 	if _, ok := fm["title"]; ok {
 		t.Fatalf("expected title to be omitted from frontmatter")
 	}
-	if !strings.Contains(strings.Join(fmLines, "\n"), "history:\n  - user: dummy") {
-		t.Fatalf("expected history to be added")
+	if strings.Contains(strings.Join(fmLines, "\n"), "history:") {
+		t.Fatalf("expected history to be omitted")
 	}
 }
 
@@ -79,8 +79,8 @@ func TestEnsureFrontmatterPreservesIDAndCreated(t *testing.T) {
 	if fm["updated"] != expectedUpdated {
 		t.Fatalf("expected updated to be %s, got %s", expectedUpdated, fm["updated"])
 	}
-	if !strings.Contains(strings.Join(fmLines, "\n"), "action: edit") {
-		t.Fatalf("expected history edit entry to be added")
+	if strings.Contains(strings.Join(fmLines, "\n"), "history:") {
+		t.Fatalf("expected history to be omitted")
 	}
 }
 
@@ -108,8 +108,8 @@ func TestEnsureFrontmatterNoUpdated(t *testing.T) {
 	if fm["updated"] != "2020-01-02T00:00:00Z" {
 		t.Fatalf("expected updated to stay the same, got %s", fm["updated"])
 	}
-	if !strings.Contains(strings.Join(fmLines, "\n"), "action: edit") {
-		t.Fatalf("expected history edit entry to be added")
+	if strings.Contains(strings.Join(fmLines, "\n"), "history:") {
+		t.Fatalf("expected history to be omitted")
 	}
 }
 
@@ -137,9 +137,8 @@ func TestEnsureFrontmatterHistoryMax(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected frontmatter")
 	}
-	historyBlock := strings.Join(fmLines, "\n")
-	if strings.Count(historyBlock, "  - user: dummy") != 2 {
-		t.Fatalf("expected history to be trimmed to 2 entries")
+	if strings.Contains(strings.Join(fmLines, "\n"), "history:") {
+		t.Fatalf("expected history to be omitted")
 	}
 }
 
@@ -164,12 +163,8 @@ func TestEnsureFrontmatterHistoryMergeWindow(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected frontmatter")
 	}
-	historyBlock := strings.Join(fmLines, "\n")
-	if strings.Count(historyBlock, "  - user: dummy") != 2 {
-		t.Fatalf("expected history to merge within window without duplicate header")
-	}
-	if !strings.Contains(historyBlock, "at: 2024-03-04T05:20:00Z") {
-		t.Fatalf("expected history timestamp to update")
+	if strings.Contains(strings.Join(fmLines, "\n"), "history:") {
+		t.Fatalf("expected history to be omitted")
 	}
 }
 

@@ -6167,9 +6167,6 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 		}
 		normalized := normalizeLineEndings(string(content))
 		labelTime := note.MTime
-		if historyTime, ok := index.LatestHistoryTime(normalized); ok {
-			labelTime = historyTime
-		}
 		metaAttrs := index.FrontmatterAttributes(normalized)
 		if metaAttrs.Updated.IsZero() {
 			metaAttrs.Updated = labelTime.Local()
@@ -7236,9 +7233,6 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	}
 	if info != nil {
 		labelTime := info.ModTime()
-		if historyTime, ok := index.LatestHistoryTime(string(normalizedContent)); ok {
-			labelTime = historyTime
-		}
 		if noteMeta.Updated.IsZero() {
 			noteMeta.Updated = labelTime.Local()
 		}

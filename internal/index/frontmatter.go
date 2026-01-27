@@ -26,6 +26,18 @@ func EnsureFrontmatterWithTitleAndUserNoUpdated(content string, now time.Time, m
 	return ensureFrontmatterWithTitleAndUser(content, now, maxUpdated, title, user, false)
 }
 
+var allowedFrontmatterKeys = map[string]struct{}{
+	"id":           {},
+	"title":        {},
+	"tags":         {},
+	"created":      {},
+	"updated":      {},
+	"priority":     {},
+	"visibility":   {},
+	"folder":       {},
+	"collapsed_h2": {},
+}
+
 func ensureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated int, title, user string, updateUpdated bool) (string, error) {
 	if strings.TrimSpace(user) == "" {
 		user = dummyHistoryUser
@@ -48,10 +60,6 @@ func ensureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 			"updated: " + updatedVal,
 			"priority: 10",
 			"visibility: private",
-			"history:",
-			"  - user: " + user,
-			"    at: " + nowStr,
-			"    action: create",
 			"---",
 		}
 		if body == "" {
@@ -62,11 +70,17 @@ func ensureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 
 	lineIdx := map[string]int{}
 	for i, line := range fmLines {
+		if isIndentedLine(line) {
+			continue
+		}
 		key, _ := parseFrontmatterLine(line)
 		if key == "" {
 			continue
 		}
 		key = strings.ToLower(key)
+		if _, ok := allowedFrontmatterKeys[key]; !ok {
+			continue
+		}
 		if _, exists := lineIdx[key]; !exists {
 			lineIdx[key] = i
 		}
@@ -105,13 +119,24 @@ func ensureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 	setFrontmatterLine(&fmLines, lineIdx, "priority", priorityVal)
 	setFrontmatterLine(&fmLines, lineIdx, "visibility", visibilityVal)
 	removeFrontmatterLine(&fmLines, lineIdx, "title")
-
-	action := "edit"
-	if createdMissing {
-		action = "create"
+	for i := len(fmLines) - 1; i >= 0; i-- {
+		if isIndentedLine(fmLines[i]) {
+			fmLines = append(fmLines[:i], fmLines[i+1:]...)
+			continue
+		}
+		key, _ := parseFrontmatterLine(fmLines[i])
+		if key == "" {
+			continue
+		}
+		key = strings.ToLower(key)
+		if _, ok := allowedFrontmatterKeys[key]; ok {
+			continue
+		}
+		fmLines = append(fmLines[:i], fmLines[i+1:]...)
 	}
-	upsertHistoryEntry(&fmLines, lineIdx, now, action, user)
-	trimHistoryEntries(&fmLines, lineIdx, maxUpdated)
+
+	_ = createdMissing
+	_ = maxUpdated
 
 	fmBlock := "---\n" + strings.Join(fmLines, "\n") + "\n---"
 	if body == "" {
