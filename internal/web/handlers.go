@@ -14,6 +14,7 @@ import (
 	"html/template"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -2234,6 +2235,59 @@ func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader t
 		}
 		urlText, label, _, ok := paragraphOnlyMedia(para, source)
 		if !ok {
+			embeds := make([]ast.Node, 0, 2)
+			remove := make([]ast.Node, 0, 2)
+			for child := para.FirstChild(); child != nil; child = child.NextSibling() {
+				inlineURL, inlineLabel, ok := inlineMediaURL(child, source)
+				if !ok {
+					continue
+				}
+				noteID, relPath, ok := attachmentVideoFromURL(inlineURL)
+				if !ok {
+					continue
+				}
+				thumbURL, ok := srv.ensureVideoThumbnail(ctx, noteID, relPath)
+				title := strings.TrimSpace(inlineLabel)
+				if title == "" {
+					title = path.Base(relPath)
+				}
+				embed := &attachmentVideoEmbed{
+					Title:        title,
+					ThumbnailURL: thumbURL,
+					OriginalURL:  inlineURL,
+				}
+				if !ok {
+					embed.ThumbnailURL = ""
+					embed.FallbackMessage = "Video preview unavailable."
+				}
+				embeds = append(embeds, embed)
+				remove = append(remove, child)
+			}
+			if len(embeds) == 0 {
+				continue
+			}
+			for _, node := range remove {
+				para.RemoveChild(para, node)
+			}
+			parent := para.Parent()
+			if parent == nil {
+				continue
+			}
+			if !paragraphHasVisibleContent(para, source) {
+				first := embeds[0]
+				replaceBlockWithEmbed(parent, para, first)
+				cursor := first
+				for i := 1; i < len(embeds); i++ {
+					parent.InsertAfter(parent, cursor, embeds[i])
+					cursor = embeds[i]
+				}
+				continue
+			}
+			cursor := ast.Node(para)
+			for _, embed := range embeds {
+				parent.InsertAfter(parent, cursor, embed)
+				cursor = embed
+			}
 			continue
 		}
 		noteID, relPath, ok := attachmentVideoFromURL(urlText)
@@ -2676,12 +2730,62 @@ func paragraphOnlyMedia(para *ast.Paragraph, source []byte) (string, string, ast
 	case *ast.Link:
 		label = extractTextFromNode(node, source)
 	case *ast.Image:
-		label = strings.TrimSpace(string(node.Title))
+		label = extractTextFromNode(node, source)
+		if label == "" {
+			label = strings.TrimSpace(string(node.Title))
+		}
 	}
 	if label == "" {
 		label = urlText
 	}
 	return strings.Trim(urlText, "<>"), label, foundNode, true
+}
+
+func inlineMediaURL(node ast.Node, source []byte) (string, string, bool) {
+	var (
+		urlText string
+		label   string
+	)
+	switch typed := node.(type) {
+	case *ast.Link:
+		urlText = strings.TrimSpace(string(typed.Destination))
+		label = extractTextFromNode(typed, source)
+	case *ast.AutoLink:
+		if typed.AutoLinkType != ast.AutoLinkURL {
+			return "", "", false
+		}
+		urlText = strings.TrimSpace(string(typed.URL(source)))
+		label = urlText
+	case *ast.Image:
+		urlText = strings.TrimSpace(string(typed.Destination))
+		label = extractTextFromNode(typed, source)
+		if label == "" {
+			label = strings.TrimSpace(string(typed.Title))
+		}
+	default:
+		return "", "", false
+	}
+	if urlText == "" {
+		return "", "", false
+	}
+	if label == "" {
+		label = urlText
+	}
+	return strings.Trim(urlText, "<>"), label, true
+}
+
+func paragraphHasVisibleContent(para *ast.Paragraph, source []byte) bool {
+	for child := para.FirstChild(); child != nil; child = child.NextSibling() {
+		switch node := child.(type) {
+		case *ast.Text:
+			if strings.TrimSpace(string(node.Segment.Value(source))) != "" {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func extractTextFromNode(node ast.Node, source []byte) string {
@@ -3275,10 +3379,13 @@ func attachmentVideoFromURL(raw string) (string, string, bool) {
 		return "", "", false
 	}
 	clean := path.Clean(pathValue)
-	if !strings.HasPrefix(clean, "/attachments/") {
+	clean = strings.TrimPrefix(clean, "./")
+	clean = strings.TrimPrefix(clean, "../")
+	if !strings.HasPrefix(clean, "/attachments/") && !strings.HasPrefix(clean, "attachments/") {
 		return "", "", false
 	}
 	rel := strings.TrimPrefix(clean, "/attachments/")
+	rel = strings.TrimPrefix(rel, "attachments/")
 	parts := strings.Split(rel, "/")
 	if len(parts) < 2 {
 		return "", "", false
@@ -3291,10 +3398,22 @@ func attachmentVideoFromURL(raw string) (string, string, bool) {
 	if relPath == "." || strings.HasPrefix(relPath, "..") || strings.Contains(relPath, "\\") {
 		return "", "", false
 	}
-	if strings.ToLower(path.Ext(relPath)) != ".mp4" {
+	if !isVideoExtension(relPath) {
 		return "", "", false
 	}
 	return noteID, relPath, true
+}
+
+func isVideoExtension(relPath string) bool {
+	ext := strings.ToLower(path.Ext(relPath))
+	if ext == "" {
+		return false
+	}
+	if ext == ".mp4" || ext == ".webm" || ext == ".mov" || ext == ".m4v" || ext == ".mkv" || ext == ".avi" {
+		return true
+	}
+	mimeType := mime.TypeByExtension(ext)
+	return strings.HasPrefix(mimeType, "video/")
 }
 
 func youtubeVideoID(raw string) (string, bool) {
@@ -7887,18 +8006,46 @@ func (s *Server) ensureVideoThumbnail(ctx context.Context, noteID, relPath strin
 	if noteID == "" || relPath == "" {
 		return "", false
 	}
-	ownerName, _, err := s.ownerFromNoteID(ctx, noteID)
-	if err != nil {
-		return "", false
-	}
 	assetsRoot := s.assetsRoot()
 	if assetsRoot == "" {
 		return "", false
 	}
-	videoPath := filepath.Join(s.noteAttachmentsDir(ownerName, noteID), filepath.FromSlash(relPath))
-	videoInfo, err := os.Stat(videoPath)
-	if err != nil || videoInfo.IsDir() {
-		return "", false
+	var (
+		ownerName string
+		videoPath string
+		videoInfo os.FileInfo
+	)
+	if owner, _, err := s.ownerFromNoteID(ctx, noteID); err == nil {
+		ownerName = owner
+		videoPath = filepath.Join(s.noteAttachmentsDir(ownerName, noteID), filepath.FromSlash(relPath))
+		info, err := os.Stat(videoPath)
+		if err != nil || info.IsDir() {
+			return "", false
+		}
+		videoInfo = info
+	} else {
+		userName := currentUserName(ctx)
+		if userName == "" {
+			return "", false
+		}
+		candidates := []string{userName}
+		if groups, err := s.idx.GroupsForUser(ctx, userName); err == nil {
+			candidates = append(candidates, groups...)
+		}
+		for _, candidate := range candidates {
+			path := filepath.Join(s.noteAttachmentsDir(candidate, noteID), filepath.FromSlash(relPath))
+			info, err := os.Stat(path)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			ownerName = candidate
+			videoPath = path
+			videoInfo = info
+			break
+		}
+		if ownerName == "" {
+			return "", false
+		}
 	}
 	baseName := strings.TrimSuffix(path.Base(relPath), path.Ext(relPath))
 	if baseName == "" {

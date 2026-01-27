@@ -189,7 +189,7 @@
         if (!path) {
           return;
         }
-        const markdown = `![](${path})`;
+        const markdown = `![](${encodeURI(path)})`;
         try {
           await navigator.clipboard.writeText(markdown);
           button.classList.add("text-emerald-300");

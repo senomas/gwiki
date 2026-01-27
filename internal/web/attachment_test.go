@@ -129,6 +129,15 @@ func TestRenderVideoAttachmentEmbed(t *testing.T) {
 	if err := os.WriteFile(thumbPath, []byte("fake-thumb"), 0o644); err != nil {
 		t.Fatalf("write thumb: %v", err)
 	}
+	videoAltRel := "clip-webm.webm"
+	videoAltPath := filepath.Join(notesDir, "attachments", noteID, videoAltRel)
+	if err := os.WriteFile(videoAltPath, []byte("fake-video"), 0o644); err != nil {
+		t.Fatalf("write webm: %v", err)
+	}
+	thumbAltPath := filepath.Join(thumbDir, "clip-webm.jpg")
+	if err := os.WriteFile(thumbAltPath, []byte("fake-thumb"), 0o644); err != nil {
+		t.Fatalf("write webm thumb: %v", err)
+	}
 
 	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
 	if err != nil {
@@ -181,6 +190,51 @@ func TestRenderVideoAttachmentEmbed(t *testing.T) {
 	}
 	if !strings.Contains(html, "Demo video") {
 		t.Fatalf("expected title, got %s", html)
+	}
+
+	md = "![Demo video](/attachments/" + noteID + "/" + videoRel + ")"
+	html, err = srv.renderMarkdown(ctx, []byte(md))
+	if err != nil {
+		t.Fatalf("render markdown image: %v", err)
+	}
+	if !strings.Contains(html, `class="video-card"`) {
+		t.Fatalf("expected video card from image, got %s", html)
+	}
+	if !strings.Contains(html, "Demo video") {
+		t.Fatalf("expected image alt title, got %s", html)
+	}
+
+	md = "![Demo video](attachments/" + noteID + "/" + videoRel + ")"
+	html, err = srv.renderMarkdown(ctx, []byte(md))
+	if err != nil {
+		t.Fatalf("render markdown relative image: %v", err)
+	}
+	if !strings.Contains(html, `class="video-card"`) {
+		t.Fatalf("expected video card from relative image, got %s", html)
+	}
+
+	md = "Before ![Demo video](/attachments/" + noteID + "/" + videoRel + ") after"
+	html, err = srv.renderMarkdown(ctx, []byte(md))
+	if err != nil {
+		t.Fatalf("render markdown inline image: %v", err)
+	}
+	if !strings.Contains(html, `class="video-card"`) {
+		t.Fatalf("expected video card from inline image, got %s", html)
+	}
+	if !strings.Contains(html, "Before") || !strings.Contains(html, "after") {
+		t.Fatalf("expected inline text preserved, got %s", html)
+	}
+
+	md = "![WebM video](/attachments/" + noteID + "/" + videoAltRel + ")"
+	html, err = srv.renderMarkdown(ctx, []byte(md))
+	if err != nil {
+		t.Fatalf("render markdown webm image: %v", err)
+	}
+	if !strings.Contains(html, `class="video-card"`) {
+		t.Fatalf("expected video card from webm image, got %s", html)
+	}
+	if !strings.Contains(html, "/assets/"+noteID+"/clip-webm.jpg") {
+		t.Fatalf("expected webm thumbnail url, got %s", html)
 	}
 }
 
