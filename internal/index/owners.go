@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -220,7 +221,8 @@ func (i *Index) LookupOwnerIDs(ctx context.Context, ownerName string) (int, sql.
 	groupID, groupErr := i.groupIDByName(ctx, ownerName)
 	userID, userErr := i.userIDByName(ctx, ownerName)
 	if groupErr == nil && userErr == nil {
-		return 0, sql.NullInt64{}, fmt.Errorf("owner name %q is both user and group", ownerName)
+		slog.Debug("owner name is both user and group; preferring user", "owner", ownerName)
+		return userID, sql.NullInt64{}, nil
 	}
 	if groupErr == nil {
 		return 0, sql.NullInt64{Int64: int64(groupID), Valid: true}, nil
