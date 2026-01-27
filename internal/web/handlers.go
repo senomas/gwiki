@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -68,6 +69,7 @@ var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(&chatgptEmbedExtension{}),
 	goldmark.WithExtensions(&whatsappLinkExtension{}),
 	goldmark.WithExtensions(&attachmentVideoEmbedExtension{}),
+	goldmark.WithExtensions(&linkTitleExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
 )
 
@@ -1330,6 +1332,20 @@ var (
 )
 
 var (
+	linkTitleCacheKind  = "link_title"
+	linkTitleContextKey = parser.NewContextKey()
+	linkTitleHTTPClient = &http.Client{Timeout: 3 * time.Second}
+)
+
+const (
+	linkTitleSuccessTTL = 7 * 24 * time.Hour
+	linkTitleFailureTTL = 24 * time.Hour
+	linkTitlePendingTTL = 20 * time.Second
+)
+
+var linkTitleInFlight = newTTLCache(512)
+
+var (
 	whatsappLinkKind = ast.NewNodeKind("WhatsAppLink")
 )
 
@@ -1736,6 +1752,71 @@ func (e *attachmentVideoEmbedExtension) Extend(m goldmark.Markdown) {
 	m.Renderer().AddOptions(renderer.WithNodeRenderers(
 		util.Prioritized(newAttachmentVideoEmbedHTMLRenderer(), 540),
 	))
+}
+
+type linkTitleExtension struct{}
+
+func (e *linkTitleExtension) Extend(m goldmark.Markdown) {
+	m.Parser().AddOptions(parser.WithASTTransformers(
+		util.Prioritized(&linkTitleTransformer{}, 135),
+	))
+}
+
+type linkTitleTransformer struct{}
+
+func (t *linkTitleTransformer) Transform(node *ast.Document, reader text.Reader, pc parser.Context) {
+	ctx := linkTitleContext(pc)
+	source := reader.Source()
+	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch link := n.(type) {
+		case *ast.Link:
+			urlText := strings.TrimSpace(string(link.Destination))
+			if !isExternalHTTPURL(urlText) {
+				return ast.WalkContinue, nil
+			}
+			label, ok := linkLabelText(link, source)
+			if !ok || !textMatchesURL(label, urlText) {
+				return ast.WalkContinue, nil
+			}
+			title, ok := lookupLinkTitle(ctx, urlText)
+			if !ok || title == "" {
+				return ast.WalkContinue, nil
+			}
+			replaceLinkLabel(link, title)
+			if shouldOpenNewTab(link.Destination) {
+				link.SetAttributeString("target", []byte("_blank"))
+				link.SetAttributeString("rel", []byte("noopener noreferrer"))
+			}
+		case *ast.AutoLink:
+			if link.AutoLinkType != ast.AutoLinkURL {
+				return ast.WalkContinue, nil
+			}
+			urlText := strings.TrimSpace(string(link.URL(source)))
+			if !isExternalHTTPURL(urlText) {
+				return ast.WalkContinue, nil
+			}
+			title, ok := lookupLinkTitle(ctx, urlText)
+			if !ok || title == "" {
+				return ast.WalkContinue, nil
+			}
+			parent := link.Parent()
+			if parent == nil {
+				return ast.WalkContinue, nil
+			}
+			newLink := ast.NewLink()
+			newLink.Destination = []byte(urlText)
+			newLink.AppendChild(newLink, ast.NewString([]byte(title)))
+			if shouldOpenNewTab(newLink.Destination) {
+				newLink.SetAttributeString("target", []byte("_blank"))
+				newLink.SetAttributeString("rel", []byte("noopener noreferrer"))
+			}
+			parent.ReplaceChild(parent, link, newLink)
+		}
+		return ast.WalkContinue, nil
+	})
 }
 
 type mapsEmbedTransformer struct{}
@@ -2442,6 +2523,69 @@ func textMatchesURL(text string, rawURL string) bool {
 		return true
 	}
 	return false
+}
+
+func linkLabelText(link *ast.Link, source []byte) (string, bool) {
+	var b strings.Builder
+	for child := link.FirstChild(); child != nil; child = child.NextSibling() {
+		switch node := child.(type) {
+		case *ast.Text:
+			b.Write(node.Segment.Value(source))
+		case *ast.String:
+			b.Write(node.Value)
+		default:
+			return "", false
+		}
+	}
+	text := strings.TrimSpace(b.String())
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+func replaceLinkLabel(link *ast.Link, title string) {
+	for child := link.FirstChild(); child != nil; {
+		next := child.NextSibling()
+		link.RemoveChild(link, child)
+		child = next
+	}
+	link.AppendChild(link, ast.NewString([]byte(title)))
+}
+
+func isExternalHTTPURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
+}
+
+func isIPHost(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	return net.ParseIP(host) != nil
+}
+
+func isIgnoredLinkTitle(title string) bool {
+	lower := strings.ToLower(strings.TrimSpace(title))
+	if lower == "" {
+		return true
+	}
+	return strings.HasPrefix(lower, "login") ||
+		strings.HasPrefix(lower, "sign in") ||
+		strings.HasPrefix(lower, "sign-in")
 }
 
 var metaTagRegexp = regexp.MustCompile(`(?is)<meta\s+[^>]*>`)
@@ -3231,6 +3375,18 @@ func attachmentVideoEmbedContext(pc parser.Context) (context.Context, *Server) {
 	return context.TODO(), nil
 }
 
+func linkTitleContext(pc parser.Context) context.Context {
+	if pc == nil {
+		return context.TODO()
+	}
+	if value := pc.Get(linkTitleContextKey); value != nil {
+		if ctx, ok := value.(context.Context); ok && ctx != nil {
+			return ctx
+		}
+	}
+	return context.TODO()
+}
+
 func isYouTubeURL(raw string) bool {
 	_, ok := youtubeVideoID(raw)
 	return ok
@@ -3534,6 +3690,129 @@ func lookupChatGPTEmbed(ctx context.Context, rawURL string) (chatgptEmbedStatus,
 
 	go resolveChatGPTEmbedAsync(context.WithoutCancel(ctx), rawURL)
 	return chatgptEmbedStatusPending, "", "", ""
+}
+
+func lookupLinkTitle(ctx context.Context, rawURL string) (string, bool) {
+	if isIPHost(rawURL) {
+		return "", false
+	}
+	if embedCacheStore != nil {
+		entry, ok, err := embedCacheStore.GetEmbedCache(ctx, rawURL, linkTitleCacheKind)
+		if err == nil && ok {
+			if entry.Status == index.EmbedCacheStatusFound {
+				title := strings.TrimSpace(entry.EmbedURL)
+				if title != "" {
+					return title, true
+				}
+			}
+			return "", false
+		}
+		if err != nil {
+			slog.Debug("link title cache lookup failed", "url", rawURL, "err", err)
+		}
+	}
+
+	if embedCacheStore == nil || linkTitleIsInFlight(rawURL) {
+		return "", false
+	}
+	linkTitleMarkInFlight(rawURL)
+	slog.Debug("link title fetch queued", "url", rawURL)
+	go resolveLinkTitleAsync(context.WithoutCancel(ctx), rawURL)
+	return "", false
+}
+
+func linkTitleIsInFlight(rawURL string) bool {
+	return linkTitleInFlight.IsActive(rawURL, time.Now())
+}
+
+func linkTitleMarkInFlight(rawURL string) {
+	linkTitleInFlight.Upsert(rawURL, time.Now().Add(linkTitlePendingTTL))
+}
+
+func linkTitleClearInFlight(rawURL string) {
+	linkTitleInFlight.Delete(rawURL)
+}
+
+func resolveLinkTitleAsync(ctx context.Context, rawURL string) {
+	title, ok := resolveLinkTitleWithClient(rawURL, linkTitleHTTPClient)
+	if !ok {
+		linkTitleStoreFailure(ctx, rawURL, "Link title unavailable.")
+		linkTitleClearInFlight(rawURL)
+		return
+	}
+
+	linkTitleStoreFound(ctx, rawURL, title)
+	linkTitleClearInFlight(rawURL)
+}
+
+func resolveLinkTitleWithClient(rawURL string, client *http.Client) (string, bool) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("User-Agent", "gwiki")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", false
+	}
+	htmlStr := string(body)
+	title := extractMetaContent(htmlStr, "og:title")
+	if title == "" {
+		title = extractTitleTag(htmlStr)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" || isIgnoredLinkTitle(title) {
+		return "", false
+	}
+	return title, true
+}
+
+func linkTitleStoreFound(ctx context.Context, rawURL string, title string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      linkTitleCacheKind,
+		EmbedURL:  title,
+		Status:    index.EmbedCacheStatusFound,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(linkTitleSuccessTTL),
+	}
+	if err := embedCacheStore.UpsertEmbedCache(ctx, entry); err != nil {
+		slog.Debug("link title cache store failed", "url", rawURL, "err", err)
+		return
+	}
+	slog.Debug("link title cached", "url", rawURL)
+}
+
+func linkTitleStoreFailure(ctx context.Context, rawURL string, message string) {
+	if embedCacheStore == nil {
+		return
+	}
+	now := time.Now()
+	entry := index.EmbedCacheEntry{
+		URL:       rawURL,
+		Kind:      linkTitleCacheKind,
+		Status:    index.EmbedCacheStatusFailed,
+		ErrorMsg:  message,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(linkTitleFailureTTL),
+	}
+	if err := embedCacheStore.UpsertEmbedCache(ctx, entry); err != nil {
+		slog.Debug("link title cache store failed", "url", rawURL, "err", err)
+		return
+	}
+	slog.Debug("link title cache failed", "url", rawURL, "err", message)
 }
 
 func lookupYouTubeEmbed(ctx context.Context, rawURL string) (youtubeEmbedStatus, string, string, string) {
@@ -9079,6 +9358,7 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	parseContext.Set(instagramEmbedContextKey, ctx)
 	parseContext.Set(chatgptEmbedContextKey, ctx)
 	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
+	parseContext.Set(linkTitleContextKey, ctx)
 	if state, ok := collapsibleSectionStateFromContext(ctx); ok {
 		parseContext.Set(collapsibleSectionContextKey, state)
 	}
@@ -9100,6 +9380,7 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	parseContext.Set(instagramEmbedContextKey, ctx)
 	parseContext.Set(chatgptEmbedContextKey, ctx)
 	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
+	parseContext.Set(linkTitleContextKey, ctx)
 	if state, ok := collapsibleSectionStateFromContext(ctx); ok {
 		parseContext.Set(collapsibleSectionContextKey, state)
 	}

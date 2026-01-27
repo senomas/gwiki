@@ -246,6 +246,108 @@ func TestRenderMarkdownEmbeds(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownLinkTitleCache(t *testing.T) {
+	repo := t.TempDir()
+	notesDir := filepath.Join(repo, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	now := time.Now()
+	linkURL := "https://example.com/demo"
+	if err := idx.UpsertEmbedCache(ctx, index.EmbedCacheEntry{
+		URL:       linkURL,
+		Kind:      linkTitleCacheKind,
+		EmbedURL:  "Example Domain",
+		Status:    index.EmbedCacheStatusFound,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("upsert link title cache: %v", err)
+	}
+
+	html, err := srv.renderMarkdown(ctx, []byte(linkURL))
+	if err != nil {
+		t.Fatalf("render link: %v", err)
+	}
+	if !strings.Contains(html, ">Example Domain<") {
+		t.Fatalf("expected link title to be used, got %s", html)
+	}
+	if strings.Contains(html, ">"+linkURL+"<") {
+		t.Fatalf("expected raw url to be replaced, got %s", html)
+	}
+
+	html, err = srv.renderMarkdown(ctx, []byte("[Custom](https://example.com/demo)"))
+	if err != nil {
+		t.Fatalf("render custom label: %v", err)
+	}
+	if !strings.Contains(html, ">Custom<") {
+		t.Fatalf("expected custom label to remain, got %s", html)
+	}
+	if strings.Contains(html, ">Example Domain<") {
+		t.Fatalf("expected cached title to not override custom label, got %s", html)
+	}
+}
+
+func TestIsIPHost(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"http://192.168.1.10", true},
+		{"https://192.168.88.1:8443/path", true},
+		{"http://[2001:db8::1]/", true},
+		{"https://example.com", false},
+		{"/notes/foo", false},
+	}
+	for _, tc := range cases {
+		if got := isIPHost(tc.raw); got != tc.want {
+			t.Fatalf("isIPHost(%q)=%v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestIsIgnoredLinkTitle(t *testing.T) {
+	cases := []struct {
+		title string
+		want  bool
+	}{
+		{"Login - Sonarr", true},
+		{"login", true},
+		{"Sign In - Radarr", true},
+		{"sign-in portal", true},
+		{"Sign up", false},
+		{"Dashboard", false},
+	}
+	for _, tc := range cases {
+		if got := isIgnoredLinkTitle(tc.title); got != tc.want {
+			t.Fatalf("isIgnoredLinkTitle(%q)=%v, want %v", tc.title, got, tc.want)
+		}
+	}
+}
+
 func TestRenderMarkdownCollapsedSections(t *testing.T) {
 	repo := t.TempDir()
 	notesDir := filepath.Join(repo, "notes")
