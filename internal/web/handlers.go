@@ -5969,6 +5969,7 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		GitCredentialsFile: credPath,
 		GitConfigGlobal:    gitConfig,
 		UserName:           userName,
+		CommitMessage:      "manual sync",
 	}
 	start := time.Now()
 	output, err := syncer.RunWithOptions(r.Context(), ownerRepo, opts)
