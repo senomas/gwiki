@@ -6221,6 +6221,13 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	if info, err := os.Stat(fullPath); err == nil {
 		_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 	}
+	if ownerName, _, err := s.ownerFromNotePath(notePath); err == nil {
+		if strings.TrimSpace(newMark) == "" {
+			s.commitOwnerRepoAsync(ownerName, "unchecked todo "+notePath)
+		} else {
+			s.commitOwnerRepoAsync(ownerName, "checked todo "+notePath)
+		}
+	}
 	newHash := index.TaskLineHash(newLine)
 	renderedLine, err := s.renderMarkdown(r.Context(), []byte(newLine))
 	if err != nil {
