@@ -21,6 +21,7 @@ type Task struct {
 	Done   bool
 	Due    string
 	Hash   string
+	Tags   []string
 }
 
 type Metadata struct {
@@ -82,6 +83,7 @@ func ParseContent(input string) Metadata {
 		if len(match) == 0 {
 			continue
 		}
+		taskTags := extractTaskTags(lines, i)
 		due := ""
 		if d := dueRe.FindStringSubmatch(match[2]); len(d) > 0 {
 			if d[1] != "" {
@@ -96,6 +98,7 @@ func ParseContent(input string) Metadata {
 			Done:   strings.TrimSpace(match[1]) != "",
 			Due:    due,
 			Hash:   TaskLineHash(line),
+			Tags:   taskTags,
 		})
 	}
 
@@ -165,6 +168,42 @@ func UncheckedTasksSnippet(input string) string {
 		out = append(out, strings.Join(tasks, "\n\n"))
 	}
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+}
+
+func extractTaskTags(lines []string, start int) []string {
+	if start < 0 || start >= len(lines) {
+		return nil
+	}
+	line := lines[start]
+	baseIndent := countIndentSpaces(line) + 2
+	paragraph := []string{line}
+	for j := start + 1; j < len(lines); j++ {
+		next := lines[j]
+		if next == "" && j+1 < len(lines) && countIndentSpaces(lines[j+1]) >= baseIndent {
+			paragraph = append(paragraph, next)
+			continue
+		}
+		if countIndentSpaces(next) < baseIndent {
+			break
+		}
+		paragraph = append(paragraph, next)
+	}
+	tags := map[string]struct{}{}
+	for _, line := range paragraph {
+		for _, m := range tagRe.FindAllStringSubmatch(line, -1) {
+			for _, tag := range expandTagPrefixes(m[1]) {
+				tags[tag] = struct{}{}
+			}
+		}
+	}
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tags))
+	for tag := range tags {
+		out = append(out, tag)
+	}
+	return out
 }
 
 func DueTasksSnippet(input string) string {

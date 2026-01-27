@@ -367,6 +367,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 		"DELETE FROM file_histories WHERE file_id=?",
 		"DELETE FROM file_tags WHERE file_id=?",
 		"DELETE FROM links WHERE from_file_id=? OR to_file_id=?",
+		"DELETE FROM task_tags WHERE task_id IN (SELECT id FROM tasks WHERE file_id=?)",
 		"DELETE FROM tasks WHERE file_id=?",
 		"DELETE FROM files WHERE id=?",
 	}
@@ -564,6 +565,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 23
+		case 23:
+			slog.Info("schema migration", "from", 23, "to", 24)
+			if err := i.migrate23To24(ctx); err != nil {
+				return err
+			}
+			version = 24
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -735,6 +742,7 @@ func (i *Index) migrate20To21(ctx context.Context) error {
 		"DROP TABLE IF EXISTS file_histories",
 		"DROP TABLE IF EXISTS tags",
 		"DROP TABLE IF EXISTS file_tags",
+		"DROP TABLE IF EXISTS task_tags",
 		"DROP TABLE IF EXISTS links",
 		"DROP TABLE IF EXISTS tasks",
 		"DROP TABLE IF EXISTS embed_cache",
@@ -780,6 +788,25 @@ func (i *Index) migrate22To23(ctx context.Context) error {
 			last_sync_unix INTEGER NOT NULL
 		)`)
 	return err
+}
+
+func (i *Index) migrate23To24(ctx context.Context) error {
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS task_tags (
+			user_id INTEGER NOT NULL,
+			group_id INTEGER,
+			task_id INTEGER NOT NULL,
+			tag_id INTEGER NOT NULL
+		)`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS task_tags_user ON task_tags(user_id, task_id, tag_id) WHERE group_id IS NULL"); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS task_tags_group ON task_tags(group_id, task_id, tag_id) WHERE group_id IS NOT NULL"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (i *Index) ensureColumn(ctx context.Context, table string, column string, ddl string) error {
@@ -1104,6 +1131,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_tags WHERE file_id=?", existingID); err != nil {
 		return err
 	}
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM task_tags WHERE task_id IN (SELECT id FROM tasks WHERE file_id=?)", existingID); err != nil {
+		return err
+	}
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM links WHERE from_file_id=?", existingID); err != nil {
 		return err
 	}
@@ -1181,6 +1211,8 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			defaultDue = journalDate
 		}
 	}
+	taskTagIDs := map[string]int{}
+	taskTagCount := 0
 	for _, task := range meta.Tasks {
 		checked := 0
 		if task.Done {
@@ -1190,7 +1222,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if due == "" {
 			due = defaultDue
 		}
-		if _, err := i.execContextTx(ctx, tx, `
+		res, err := i.execContextTx(ctx, tx, `
 			INSERT INTO tasks(user_id, group_id, file_id, line_no, text, hash, checked, due_date, updated_at)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			userID,
@@ -1202,9 +1234,40 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			checked,
 			nullIfEmpty(due),
 			time.Now().Unix(),
-		); err != nil {
+		)
+		if err != nil {
 			return err
 		}
+		if len(task.Tags) == 0 {
+			continue
+		}
+		taskID, err := res.LastInsertId()
+		if err != nil || taskID <= 0 {
+			continue
+		}
+		for _, tag := range task.Tags {
+			name, _ := normalizeTagName(tag)
+			if name == "" {
+				continue
+			}
+			tagID, ok := taskTagIDs[name]
+			if !ok {
+				if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO tags(user_id, group_id, name) VALUES(?, ?, ?)", userID, nullIfInvalidInt64(groupID), name); err != nil {
+					return err
+				}
+				if err := i.queryRowContextTx(ctx, tx, "SELECT id FROM tags WHERE group_id IS ? AND user_id=? AND name=?", nullIfInvalidInt64(groupID), userID, name).Scan(&tagID); err != nil {
+					return err
+				}
+				taskTagIDs[name] = tagID
+			}
+			if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO task_tags(user_id, group_id, task_id, tag_id) VALUES(?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), taskID, tagID); err != nil {
+				return err
+			}
+			taskTagCount++
+		}
+	}
+	if taskTagCount > 0 {
+		slog.Debug("task tags indexed", "path", relPath, "count", taskTagCount)
 	}
 
 	ownerClause, ownerArgs = ownerWhereClause(userID, groupID, "fts")
@@ -1505,8 +1568,8 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
 			FROM tasks
 			JOIN files ON files.id = tasks.file_id
-			JOIN file_tags ON files.id = file_tags.file_id
-			JOIN tags ON tags.id = file_tags.tag_id
+			JOIN task_tags ON tasks.id = task_tags.task_id
+			JOIN tags ON tags.id = task_tags.tag_id
 			%s
 			WHERE tasks.checked = 0 AND tags.name IN (`+placeholders+`)
 		`, ownerNameExpr(), ownerJoins("files"))
@@ -3577,7 +3640,7 @@ func (i *Index) CountTasks(ctx context.Context, filter TaskCountFilter) (int, er
 		sqlStr += " JOIN file_histories ON files.id = file_histories.file_id"
 	}
 	if len(filter.Tags) > 0 {
-		sqlStr += " JOIN file_tags ON files.id = file_tags.file_id JOIN tags ON tags.id = file_tags.tag_id"
+		sqlStr += " JOIN task_tags ON tasks.id = task_tags.task_id JOIN tags ON tags.id = task_tags.tag_id"
 	}
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
@@ -3999,6 +4062,9 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 			return 0, err
 		}
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM links WHERE from_file_id=?", row.id); err != nil {
+			return 0, err
+		}
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM task_tags WHERE task_id IN (SELECT id FROM tasks WHERE file_id=?)", row.id); err != nil {
 			return 0, err
 		}
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM tasks WHERE file_id=?", row.id); err != nil {

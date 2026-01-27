@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 23
+const schemaVersion = 24
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS tasks_by_file_checked ON tasks(file_id, checked);
 CREATE INDEX IF NOT EXISTS tasks_by_file_due ON tasks(file_id, due_date);
+
+CREATE TABLE IF NOT EXISTS task_tags (
+	user_id INTEGER NOT NULL,
+	group_id INTEGER,
+	task_id INTEGER NOT NULL,
+	tag_id INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS task_tags_user ON task_tags(user_id, task_id, tag_id) WHERE group_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS task_tags_group ON task_tags(group_id, task_id, tag_id) WHERE group_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS embed_cache (
 	user_id INTEGER NOT NULL,

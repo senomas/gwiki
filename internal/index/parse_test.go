@@ -118,6 +118,38 @@ title: Demo
 	}
 }
 
+func TestParseTaskTags(t *testing.T) {
+	input := `# demo
+
+- [ ] task one #alpha
+
+  details with #beta and #work/btn
+
+- [ ] task two
+`
+	meta := ParseContent(input)
+	if len(meta.Tasks) < 2 {
+		t.Fatalf("expected tasks, got %d", len(meta.Tasks))
+	}
+	first := meta.Tasks[0]
+	if len(first.Tags) == 0 {
+		t.Fatalf("expected task tags, got none")
+	}
+	tagSet := map[string]struct{}{}
+	for _, tag := range first.Tags {
+		tagSet[tag] = struct{}{}
+	}
+	for _, want := range []string{"alpha", "beta", "work", "work/btn"} {
+		if _, ok := tagSet[want]; !ok {
+			t.Fatalf("expected task tag %q, got %v", want, first.Tags)
+		}
+	}
+	second := meta.Tasks[1]
+	if len(second.Tags) != 0 {
+		t.Fatalf("expected no tags for second task, got %v", second.Tags)
+	}
+}
+
 func TestDueTasksSnippet(t *testing.T) {
 	input := `---
 title: Demo
