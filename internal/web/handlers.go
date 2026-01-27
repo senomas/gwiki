@@ -7245,14 +7245,14 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 	etag := noteCardETag(data.NoteMeta, data.NoteHash)
 	if etag != "" && strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 		w.Header().Set("ETag", etag)
-		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
+		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate, no-transform")
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	if etag != "" {
 		w.Header().Set("ETag", etag)
 	}
-	s.views.RenderTemplateWithCache(w, "note_detail", data, "private, max-age=0, must-revalidate")
+	s.views.RenderTemplateWithCache(w, "note_detail", data, "private, max-age=0, must-revalidate, no-transform")
 }
 
 func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, error) {
