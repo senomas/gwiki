@@ -8690,6 +8690,14 @@ func (s *Server) commitOwnerRepoAsync(ownerName string, message string) {
 	if repoPath == "" {
 		return
 	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		if os.IsNotExist(err) {
+			slog.Debug("commit skipped (no git repo)", "owner", ownerName, "repo", repoPath)
+			return
+		}
+		slog.Warn("commit skipped (stat git repo failed)", "owner", ownerName, "repo", repoPath, "err", err)
+		return
+	}
 	slog.Debug("commit queued", "owner", ownerName)
 	go func() {
 		unlock, err := syncer.Acquire(10 * time.Second)
