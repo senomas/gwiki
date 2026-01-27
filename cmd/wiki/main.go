@@ -101,6 +101,7 @@ func main() {
 		slog.Error("init index", "err", err)
 		os.Exit(1)
 	}
+	syncGitHistoryOnStartup(ctx, cfg, idx, users, groupNames)
 
 	srv, err := web.NewServer(cfg, idx)
 	if err != nil {
@@ -208,6 +209,11 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 			continue
 		}
 		logSyncOutput(target.Owner, output)
+		if inserted, histErr := idx.SyncGitHistory(ctx, target.Owner, target.Path); histErr != nil {
+			slog.Warn("sync schedule history failed", "owner", target.Owner, "err", histErr)
+		} else if inserted > 0 {
+			slog.Info("sync schedule history updated", "owner", target.Owner, "inserted", inserted)
+		}
 		anySuccess = true
 	}
 	if anySuccess {
@@ -217,6 +223,24 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 			return
 		}
 		slog.Info("sync schedule recheck", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+	}
+}
+
+func syncGitHistoryOnStartup(ctx context.Context, cfg config.Config, idx *index.Index, users []string, groups []string) {
+	targets, err := discoverSyncTargets(cfg.RepoPath, users, groups)
+	if err != nil {
+		slog.Warn("git history startup: list targets failed", "err", err)
+		return
+	}
+	for _, target := range targets {
+		inserted, err := idx.SyncGitHistory(ctx, target.Owner, target.Path)
+		if err != nil {
+			slog.Warn("git history startup failed", "owner", target.Owner, "err", err)
+			continue
+		}
+		if inserted > 0 {
+			slog.Info("git history startup updated", "owner", target.Owner, "inserted", inserted)
+		}
 	}
 }
 

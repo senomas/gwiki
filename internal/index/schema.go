@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 21
+const schemaVersion = 23
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -45,13 +45,17 @@ CREATE TABLE IF NOT EXISTS files (
 
 CREATE TABLE IF NOT EXISTS file_histories (
 	id INTEGER PRIMARY KEY,
-	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	file_id INTEGER NOT NULL,
-	user TEXT NOT NULL,
-	action TEXT NOT NULL,
-	action_time INTEGER NOT NULL,
-	action_date INTEGER NOT NULL
+	user_id INTEGER NOT NULL,
+	action_date INTEGER NOT NULL,
+	UNIQUE(file_id, user_id, action_date)
+);
+
+CREATE INDEX IF NOT EXISTS file_histories_by_date ON file_histories(action_date);
+
+CREATE TABLE IF NOT EXISTS git_sync_state (
+	owner_name TEXT NOT NULL PRIMARY KEY,
+	last_sync_unix INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tags (

@@ -552,6 +552,18 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 21
+		case 21:
+			slog.Info("schema migration", "from", 21, "to", 22)
+			if err := i.migrate21To22(ctx); err != nil {
+				return err
+			}
+			version = 22
+		case 22:
+			slog.Info("schema migration", "from", 22, "to", 23)
+			if err := i.migrate22To23(ctx); err != nil {
+				return err
+			}
+			version = 23
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -740,6 +752,33 @@ func (i *Index) migrate20To21(ctx context.Context) error {
 		}
 	}
 	_, err := i.execContext(ctx, schemaSQL)
+	return err
+}
+
+func (i *Index) migrate21To22(ctx context.Context) error {
+	if _, err := i.execContext(ctx, "DROP TABLE IF EXISTS file_histories"); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS file_histories (
+			id INTEGER PRIMARY KEY,
+			file_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			action_date INTEGER NOT NULL,
+			UNIQUE(file_id, user_id, action_date)
+		)`); err != nil {
+		return err
+	}
+	_, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS file_histories_by_date ON file_histories(action_date)")
+	return err
+}
+
+func (i *Index) migrate22To23(ctx context.Context) error {
+	_, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS git_sync_state (
+			owner_name TEXT NOT NULL PRIMARY KEY,
+			last_sync_unix INTEGER NOT NULL
+		)`)
 	return err
 }
 
@@ -1095,29 +1134,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_histories WHERE file_id=?", existingID); err != nil {
 		return err
 	}
-	historyEntries := ParseHistoryEntries(string(content))
-	validHistory := 0
-	for _, entry := range historyEntries {
-		if entry.At.IsZero() || entry.Action == "" {
-			continue
-		}
-		user := entry.User
-		if user == "" {
-			user = dummyHistoryUser
-		}
-		actionTime := entry.At.UTC().Unix()
-		actionDate := actionTime / secondsPerDay
-		if _, err := i.execContextTx(ctx, tx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, user, entry.Action, actionTime, actionDate); err != nil {
-			return err
-		}
-		validHistory++
-	}
-	if validHistory == 0 {
-		actionTime := mtime.Unix()
-		actionDate := actionTime / secondsPerDay
-		if _, err := i.execContextTx(ctx, tx, "INSERT INTO file_histories(user_id, group_id, file_id, user, action, action_time, action_date) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, dummyHistoryUser, "save", actionTime, actionDate); err != nil {
-			return err
-		}
+	actionDate := updatedAt / secondsPerDay
+	if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO file_histories(file_id, user_id, action_date) VALUES(?, ?, ?)", existingID, userID, actionDate); err != nil {
+		return err
 	}
 
 	for _, tag := range meta.Tags {
@@ -3268,7 +3287,7 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 	applyVisibilityFilter(ctx, &visibilityClauses, &visibilityArgs, "files")
 	if len(tags) == 0 {
 		query = fmt.Sprintf(`
-			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid, %s
+			SELECT files.path, files.title, files.updated_at AS last_action, files.uid, %s
 			FROM file_histories
 			JOIN files ON files.id = file_histories.file_id
 			%s
@@ -3299,7 +3318,7 @@ func (i *Index) NotesWithHistoryOnDate(ctx context.Context, date string, exclude
 		placeholders := strings.Repeat("?,", len(tags))
 		placeholders = strings.TrimRight(placeholders, ",")
 		query = fmt.Sprintf(`
-			SELECT files.path, files.title, MAX(file_histories.action_time) AS last_action, files.uid, %s
+			SELECT files.path, files.title, files.updated_at AS last_action, files.uid, %s
 			FROM file_histories
 			JOIN files ON files.id = file_histories.file_id
 			JOIN file_tags ON files.id = file_tags.file_id
