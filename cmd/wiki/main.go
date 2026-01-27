@@ -199,6 +199,7 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 			HomeDir:            cfg.DataPath,
 			GitCredentialsFile: filepath.Join(cfg.DataPath, target.Owner+".cred"),
 			GitConfigGlobal:    filepath.Join(cfg.DataPath, target.Owner+".gitconfig"),
+			UserName:           target.Owner,
 		}
 		output, runErr := syncer.RunWithOptions(ctx, target.Path, opts)
 		unlock()

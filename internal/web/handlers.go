@@ -5517,6 +5517,7 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		HomeDir:            dataPath,
 		GitCredentialsFile: credPath,
 		GitConfigGlobal:    gitConfig,
+		UserName:           userName,
 	}
 	start := time.Now()
 	output, err := syncer.RunWithOptions(r.Context(), ownerRepo, opts)
