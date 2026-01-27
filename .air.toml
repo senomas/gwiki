@@ -2,7 +2,7 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/main ./cmd/wiki"
+  cmd = "sh -lc 'go build -ldflags \"-X gwiki/internal/web.BuildVersion=$(date +%Y.%m.%d.%H.%M.%S)\" -o ./tmp/main ./cmd/wiki'"
   bin = "tmp/main"
   include_ext = ["go", "tpl", "tmpl", "html", "css", "js"]
   include_dir = ["cmd", "internal", "templates", "notes"]
