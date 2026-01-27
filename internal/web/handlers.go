@@ -5563,6 +5563,30 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		ContentTemplate: "settings",
 		ReturnURL:       returnURL,
 	}
+	dataPath := strings.TrimSpace(s.cfg.DataPath)
+	if dataPath == "" && s.cfg.RepoPath != "" {
+		dataPath = filepath.Join(s.cfg.RepoPath, ".wiki")
+	}
+	if dataPath != "" {
+		if absPath, err := filepath.Abs(dataPath); err == nil {
+			dataPath = absPath
+		}
+	}
+	userName := currentUserName(r.Context())
+	ownerRepo := s.ownerRepoPath(userName)
+	if ownerRepo == "" {
+		ownerRepo = s.cfg.RepoPath
+	}
+	if dataPath != "" {
+		if userName != "" {
+			credPath := filepath.Join(dataPath, userName+".cred")
+			creds := parseGitCredentialsFile(credPath)
+			remotes, err := listGitRemotes(ownerRepo)
+			if err == nil {
+				data.GitRemoteCreds = mergeGitRemoteCreds(remotes, creds)
+			}
+		}
+	}
 	if err := s.populateSidebarData(r, "/", &data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -5596,6 +5620,19 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "owner required", http.StatusBadRequest)
 		return
 	}
+	ownerRepo := s.ownerRepoPath(owner)
+	if ownerRepo == "" {
+		ownerRepo = s.cfg.RepoPath
+	}
+	dataPath := strings.TrimSpace(s.cfg.DataPath)
+	if dataPath == "" && s.cfg.RepoPath != "" {
+		dataPath = filepath.Join(s.cfg.RepoPath, ".wiki")
+	}
+	if dataPath != "" {
+		if absPath, err := filepath.Abs(dataPath); err == nil {
+			dataPath = absPath
+		}
+	}
 	cfg, err := s.loadUserConfig(r.Context())
 	if err != nil {
 		slog.Warn("load user config", "err", err)
@@ -5605,6 +5642,27 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	if err := s.saveUserConfig(r.Context(), owner, cfg); err != nil {
 		http.Error(w, "failed to save settings", http.StatusInternalServerError)
 		return
+	}
+	if dataPath != "" {
+		if err := os.MkdirAll(dataPath, 0o755); err != nil {
+			http.Error(w, "failed to save credentials", http.StatusInternalServerError)
+			return
+		}
+		if owner != "" {
+			credPath := filepath.Join(dataPath, owner+".cred")
+			remotes, err := listGitRemotes(ownerRepo)
+			if err == nil {
+				entries := buildGitCredentialEntries(remotes, r.Form)
+				content := strings.Join(entries, "\n")
+				if content != "" {
+					content += "\n"
+				}
+				if err := fs.WriteFileAtomic(credPath, []byte(content), 0o600); err != nil {
+					http.Error(w, "failed to save credentials", http.StatusInternalServerError)
+					return
+				}
+			}
+		}
 	}
 	s.addToast(r, Toast{
 		ID:              uuid.NewString(),
@@ -8438,6 +8496,13 @@ type collapsedSectionPayloadItem struct {
 	LineNo int `json:"line_no"`
 }
 
+type gitCredentialEntry struct {
+	Host string
+	Path string
+	User string
+	Pass string
+}
+
 func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request, notePath string) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -8512,6 +8577,130 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 		_ = s.idx.IndexNoteIfChanged(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func listGitRemotes(repoDir string) ([]GitRemoteCred, error) {
+	if strings.TrimSpace(repoDir) == "" {
+		return nil, nil
+	}
+	cmd := exec.Command("git", "remote", "-v")
+	cmd.Dir = repoDir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(output), "\n")
+	seen := map[string]GitRemoteCred{}
+	foundOrigin := false
+	for _, line := range lines {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		alias := fields[0]
+		rawURL := fields[1]
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		host := parsed.Host
+		path := strings.TrimPrefix(parsed.Path, "/")
+		key := alias + "|" + host + "|" + path
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		if alias == "origin" {
+			foundOrigin = true
+		}
+		seen[key] = GitRemoteCred{
+			Alias: alias,
+			URL:   rawURL,
+			Host:  host,
+		}
+	}
+	if !foundOrigin {
+		seen["origin||"] = GitRemoteCred{Alias: "origin"}
+	}
+	out := make([]GitRemoteCred, 0, len(seen))
+	for _, value := range seen {
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Alias == "origin" && out[j].Alias != "origin" {
+			return true
+		}
+		if out[j].Alias == "origin" && out[i].Alias != "origin" {
+			return false
+		}
+		if out[i].Alias == out[j].Alias {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Alias < out[j].Alias
+	})
+	return out, nil
+}
+
+func parseGitCredentialsFile(path string) []gitCredentialEntry {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	entries := make([]gitCredentialEntry, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parsed, err := url.Parse(line)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		user := ""
+		pass := ""
+		if parsed.User != nil {
+			user = parsed.User.Username()
+			pass, _ = parsed.User.Password()
+		}
+		entries = append(entries, gitCredentialEntry{
+			Host: parsed.Host,
+			Path: strings.TrimPrefix(parsed.Path, "/"),
+			User: user,
+			Pass: pass,
+		})
+	}
+	return entries
+}
+
+func mergeGitRemoteCreds(remotes []GitRemoteCred, creds []gitCredentialEntry) []GitRemoteCred {
+	for i := range remotes {
+		for _, cred := range creds {
+			if remotes[i].Host == cred.Host {
+				remotes[i].User = cred.User
+				remotes[i].Token = cred.Pass
+				break
+			}
+		}
+	}
+	return remotes
+}
+
+func buildGitCredentialEntries(remotes []GitRemoteCred, form url.Values) []string {
+	entries := make([]string, 0, len(remotes))
+	for i, remote := range remotes {
+		user := strings.TrimSpace(form.Get(fmt.Sprintf("git_user_%d", i)))
+		token := strings.TrimSpace(form.Get(fmt.Sprintf("git_token_%d", i)))
+		if user == "" || token == "" || remote.Host == "" {
+			continue
+		}
+		u := &url.URL{
+			Scheme: "https",
+			User:   url.UserPassword(user, token),
+			Host:   remote.Host,
+		}
+		entries = append(entries, u.String())
+	}
+	return entries
 }
 
 func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {

@@ -93,6 +93,7 @@ type ViewData struct {
 	Groups           []string
 	SettingsUsers    []UserSummary
 	QuickEntries     []QuickLauncherEntry
+	GitRemoteCreds   []GitRemoteCred
 }
 
 type OwnerOption struct {
@@ -117,6 +118,14 @@ type QuickLauncherEntry struct {
 type UserSummary struct {
 	Name  string
 	Roles []string
+}
+
+type GitRemoteCred struct {
+	Alias string
+	URL   string
+	Host  string
+	User  string
+	Token string
 }
 
 type BacklinkView struct {

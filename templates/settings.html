@@ -36,7 +36,43 @@
       </details>
       <details class="js-settings-accordion rounded-2xl border border-slate-800/70 bg-[#121417]/60 p-6 text-sm text-slate-400">
         <summary class="js-form-summary cursor-pointer list-none text-2xl font-semibold" tabindex="0">Synchronization</summary>
-        <p class="mt-4 text-sm text-slate-500">Sync settings will live here.</p>
+        <div class="mt-6 space-y-4">
+          {{if .GitRemoteCreds}}
+            {{range $i, $remote := .GitRemoteCreds}}
+              <div class="space-y-3 rounded-2xl border border-slate-800/70 bg-[#0f1216]/80 p-4">
+                <div class="text-xs uppercase tracking-[0.2em] text-slate-500">{{$remote.Alias}}</div>
+                <div class="text-xs text-slate-400">
+                  {{if $remote.URL}}{{$remote.URL}}{{else}}(no remote URL configured){{end}}
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <div class="space-y-2">
+                    <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">User</label>
+                    <input
+                      class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-xs text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                      name="git_user_{{$i}}"
+                      form="settings-form"
+                      value="{{$remote.User}}"
+                      spellcheck="false"
+                    >
+                  </div>
+                  <div class="space-y-2">
+                    <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">Token</label>
+                    <input
+                      class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-xs text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                      name="git_token_{{$i}}"
+                      form="settings-form"
+                      type="password"
+                      value="{{$remote.Token}}"
+                      spellcheck="false"
+                    >
+                  </div>
+                </div>
+              </div>
+            {{end}}
+          {{else}}
+            <p class="text-sm text-slate-500">No git remotes found.</p>
+          {{end}}
+        </div>
       </details>
       {{if .IsAdmin}}
         <details class="js-settings-accordion rounded-2xl border border-slate-800/70 bg-[#121417]/60 p-6 text-sm text-slate-400">
