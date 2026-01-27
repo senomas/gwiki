@@ -7,16 +7,16 @@ FROM node:${NODE_VERSION} AS assets
 WORKDIR /app
 ARG HTMX_VERSION=1.9.12
 RUN apk add --no-cache curl
+RUN mkdir -p /app/static/css /app/static/js
+RUN curl -fsSL -o /app/static/js/htmx.min.js https://unpkg.com/htmx.org@${HTMX_VERSION}/dist/htmx.min.js
 COPY assets/tailwind.css /app/assets/tailwind.css
 COPY tailwind.config.js /app/tailwind.config.js
 COPY templates /app/templates
 COPY internal /app/internal
-RUN mkdir -p /app/static/css /app/static/js
 RUN BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss \
   -c /app/tailwind.config.js \
   -i /app/assets/tailwind.css \
   -o /app/static/css/app.css
-RUN curl -fsSL -o /app/static/js/htmx.min.js https://unpkg.com/htmx.org@${HTMX_VERSION}/dist/htmx.min.js
 
 FROM golang:${GO_VERSION} AS build
 
