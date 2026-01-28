@@ -8,8 +8,8 @@ BUILD_VERSION := $(shell git show -s --format=%cd --date=format:%Y.%m.%d.%H.%M.%
 IMAGE_TAG := $(shell git show -s --format=%cd --date=format:%Y%m%d%H%M%S)
 IMAGE := docker.senomas.com/gwiki
 NODE_VERSION ?= 20-alpine
-GO_VERSION ?= 1.25.5-alpine
-ALPINE_VERSION ?= 3.19
+GO_VERSION ?= 1.25.6-alpine
+ALPINE_VERSION ?= 3.22
 
 build:
 	@for f in .env*; do \
