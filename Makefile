@@ -37,21 +37,24 @@ dev:
 		exit 1; \
 	fi
 
-dev-build:
+dev-build: static
 	mkdir -p ./tmp
 	WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) go build -ldflags "-X gwiki/internal/web.BuildVersion=$$(date +%Y.%m.%d.%H.%M.%S)" -o ./tmp/main ./cmd/wiki
+
+dev-build-dry:
+	@$(MAKE) -n dev-build
 
 NODE_IMAGE ?= node:20-alpine
 TAILWIND_CONFIG ?= tailwind.config.js
 TAILWIND_INPUT ?= assets/tailwind.css
 TAILWIND_OUTPUT ?= static/css/app.css
-TAILWIND_SOURCES := $(shell find templates internal -type f -name '*.html' -o -name '*.go')
+TAILWIND_SOURCES := $(shell find templates internal -type f \( -name '*.html' -o -name '*.go' \))
 
 css: $(TAILWIND_OUTPUT)
 
 $(TAILWIND_OUTPUT): $(TAILWIND_INPUT) $(TAILWIND_CONFIG) $(TAILWIND_SOURCES)
 	docker run --rm -v "$$(pwd)":/work -w /work $(NODE_IMAGE) \
-		sh -lc "mkdir -p $$(dirname $(TAILWIND_OUTPUT)) && BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss -c $(TAILWIND_CONFIG) -i $(TAILWIND_INPUT) -o $(TAILWIND_OUTPUT)"
+		sh -lc "mkdir -p $$(dirname $(TAILWIND_OUTPUT)) && BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss -c $(TAILWIND_CONFIG) -i $(TAILWIND_INPUT) -o $(TAILWIND_OUTPUT) && touch $(TAILWIND_OUTPUT)"
 
 css-watch:
 	docker run --rm -it -v "$$(pwd)":/work -w /work $(NODE_IMAGE) \
