@@ -222,6 +222,82 @@
         textarea.focus();
         textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
       }, 0);
+      var commandState = {
+        active: false,
+        start: 0
+      };
+      textarea.addEventListener("input", function (event) {
+        var value = textarea.value;
+        var caret = textarea.selectionStart || 0;
+        if (caret < 2) {
+          commandState.active = false;
+          return;
+        }
+        var lineStart = value.lastIndexOf("\n", caret - 1);
+        if (lineStart === -1) {
+          lineStart = 0;
+        } else {
+          lineStart += 1;
+        }
+        var line = value.slice(lineStart, caret);
+        var firstNonSpace = line.search(/\S/);
+        if (firstNonSpace === -1) {
+          commandState.active = false;
+          return;
+        }
+        var cmdStart = commandState.active ? commandState.start : -1;
+        if (cmdStart < lineStart || cmdStart >= caret) {
+          commandState.active = false;
+          cmdStart = -1;
+        }
+        if (!commandState.active) {
+          var lastBang = line.lastIndexOf("!");
+          if (lastBang === -1) {
+            return;
+          }
+          var bangIndex = lastBang;
+          if (lastBang > 0 && line[lastBang - 1] === "!") {
+            bangIndex = lastBang - 1;
+          }
+          cmdStart = lineStart + bangIndex;
+          commandState.active = true;
+          commandState.start = cmdStart;
+        }
+        var cmdSegment = value.slice(cmdStart, caret);
+        var cmdTrim = cmdSegment.trim();
+        if (!event || event.inputType !== "insertText" || event.data !== " ") {
+          if (cmdTrim.length >= 5) {
+            commandState.active = false;
+          }
+          return;
+        }
+        if (!commandState.active || commandState.start !== cmdStart) {
+          return;
+        }
+        if (cmdTrim.length > 5) {
+          commandState.active = false;
+          return;
+        }
+        var lineBeforeCmd = line.slice(0, cmdStart - lineStart).trim();
+        var replacement = "";
+        if (cmdTrim === "!!" && lineBeforeCmd === "") {
+          replacement = line.slice(0, cmdStart - lineStart) + "- [ ] ";
+        } else if (cmdTrim === "!d") {
+          var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+          var now = new Date();
+          replacement = line.slice(0, cmdStart - lineStart) + now.getDate() + " " + months[now.getMonth()] + " " + now.getFullYear() + " ";
+        } else if (cmdTrim === "!t") {
+          var nowTime = new Date();
+          var pad = function (value) {
+            return String(value).padStart(2, "0");
+          };
+          replacement = line.slice(0, cmdStart - lineStart) + pad(nowTime.getHours()) + ":" + pad(nowTime.getMinutes()) + ":" + pad(nowTime.getSeconds()) + " ";
+        }
+        if (replacement) {
+          textarea.setRangeText(replacement, lineStart, caret, "end");
+        }
+        commandState.active = false;
+      });
     }
     document.addEventListener("keydown", function (event) {
       if (window.isAnyLauncherOpen && window.isAnyLauncherOpen()) {
