@@ -41,9 +41,6 @@ dev-build: static
 	mkdir -p ./tmp
 	WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) go build -ldflags "-X gwiki/internal/web.BuildVersion=$$(date +%Y.%m.%d.%H.%M.%S)" -o ./tmp/main ./cmd/wiki
 
-dev-build-dry:
-	@$(MAKE) -n dev-build
-
 NODE_IMAGE ?= node:20-alpine
 TAILWIND_CONFIG ?= tailwind.config.js
 TAILWIND_INPUT ?= assets/tailwind.css
