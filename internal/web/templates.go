@@ -124,6 +124,9 @@ func (t *Templates) RenderTemplateWithCache(w http.ResponseWriter, name string, 
 
 func setNoCacheHeaders(w http.ResponseWriter) {
 	headers := w.Header()
+	if headers.Get("Cache-Control") != "" {
+		return
+	}
 	headers.Set("Cache-Control", "no-store")
 	headers.Set("Pragma", "no-cache")
 	headers.Set("Expires", "0")

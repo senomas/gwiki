@@ -4,8 +4,9 @@ tmp_dir = "tmp"
 [build]
   cmd = "sh -lc 'go build -ldflags \"-X gwiki/internal/web.BuildVersion=$(date +%Y.%m.%d.%H.%M.%S)\" -o ./tmp/main ./cmd/wiki'"
   bin = "tmp/main"
-  include_ext = ["go", "tpl", "tmpl", "html", "css", "js"]
-  include_dir = ["cmd", "internal", "templates", "notes"]
+  include_ext = []
+  include_dir = []
+  include_file = [".build"]
   exclude_dir = ["tmp"]
 
 [run]

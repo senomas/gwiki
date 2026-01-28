@@ -31,6 +31,7 @@ type ViewData struct {
 	SearchQuery      string
 	NoteMeta         index.FrontmatterAttrs
 	NoteHash         string
+	NoteEtagTime     int64
 	SearchResults    []index.SearchResult
 	RecentNotes      []index.NoteSummary
 	HomeNotes        []NoteCard
@@ -121,10 +122,10 @@ type UserSummary struct {
 }
 
 type GitRemoteCred struct {
-	Alias string
-	URL   string
-	Host  string
-	User  string
+	Alias    string
+	URL      string
+	Host     string
+	User     string
 	HasToken bool
 }
 

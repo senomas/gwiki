@@ -33,6 +33,7 @@ type NoteSummary struct {
 type NoteHashSummary struct {
 	Hash      string
 	UpdatedAt time.Time
+	EtagTime  int64
 }
 
 type NoteListFilter struct {
@@ -569,6 +570,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 24
+		case 24:
+			slog.Info("schema migration", "from", 24, "to", 25)
+			if err := i.migrate24To25(ctx); err != nil {
+				return err
+			}
+			version = 25
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -805,6 +812,10 @@ func (i *Index) migrate23To24(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (i *Index) migrate24To25(ctx context.Context) error {
+	return i.ensureColumn(ctx, "files", "etag_time", "INTEGER NOT NULL DEFAULT 0")
 }
 
 func (i *Index) ensureColumn(ctx context.Context, table string, column string, ddl string) error {
@@ -1100,10 +1111,11 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if visibility == "" {
 			visibility = "private"
 		}
+		etagTime := time.Now().UnixNano()
 		_, err = i.execContextTx(ctx, tx, `
-			INSERT INTO files(user_id, group_id, path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, priority, is_journal)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, userID, nullIfInvalidInt64(groupID), relPath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, meta.Priority, isJournal)
+			INSERT INTO files(user_id, group_id, path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, etag_time, priority, is_journal)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, userID, nullIfInvalidInt64(groupID), relPath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, etagTime, meta.Priority, isJournal)
 		if err != nil {
 			return err
 		}
@@ -1115,9 +1127,10 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if visibility == "" {
 			visibility = "private"
 		}
+		etagTime := time.Now().UnixNano()
 		_, err = i.execContextTx(ctx, tx, `
-			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, priority=?, is_journal=? WHERE id=?
-		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, updatedAt, meta.Priority, isJournal, existingID)
+			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, etag_time=?, priority=?, is_journal=? WHERE id=?
+		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, updatedAt, etagTime, meta.Priority, isJournal, existingID)
 		if err != nil {
 			return err
 		}
@@ -1305,7 +1318,17 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 
 	checksum := ContentHash(content)
 	if checksum == rec.Hash {
-		_, err := i.execContext(ctx, "UPDATE files SET mtime_unix=?, size=? WHERE id=?", mtime.Unix(), size, rec.ID)
+		now := time.Now().UnixNano()
+		_, err := i.execContext(ctx, `
+			UPDATE files
+			SET mtime_unix=?, size=?, etag_time=CASE WHEN etag_time >= ? THEN etag_time + 1 ELSE ? END
+			WHERE id=?`,
+			mtime.Unix(),
+			size,
+			now,
+			now,
+			rec.ID,
+		)
 		return err
 	}
 	return i.IndexNote(ctx, notePath, content, mtime, size)
@@ -3280,16 +3303,87 @@ func (i *Index) NoteHashByPath(ctx context.Context, notePath string) (NoteHashSu
 	args = append(args, relPath)
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
-	query := "SELECT files.hash, files.updated_at FROM files WHERE " + strings.Join(clauses, " AND ")
+	query := "SELECT files.hash, files.updated_at, files.etag_time FROM files WHERE " + strings.Join(clauses, " AND ")
 	var hash string
 	var updatedUnix int64
-	if err := i.queryRowContext(ctx, query, args...).Scan(&hash, &updatedUnix); err != nil {
+	var etagTime int64
+	if err := i.queryRowContext(ctx, query, args...).Scan(&hash, &updatedUnix, &etagTime); err != nil {
 		return NoteHashSummary{}, err
 	}
 	return NoteHashSummary{
 		Hash:      hash,
 		UpdatedAt: time.Unix(updatedUnix, 0),
+		EtagTime:  etagTime,
 	}, nil
+}
+
+func (i *Index) MaxEtagTime(ctx context.Context) (int64, error) {
+	clauses := []string{}
+	args := []interface{}{}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := "SELECT COALESCE(MAX(files.etag_time), 0) FROM files"
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	var maxTime int64
+	if err := i.queryRowContext(ctx, query, args...).Scan(&maxTime); err != nil {
+		return 0, err
+	}
+	return maxTime, nil
+}
+
+func (i *Index) TouchNoteETagByUID(ctx context.Context, uid string) (int64, error) {
+	uid = strings.TrimSpace(uid)
+	if uid == "" {
+		return 0, nil
+	}
+	now := time.Now().UnixNano()
+	res, err := i.execContext(ctx, `
+		UPDATE files
+		SET etag_time=CASE WHEN etag_time >= ? THEN etag_time + 1 ELSE ? END
+		WHERE lower(uid)=lower(?)`,
+		now,
+		now,
+		uid,
+	)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return affected, nil
+}
+
+func (i *Index) TouchNotesByLink(ctx context.Context, rawURL string) (int64, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return 0, nil
+	}
+	now := time.Now().UnixNano()
+	res, err := i.execContext(ctx, `
+		UPDATE files
+		SET etag_time=CASE WHEN etag_time >= ? THEN etag_time + 1 ELSE ? END
+		WHERE id IN (
+			SELECT l.from_file_id
+			FROM links l
+			WHERE l.kind = ? AND l.to_ref = ?
+		)`,
+		now,
+		now,
+		"mdlink",
+		rawURL,
+	)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return affected, nil
 }
 
 func (i *Index) JournalNoteByDate(ctx context.Context, date string) (NoteSummary, bool, error) {

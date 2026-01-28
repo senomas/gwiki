@@ -541,3 +541,12 @@ HTML template parsing and rendering.
 View models and UI types.
 
 - `QuickLauncherEntry`: quick launcher item model
+
+## UI E2E tests (Playwright Go)
+
+E2E tests run in Docker using the Playwright image (browsers bundled). The test runner installs Go and the Playwright driver inside the container.
+
+- `make e2e` starts a separate gwiki container on port `8082` and runs `go test` in `tests/e2e`.
+- Base URL is configured via `E2E_BASE_URL` (default `http://gwiki-e2e:8080` inside Docker).
+
+Smoke test checks the home page, sidebar, and calendar rendering.

@@ -59,3 +59,7 @@ htmx: $(HTMX_OUTPUT)
 $(HTMX_OUTPUT):
 	mkdir -p $$(dirname $(HTMX_OUTPUT))
 	curl -fsSL -o $(HTMX_OUTPUT) $(HTMX_URL)
+
+e2e:
+	docker compose up -d gwiki-e2e
+	docker compose run --rm e2e

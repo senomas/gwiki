@@ -792,15 +792,43 @@ func buildTodoLink(raw string) string {
 	return "/todo?" + u.RawQuery
 }
 
-func noteCardETag(meta index.FrontmatterAttrs, hash string) string {
+func noteCardETag(meta index.FrontmatterAttrs, hash string, etagTime int64) string {
 	if hash == "" {
 		return ""
 	}
-	updated := meta.Updated
-	if updated.IsZero() {
-		updated = time.Unix(0, 0)
+	if etagTime <= 0 {
+		updated := meta.Updated
+		if updated.IsZero() {
+			updated = time.Unix(0, 0)
+		}
+		etagTime = updated.Unix()
 	}
-	return fmt.Sprintf("\"%s-%d-%s\"", meta.ID, updated.Unix(), hash)
+	return fmt.Sprintf("\"%s-%d-%s\"", meta.ID, etagTime, hash)
+}
+
+func pageETag(scope string, rawURL string, etagTime int64) string {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "page"
+	}
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		rawURL = "/"
+	}
+	if etagTime < 0 {
+		etagTime = 0
+	}
+	version := strings.TrimSpace(BuildVersion)
+	if version == "" {
+		version = "dev"
+	}
+	return fmt.Sprintf("\"%s-%d-%s-%s\"", scope, etagTime, version, rawURL)
+}
+
+func setPrivateCacheHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate, no-transform")
+	w.Header().Del("Pragma")
+	w.Header().Del("Expires")
 }
 
 func currentURLString(r *http.Request) string {
@@ -3791,6 +3819,11 @@ func linkTitleStoreFound(ctx context.Context, rawURL string, title string) {
 		slog.Debug("link title cache store failed", "url", rawURL, "err", err)
 		return
 	}
+	if touched, err := embedCacheStore.TouchNotesByLink(context.WithoutCancel(ctx), rawURL); err != nil {
+		slog.Debug("link title cache touch failed", "url", rawURL, "err", err)
+	} else if touched > 0 {
+		slog.Debug("link title cache touch", "url", rawURL, "notes", touched)
+	}
 	slog.Debug("link title cached", "url", rawURL)
 }
 
@@ -3810,6 +3843,11 @@ func linkTitleStoreFailure(ctx context.Context, rawURL string, message string) {
 	if err := embedCacheStore.UpsertEmbedCache(ctx, entry); err != nil {
 		slog.Debug("link title cache store failed", "url", rawURL, "err", err)
 		return
+	}
+	if touched, err := embedCacheStore.TouchNotesByLink(context.WithoutCancel(ctx), rawURL); err != nil {
+		slog.Debug("link title cache touch failed", "url", rawURL, "err", err)
+	} else if touched > 0 {
+		slog.Debug("link title cache touch", "url", rawURL, "notes", touched)
 	}
 	slog.Debug("link title cache failed", "url", rawURL, "err", message)
 }
@@ -4491,6 +4529,18 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
+	}
+
+	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
+		etag := pageETag("home", currentURLString(r), maxTime)
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+			w.Header().Set("ETag", etag)
+			setPrivateCacheHeaders(w)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
 	}
 
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
@@ -5659,6 +5709,17 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
+		etag := pageETag("todo", currentURLString(r), maxTime)
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+			w.Header().Set("ETag", etag)
+			setPrivateCacheHeaders(w)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
+	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
@@ -6285,6 +6346,17 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sidebarReq, basePath := sidebarRequest(r)
+	if maxTime, err := s.idx.MaxEtagTime(sidebarReq.Context()); err == nil {
+		etag := pageETag("sidebar", currentURLString(sidebarReq), maxTime)
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+			w.Header().Set("ETag", etag)
+			setPrivateCacheHeaders(w)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
+	}
 	data := ViewData{
 		ContentTemplate: "sidebar",
 	}
@@ -6311,6 +6383,17 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	}
 	pageReq := *r
 	pageReq.URL = pageURL
+	if maxTime, err := s.idx.MaxEtagTime(pageReq.Context()); err == nil {
+		etag := pageETag("calendar", currentURLString(&pageReq), maxTime)
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+			w.Header().Set("ETag", etag)
+			setPrivateCacheHeaders(w)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
+	}
 	baseURL := baseURLForLinks(&pageReq, basePath)
 	query := pageURL.Query()
 	activeDate := parseDateParam(query.Get("d"))
@@ -7198,6 +7281,21 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, err.Error(), status)
 		return
 	}
+	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
+		combined := data.NoteEtagTime
+		if maxTime > combined {
+			combined = maxTime
+		}
+		etag := pageETag("note", currentURLString(r), combined)
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+			w.Header().Set("ETag", etag)
+			setPrivateCacheHeaders(w)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
+	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }
@@ -7213,7 +7311,17 @@ func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.attachViewData(r, &data)
-	s.views.RenderTemplate(w, "note_detail", data)
+	etag := noteCardETag(data.NoteMeta, data.NoteHash, data.NoteEtagTime)
+	if etag != "" && strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+	}
+	s.views.RenderTemplateWithCache(w, "note_detail", data, "private, max-age=0, must-revalidate, no-transform")
 }
 
 func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Request, notePath string) {
@@ -7225,6 +7333,21 @@ func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Requ
 		}
 		http.Error(w, err.Error(), status)
 		return
+	}
+	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
+		combined := data.NoteEtagTime
+		if maxTime > combined {
+			combined = maxTime
+		}
+		etag := pageETag("backlinks", currentURLString(r), combined)
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+			w.Header().Set("ETag", etag)
+			setPrivateCacheHeaders(w)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "note_backlinks", data)
@@ -7242,7 +7365,7 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 	}
 	s.attachViewData(r, &data)
 	data.Short = data.CompactNoteList
-	etag := noteCardETag(data.NoteMeta, data.NoteHash)
+	etag := noteCardETag(data.NoteMeta, data.NoteHash, data.NoteEtagTime)
 	if etag != "" && strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 		w.Header().Set("ETag", etag)
 		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate, no-transform")
@@ -7527,8 +7650,10 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	}
 
 	noteHash := ""
+	noteEtagTime := int64(0)
 	if summary, err := s.idx.NoteHashByPath(r.Context(), notePath); err == nil {
 		noteHash = summary.Hash
+		noteEtagTime = summary.EtagTime
 		if !summary.UpdatedAt.IsZero() {
 			noteMeta.Updated = summary.UpdatedAt
 		}
@@ -7545,6 +7670,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 		NoteTitle:    meta.Title,
 		NoteMeta:     noteMeta,
 		NoteHash:     noteHash,
+		NoteEtagTime: noteEtagTime,
 		RenderedHTML: template.HTML(htmlStr),
 		NoteURL:      noteURL,
 		FolderLabel:  folderLabel,
@@ -8341,6 +8467,7 @@ func (s *Server) ensureVideoThumbnail(ctx context.Context, noteID, relPath strin
 	if err == nil && thumbInfo.ModTime().Before(videoInfo.ModTime()) {
 		needsUpdate = true
 	}
+	generated := false
 	if needsUpdate {
 		if err := os.MkdirAll(thumbDir, 0o755); err != nil {
 			slog.Warn("video thumbnail mkdir failed", "err", err)
@@ -8349,6 +8476,14 @@ func (s *Server) ensureVideoThumbnail(ctx context.Context, noteID, relPath strin
 		if err := generateVideoThumbnail(videoPath, thumbPath); err != nil {
 			slog.Warn("video thumbnail generation failed", "err", err)
 			return "", false
+		}
+		generated = true
+	}
+	if generated {
+		if touched, err := s.idx.TouchNoteETagByUID(context.WithoutCancel(ctx), noteID); err != nil {
+			slog.Debug("video thumbnail etag touch failed", "note_id", noteID, "err", err)
+		} else if touched > 0 {
+			slog.Debug("video thumbnail etag touch", "note_id", noteID, "notes", touched)
 		}
 	}
 	return "/assets/" + noteID + "/" + thumbName, true
