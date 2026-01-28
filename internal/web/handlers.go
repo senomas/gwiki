@@ -650,7 +650,7 @@ func taskCheckboxHTML(fileID, lineNo int, hash string, checked bool) string {
 		checkedAttr = " checked"
 	}
 	return fmt.Sprintf(
-		`<input type="checkbox"%s data-task-id="%s" id="%s" hx-post="/tasks/toggle" hx-trigger="change" hx-target="closest li" hx-swap="outerHTML" hx-vals='{"task_id":"%s"}'>`,
+		`<input type="checkbox"%s data-task-id="%s" id="%s" hx-post="/tasks/toggle" hx-trigger="change" hx-target="closest .note-body" hx-swap="outerHTML" hx-vals='{"task_id":"%s"}'>`,
 		checkedAttr,
 		id,
 		id,
@@ -5900,6 +5900,7 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []in
 	currentLine := 1
 	taskIndex := 0
 	var out strings.Builder
+	firstBlock := true
 	checkboxTasks := make([]index.Task, 0)
 	for {
 		for taskIndex < len(tasks) && tasks[taskIndex].LineNo < currentLine {
@@ -5908,6 +5909,10 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []in
 		if taskIndex >= len(tasks) {
 			break
 		}
+		if !firstBlock {
+			out.WriteString("\n")
+		}
+		firstBlock = false
 		currentLine = tasks[taskIndex].LineNo
 		if currentLine < 1 || currentLine > len(lines) {
 			taskIndex++
@@ -5915,6 +5920,9 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []in
 			continue
 		}
 		line := lines[currentLine-1]
+		if match := taskToggleLineRe.FindStringSubmatch(line); len(match) > 0 && strings.ToLower(match[2]) != "x" {
+			line = taskDoneTokenRe.ReplaceAllString(line, "")
+		}
 		indent := countLeadingSpaces(line)
 		if match := taskToggleLineRe.FindStringSubmatch(line); len(match) > 0 {
 			checkboxTasks = append(checkboxTasks, index.Task{
@@ -5928,6 +5936,9 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []in
 		currentLine++
 		for currentLine <= len(lines) {
 			line = lines[currentLine-1]
+			if match := taskToggleLineRe.FindStringSubmatch(line); len(match) > 0 && strings.ToLower(match[2]) != "x" {
+				line = taskDoneTokenRe.ReplaceAllString(line, "")
+			}
 			cil := countLeadingSpaces(line)
 			if cil <= indent {
 				break
@@ -5946,6 +5957,24 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []in
 		taskIndex++
 	}
 	return out.String(), checkboxTasks
+}
+
+func todoFiltersFromURL(raw string) (noteTags []string, activeDue bool, dueDate string, activeFolder string, activeRoot bool, activeJournal bool) {
+	if raw == "" {
+		return nil, false, "", "", false, false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, false, "", "", false, false
+	}
+	activeTags := parseTagsParam(parsed.Query().Get("t"))
+	activeFolder, activeRoot = parseFolderParam(parsed.Query().Get("f"))
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	_ = activeTodo
+	if activeDue {
+		dueDate = time.Now().Format("2006-01-02")
+	}
+	return noteTags, activeDue, dueDate, activeFolder, activeRoot, activeJournal
 }
 
 func countLeadingSpaces(line string) int {
@@ -6332,6 +6361,10 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		lineBody = strings.TrimRight(lineBody, " \t") + " done:" + timestamp
 	}
 	newLine := match[1] + newMark + lineBody
+	if newMark != "x" {
+		newLine = taskDoneTokenRe.ReplaceAllString(newLine, "")
+		newLine = strings.TrimRight(newLine, " \t")
+	}
 	lines[lineNo-1] = newLine
 	updatedBody := strings.Join(lines, "\n")
 	updatedContent := updatedBody
@@ -6361,21 +6394,58 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 			s.commitOwnerRepoAsync(ownerName, "checked todo "+notePath)
 		}
 	}
-	newHash := index.TaskLineHash(newLine)
-	renderedLine, err := s.renderMarkdown(r.Context(), []byte(newLine))
+	fullBody := index.StripFrontmatter(normalizeLineEndings(updatedContent))
+	meta := index.FrontmatterAttributes(updatedContent)
+	renderCtx := r.Context()
+	renderSource := fullBody
+	var tasksForNote []index.Task
+	currentURL := r.Header.Get("HX-Current-URL")
+	if strings.Contains(currentURL, "/todo") {
+		noteTags, activeDue, dueDate, activeFolder, activeRoot, activeJournal := todoFiltersFromURL(currentURL)
+		tasks, err := s.idx.OpenTasks(renderCtx, noteTags, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
+		if err == nil {
+			tasksByNote := make(map[string][]index.TaskItem)
+			for _, task := range tasks {
+				tasksByNote[task.Path] = append(tasksByNote[task.Path], task)
+			}
+			noteTasks := tasksByNote[notePath]
+			sort.Slice(noteTasks, func(i, j int) bool {
+				return noteTasks[i].LineNo < noteTasks[j].LineNo
+			})
+			if len(noteTasks) > 0 {
+				lines := strings.Split(fullBody, "\n")
+				snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
+				renderSource = snippet
+				tasksForNote = checkboxTasks
+			}
+		}
+	} else {
+		metaTasks := index.ParseContent(updatedContent).Tasks
+		tasksForNote = make([]index.Task, 0, len(metaTasks))
+		for _, t := range metaTasks {
+			tasksForNote = append(tasksForNote, index.Task{
+				LineNo: t.LineNo,
+				Hash:   t.Hash,
+				Done:   t.Done,
+			})
+		}
+	}
+	renderedBody, err := s.renderNoteBody(renderCtx, []byte(renderSource))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	renderedLine = decorateTaskCheckboxes(renderedLine, fileID, []index.Task{
-		{LineNo: lineNo, Hash: newHash, Done: strings.TrimSpace(newMark) != ""},
-	})
-	listItem := extractFirstListItem(renderedLine)
-	if listItem == "" {
-		listItem = taskCheckboxHTML(fileID, lineNo, newHash, strings.TrimSpace(newMark) != "")
+	if fileID > 0 && len(tasksForNote) > 0 {
+		renderedBody = decorateTaskCheckboxes(renderedBody, fileID, tasksForNote)
 	}
+	noteBody := fmt.Sprintf(
+		`<div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="%s" data-note-path="%s">%s</div>`,
+		html.EscapeString(meta.ID),
+		html.EscapeString(notePath),
+		renderedBody,
+	)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(listItem))
+	_, _ = w.Write([]byte(noteBody))
 }
 
 func (s *Server) handleToastList(w http.ResponseWriter, r *http.Request) {
