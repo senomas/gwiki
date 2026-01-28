@@ -81,6 +81,7 @@ type NoteHistorySummary struct {
 }
 
 type TaskItem struct {
+	ID        int
 	Path      string
 	Title     string
 	LineNo    int

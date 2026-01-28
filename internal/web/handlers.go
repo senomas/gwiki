@@ -5787,28 +5787,20 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tasksByNote := make(map[string][]index.Task)
+	tasksByNote := make(map[string][]index.TaskItem)
 	noteTitles := make(map[string]string)
 	noteUpdated := make(map[string]time.Time)
 	noteEarliestDue := make(map[string]time.Time)
-	noteFileID := make(map[string]int)
 	for _, task := range tasks {
-		if task.FileID <= 0 || task.Hash == "" {
-			continue
-		}
 		dueTime, err := time.Parse("2006-01-02", task.DueDate)
 		if err != nil {
 			dueTime = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
 		}
-		tasksByNote[task.Path] = append(tasksByNote[task.Path], index.Task{
-			LineNo: task.LineNo,
-			Hash:   task.Hash,
-		})
+		tasksByNote[task.Path] = append(tasksByNote[task.Path], task)
 		if _, ok := noteTitles[task.Path]; !ok {
 			noteTitles[task.Path] = task.Title
 			noteUpdated[task.Path] = task.UpdatedAt
 			noteEarliestDue[task.Path] = dueTime
-			noteFileID[task.Path] = task.FileID
 		} else if task.UpdatedAt.After(noteUpdated[task.Path]) {
 			noteUpdated[task.Path] = task.UpdatedAt
 			if dueTime.Before(noteEarliestDue[task.Path]) {
@@ -5834,17 +5826,15 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		snippet := index.UncheckedTasksSnippet(string(contentBytes))
+		body := index.StripFrontmatter(normalizeLineEndings(string(contentBytes)))
+		lines := strings.Split(body, "\n")
+		snippet := buildTodoDebugSnippet(lines, noteTasks)
 		htmlStr, err := s.renderNoteBody(r.Context(), []byte(snippet))
 		if err != nil {
 			slog.Warn("render todo note snippet", "path", path, "err", err)
 			continue
 		}
-		fileID := noteFileID[path]
-		if fileID > 0 {
-			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, noteTasks)
-		}
-		noteMeta := index.FrontmatterAttributes(snippet)
+		noteMeta := index.FrontmatterAttributes(string(contentBytes))
 		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
 		todoNotes = append(todoNotes, NoteCard{
 			Path:         path,
@@ -5894,6 +5884,67 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	applyCalendarLinks(&data, baseURL)
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
+}
+
+func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) string {
+	if len(lines) == 0 || len(tasks) == 0 {
+		return ""
+	}
+	currentLine := 1
+	taskIndex := 0
+	var out strings.Builder
+	for {
+		for taskIndex < len(tasks) && tasks[taskIndex].LineNo < currentLine {
+			taskIndex++
+		}
+		if taskIndex >= len(tasks) {
+			break
+		}
+		currentLine = tasks[taskIndex].LineNo
+		if currentLine < 1 || currentLine > len(lines) {
+			taskIndex++
+			currentLine++
+			continue
+		}
+		line := lines[currentLine-1]
+		indent := countLeadingSpaces(line)
+		out.WriteString(stripIndent(line, indent))
+		out.WriteString("\n")
+		currentLine++
+		for currentLine <= len(lines) {
+			line = lines[currentLine-1]
+			cil := countLeadingSpaces(line)
+			if cil <= indent {
+				break
+			}
+			out.WriteString(stripIndent(line, indent))
+			out.WriteString("\n")
+			currentLine++
+		}
+		taskIndex++
+	}
+	return out.String()
+}
+
+func countLeadingSpaces(line string) int {
+	count := 0
+	for _, r := range line {
+		if r != ' ' {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func stripIndent(line string, indent int) string {
+	if indent <= 0 {
+		return line
+	}
+	if len(line) <= indent {
+		return ""
+	}
+	return line[indent:]
 }
 
 func (s *Server) handleBroken(w http.ResponseWriter, r *http.Request) {
