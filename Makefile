@@ -26,13 +26,20 @@ docker-run:
 	docker run --rm -p 8080:8080 -v $(WIKI_REPO_PATH):/notes -v $(WIKI_DATA_PATH):/data -e WIKI_REPO_PATH=/notes -e WIKI_DATA_PATH=/data gwiki
 
 dev:
-	@if command -v air >/dev/null 2>&1; then \
-		WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) WIKI_LOG_LEVEL=debug WIKI_LOG_PRETTY=1 air -c .air.toml; \
+	@if command -v reflex >/dev/null 2>&1; then \
+		if [ ! -f ./tmp/main ]; then \
+			$(MAKE) dev-build; \
+		fi; \
+		WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) WIKI_LOG_LEVEL=debug WIKI_LOG_PRETTY=1 reflex -s -r 'tmp/main$$' -- sh -lc './tmp/main'; \
 	else \
-		echo "air is not installed. Install with:"; \
-		echo "  go install github.com/air-verse/air@latest"; \
+		echo "reflex is not installed. Install with:"; \
+		echo "  go install github.com/cespare/reflex@latest"; \
 		exit 1; \
 	fi
+
+dev-build:
+	mkdir -p ./tmp
+	WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) go build -ldflags "-X gwiki/internal/web.BuildVersion=$$(date +%Y.%m.%d.%H.%M.%S)" -o ./tmp/main ./cmd/wiki
 
 NODE_IMAGE ?= node:20-alpine
 TAILWIND_CONFIG ?= tailwind.config.js
@@ -59,6 +66,8 @@ htmx: $(HTMX_OUTPUT)
 $(HTMX_OUTPUT):
 	mkdir -p $$(dirname $(HTMX_OUTPUT))
 	curl -fsSL -o $(HTMX_OUTPUT) $(HTMX_URL)
+
+static: css htmx
 
 e2e:
 	docker compose up -d gwiki-e2e
