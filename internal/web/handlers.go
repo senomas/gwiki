@@ -5828,11 +5828,18 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		}
 		body := index.StripFrontmatter(normalizeLineEndings(string(contentBytes)))
 		lines := strings.Split(body, "\n")
-		snippet := buildTodoDebugSnippet(lines, noteTasks)
+		snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
 		htmlStr, err := s.renderNoteBody(r.Context(), []byte(snippet))
 		if err != nil {
 			slog.Warn("render todo note snippet", "path", path, "err", err)
 			continue
+		}
+		fileID := 0
+		if len(noteTasks) > 0 {
+			fileID = noteTasks[0].FileID
+		}
+		if fileID > 0 && len(checkboxTasks) > 0 {
+			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, checkboxTasks)
 		}
 		noteMeta := index.FrontmatterAttributes(string(contentBytes))
 		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
@@ -5886,13 +5893,14 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderPage(w, data)
 }
 
-func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) string {
+func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []index.Task) {
 	if len(lines) == 0 || len(tasks) == 0 {
-		return ""
+		return "", nil
 	}
 	currentLine := 1
 	taskIndex := 0
 	var out strings.Builder
+	checkboxTasks := make([]index.Task, 0)
 	for {
 		for taskIndex < len(tasks) && tasks[taskIndex].LineNo < currentLine {
 			taskIndex++
@@ -5908,6 +5916,13 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) string {
 		}
 		line := lines[currentLine-1]
 		indent := countLeadingSpaces(line)
+		if match := taskToggleLineRe.FindStringSubmatch(line); len(match) > 0 {
+			checkboxTasks = append(checkboxTasks, index.Task{
+				LineNo: currentLine,
+				Hash:   index.TaskLineHash(line),
+				Done:   strings.TrimSpace(match[2]) != "",
+			})
+		}
 		out.WriteString(stripIndent(line, indent))
 		out.WriteString("\n")
 		currentLine++
@@ -5917,13 +5932,20 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) string {
 			if cil <= indent {
 				break
 			}
+			if match := taskToggleLineRe.FindStringSubmatch(line); len(match) > 0 {
+				checkboxTasks = append(checkboxTasks, index.Task{
+					LineNo: currentLine,
+					Hash:   index.TaskLineHash(line),
+					Done:   strings.TrimSpace(match[2]) != "",
+				})
+			}
 			out.WriteString(stripIndent(line, indent))
 			out.WriteString("\n")
 			currentLine++
 		}
 		taskIndex++
 	}
-	return out.String()
+	return out.String(), checkboxTasks
 }
 
 func countLeadingSpaces(line string) int {
