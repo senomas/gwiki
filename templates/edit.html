@@ -822,7 +822,7 @@
       var end = Number(suggest.dataset.tagEnd || "0");
       var insert = tag;
       var nextChar = textarea.value.charAt(end);
-      if (nextChar && !/\s/.test(nextChar)) {
+      if (!nextChar || !/\s/.test(nextChar)) {
         insert += " ";
       }
       textarea.setRangeText(insert, start + 1, end, "end");
@@ -840,7 +840,7 @@
       var end = Number(suggest.dataset.tagEnd || "0");
       var insert = tag;
       var nextChar = textarea.value.charAt(end);
-      if (nextChar && !/\s/.test(nextChar)) {
+      if (!nextChar || !/\s/.test(nextChar)) {
         insert += " ";
       }
       textarea.setRangeText(insert, start + 1, end, "end");
