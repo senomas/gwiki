@@ -121,7 +121,8 @@
       border-radius: 999px;
       background: rgba(148, 163, 184, 0.8);
     }
-    .note-body li:has(input[type="checkbox"])::before {
+    .note-body li:has(> input[type="checkbox"])::before,
+    .note-body li:has(> p > input[type="checkbox"])::before {
       top: 0.36em;
       width: 0.9em;
       height: 0.9em;
@@ -129,11 +130,13 @@
       background: transparent;
       border: 1px solid rgba(148, 163, 184, 0.7);
     }
-    .note-body li:has(input[type="checkbox"]:checked)::before {
+    .note-body li:has(> input[type="checkbox"]:checked)::before,
+    .note-body li:has(> p > input[type="checkbox"]:checked)::before {
       background: rgba(96, 165, 250, 0.9);
       border-color: rgba(96, 165, 250, 0.9);
     }
-    .note-body li:has(input[type="checkbox"]:checked)::after {
+    .note-body li:has(> input[type="checkbox"]:checked)::after,
+    .note-body li:has(> p > input[type="checkbox"]:checked)::after {
       content: "";
       position: absolute;
       left: 0.22em;
@@ -144,7 +147,8 @@
       border-bottom: 2px solid rgba(15, 23, 42, 0.95);
       transform: rotate(45deg);
     }
-    .note-body li:has(input[type="checkbox"]:focus-visible) {
+    .note-body li:has(> input[type="checkbox"]:focus-visible),
+    .note-body li:has(> p > input[type="checkbox"]:focus-visible) {
       outline: 1px solid rgba(125, 211, 252, 0.6);
       outline-offset: 4px;
       border-radius: 0.6rem;
