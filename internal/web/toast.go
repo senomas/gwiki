@@ -99,5 +99,9 @@ func toastKey(r *http.Request) string {
 }
 
 func (s *Server) addToast(r *http.Request, toast Toast) {
-	s.toasts.Add(toastKey(r), toast)
+	key := toastKey(r)
+	s.toasts.Add(key, toast)
+	if key != "" && s.events != nil {
+		s.events.broadcast(key, []byte("refresh"))
+	}
 }

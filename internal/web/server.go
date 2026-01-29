@@ -21,6 +21,7 @@ type Server struct {
 	views  *Templates
 	auth   *Auth
 	toasts *toastStore
+	events *sseHub
 }
 
 func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
@@ -36,6 +37,7 @@ func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
 		views:  MustParseTemplates(),
 		auth:   auth,
 		toasts: newToastStore(),
+		events: newSSEHub(),
 	}
 	embedCacheStore = idx
 
@@ -130,9 +132,16 @@ func (r *statusRecorder) Write(p []byte) (int, error) {
 	return r.ResponseWriter.Write(p)
 }
 
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("/login", s.handleLogin)
 	s.mux.HandleFunc("/logout", s.handleLogout)
+	s.mux.HandleFunc("/events", s.handleEvents)
 	s.mux.HandleFunc("/toast", s.handleToastList)
 	s.mux.HandleFunc("/toast/", s.handleToastDismiss)
 	s.mux.HandleFunc("/settings", s.handleSettings)
