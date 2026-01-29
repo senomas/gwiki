@@ -421,7 +421,7 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	if IsAuthenticated(r.Context()) {
 		return true
 	}
-	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
 	return false
 }
 
@@ -4810,9 +4810,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
+		returnTo := sanitizeReturnURL(r, r.URL.Query().Get("return_to"))
 		data := ViewData{
 			Title:           "Login",
 			ContentTemplate: "login",
+			ReturnURL:       returnTo,
 		}
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
@@ -4828,11 +4830,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user := strings.TrimSpace(r.FormValue("username"))
 	pass := r.FormValue("password")
+	returnTo := sanitizeReturnURL(r, r.FormValue("return_to"))
 	if user == "" || pass == "" {
 		data := ViewData{
 			Title:           "Login",
 			ContentTemplate: "login",
 			ErrorMessage:    "username and password required",
+			ReturnURL:       returnTo,
 		}
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
@@ -4843,6 +4847,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			Title:           "Login",
 			ContentTemplate: "login",
 			ErrorMessage:    "invalid username or password",
+			ReturnURL:       returnTo,
 		}
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
@@ -4860,7 +4865,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	if returnTo == "" {
+		returnTo = "/"
+	}
+	if isHTMX(r) {
+		w.Header().Set("HX-Redirect", returnTo)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	http.Redirect(w, r, returnTo, http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -7287,6 +7300,16 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if s.auth != nil && !IsAuthenticated(r.Context()) {
+		if pathPart == "new/attachments/delete" || pathPart == "new/upload" ||
+			strings.HasSuffix(pathPart, "/edit") || strings.HasSuffix(pathPart, "/save") ||
+			strings.HasSuffix(pathPart, "/upload") || strings.HasSuffix(pathPart, "/attachments/delete") ||
+			strings.HasSuffix(pathPart, "/delete") || strings.HasSuffix(pathPart, "/wikilink") ||
+			strings.HasSuffix(pathPart, "/collapsed") || strings.HasSuffix(pathPart, "/preview") {
+			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
+			return
+		}
+	}
 	if pathPart == "new/attachments/delete" {
 		s.handleDeleteTempAttachment(w, r)
 		return
@@ -7421,6 +7444,10 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 			http.NotFound(w, r)
 			return
 		}
+		if status == http.StatusUnauthorized {
+			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
+			return
+		}
 		http.Error(w, err.Error(), status)
 		return
 	}
@@ -7450,6 +7477,10 @@ func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request
 			http.NotFound(w, r)
 			return
 		}
+		if status == http.StatusUnauthorized {
+			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
+			return
+		}
 		http.Error(w, err.Error(), status)
 		return
 	}
@@ -7472,6 +7503,10 @@ func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		if status == http.StatusNotFound {
 			http.NotFound(w, r)
+			return
+		}
+		if status == http.StatusUnauthorized {
+			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
 			return
 		}
 		http.Error(w, err.Error(), status)
@@ -7503,6 +7538,10 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 			http.NotFound(w, r)
 			return
 		}
+		if status == http.StatusUnauthorized {
+			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
+			return
+		}
 		http.Error(w, err.Error(), status)
 		return
 	}
@@ -7519,6 +7558,25 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 		w.Header().Set("ETag", etag)
 	}
 	s.views.RenderTemplateWithCache(w, "note_detail", data, "private, max-age=0, must-revalidate, no-transform")
+}
+
+func (s *Server) renderLoginPrompt(w http.ResponseWriter, r *http.Request, returnTo, message string, status int) {
+	if s.auth == nil {
+		http.NotFound(w, r)
+		return
+	}
+	data := ViewData{
+		Title:           "Login",
+		ContentTemplate: "login",
+		ErrorMessage:    message,
+		ReturnURL:       returnTo,
+	}
+	s.attachViewData(r, &data)
+	if status <= 0 {
+		status = http.StatusUnauthorized
+	}
+	w.WriteHeader(status)
+	s.views.RenderPage(w, data)
 }
 
 func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, error) {
@@ -7547,6 +7605,9 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if !IsAuthenticated(r.Context()) {
+				return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
+			}
 			return ViewData{}, http.StatusNotFound, err
 		}
 		return ViewData{}, http.StatusInternalServerError, err
@@ -7581,7 +7642,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	meta := index.ParseContent(string(normalizedContent))
 	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
 	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
-		return ViewData{}, http.StatusNotFound, errors.New("not found")
+		return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
 	}
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	htmlStr := ""
@@ -7730,6 +7791,9 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if !IsAuthenticated(r.Context()) {
+				return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
+			}
 			return ViewData{}, http.StatusNotFound, err
 		}
 		return ViewData{}, http.StatusInternalServerError, err
@@ -7765,7 +7829,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	meta := index.ParseContent(string(normalizedContent))
 	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
 	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
-		return ViewData{}, http.StatusNotFound, errors.New("not found")
+		return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
 	}
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	renderCtx := r.Context()
@@ -7914,6 +7978,27 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	if returnURL == "" {
 		returnURL = "/"
 	}
+	ownerOptions, defaultOwner, err := s.ownerOptionsForUser(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	selectedOwner := ownerName
+	if selectedOwner == "" {
+		selectedOwner = defaultOwner
+	}
+	if selectedOwner != "" && len(ownerOptions) > 0 {
+		found := false
+		for _, option := range ownerOptions {
+			if option.Name == selectedOwner {
+				found = true
+				break
+			}
+		}
+		if !found {
+			selectedOwner = defaultOwner
+		}
+	}
 	data := ViewData{
 		Title:            "Edit: " + meta.Title,
 		ContentTemplate:  "edit",
@@ -7926,6 +8011,8 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		Attachments:      attachments,
 		AttachmentBase:   attachmentBase,
 		ReturnURL:        returnURL,
+		OwnerOptions:     ownerOptions,
+		SelectedOwner:    selectedOwner,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -8735,7 +8822,16 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusBadRequest)
 		return
 	}
-	if err := s.ensureOwnerNotesDir(ownerName); err != nil {
+	targetOwner := strings.TrimSpace(r.Form.Get("owner"))
+	if targetOwner == "" {
+		targetOwner = ownerName
+	}
+	if targetOwner != ownerName {
+		if !s.requireWriteAccess(w, r, targetOwner) {
+			return
+		}
+	}
+	if err := s.ensureOwnerNotesDir(targetOwner); err != nil {
 		returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
@@ -8953,7 +9049,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if folder != "" {
 		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
 	}
-	desiredPath := filepath.ToSlash(filepath.Join(ownerName, desiredRel))
+	desiredPath := filepath.ToSlash(filepath.Join(targetOwner, desiredRel))
 	pathChanged := filepath.ToSlash(notePath) != desiredPath
 	decision := r.Form.Get("rename_decision")
 	autoMove := !preserveUpdated && pathChanged
@@ -9126,6 +9222,54 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}, http.StatusInternalServerError)
 		return
 	}
+	if targetPath != notePath && metaAttrs.ID != "" && targetOwner != ownerName {
+		oldAttach := s.noteAttachmentsDir(ownerName, metaAttrs.ID)
+		newAttach := s.noteAttachmentsDir(targetOwner, metaAttrs.ID)
+		if _, err := os.Stat(oldAttach); err == nil {
+			if _, err := os.Stat(newAttach); err == nil {
+				s.renderEditError(w, r, ViewData{
+					Title:            "Edit note",
+					ContentTemplate:  "edit",
+					NotePath:         targetPath,
+					NoteTitle:        derivedTitle,
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					ErrorMessage:     "attachments already exist for new owner",
+					ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+					ReturnURL:        returnURL,
+				}, http.StatusConflict)
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(newAttach), 0o755); err != nil {
+				s.renderEditError(w, r, ViewData{
+					Title:            "Edit note",
+					ContentTemplate:  "edit",
+					NotePath:         targetPath,
+					NoteTitle:        derivedTitle,
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+					ReturnURL:        returnURL,
+				}, http.StatusInternalServerError)
+				return
+			}
+			if err := os.Rename(oldAttach, newAttach); err != nil {
+				s.renderEditError(w, r, ViewData{
+					Title:            "Edit note",
+					ContentTemplate:  "edit",
+					NotePath:         targetPath,
+					NoteTitle:        derivedTitle,
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/" + targetPath + "/edit",
+					ReturnURL:        returnURL,
+				}, http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 	if targetPath != notePath {
 		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
 			s.renderEditError(w, r, ViewData{
@@ -9147,7 +9291,10 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if err == nil {
 		_ = s.idx.IndexNote(ctx, targetPath, []byte(mergedContent), info.ModTime(), info.Size())
 	}
-	s.commitOwnerRepoAsync(ownerName, "save "+targetPath)
+	s.commitOwnerRepoAsync(targetOwner, "save "+targetPath)
+	if targetOwner != ownerName {
+		s.commitOwnerRepoAsync(ownerName, "move "+notePath)
+	}
 
 	s.addToast(r, Toast{
 		ID:              uuid.NewString(),

@@ -63,6 +63,12 @@ cache/              # optional render cache (ignored by git)
 - Internal data (index, auth, drafts) lives under `WIKI_DATA_PATH` (defaults to `.wiki/` under the repo path).
 - Ignore `.wiki/` in `.gitignore` (or your `WIKI_DATA_PATH` location).
 
+Filesystem storage (multi-user):
+
+- `WIKI_REPO_PATH/<owner>/notes/<path>.md`
+- `WIKI_REPO_PATH/<owner>/notes/attachments/<note-id>/...`
+- DB stores owner via `user_id`/`group_id` plus an ownerless `path` (e.g., `healing/pasar-doplang.md`).
+
 ---
 
 ## Markdown conventions
