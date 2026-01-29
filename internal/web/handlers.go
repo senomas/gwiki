@@ -8927,17 +8927,26 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	mergedContent = sanitizeTaskDoneTokens(mergedContent)
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
 	if preserveUpdated && titleChanged {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         notePath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: index.FrontmatterBlock(mergedContent),
-			ErrorMessage:     "journal note title cannot change",
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusBadRequest)
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         "Journal note title cannot change.",
+			Kind:            "error",
+			DurationSeconds: 0,
+			CreatedAt:       time.Now(),
+		})
+		if isHTMX(r) {
+			w.Header().Set("HX-Retarget", "#toast-stack")
+			w.Header().Set("HX-Reswap", "outerHTML")
+			toasts := s.toasts.List(toastKey(r))
+			data := ViewData{
+				ContentTemplate: "toast",
+				ToastItems:      toasts,
+			}
+			s.attachViewData(r, &data)
+			s.views.RenderTemplate(w, "toast", data)
+			return
+		}
+		http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
 		return
 	}
 	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))

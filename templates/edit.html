@@ -619,6 +619,21 @@
 </script>
 <script>
   (function () {
+    function closeEditLauncher() {
+      var launcher = document.getElementById("edit-launcher");
+      if (!launcher) {
+        return;
+      }
+      launcher.classList.remove("is-open");
+      launcher.setAttribute("aria-hidden", "true");
+    }
+    window.addEventListener("pageshow", function () {
+      closeEditLauncher();
+    });
+  })();
+</script>
+<script>
+  (function () {
     var input = document.querySelector("[data-folder-input]");
     var suggest = document.querySelector(".combobox-menu");
     if (!input || !suggest) {

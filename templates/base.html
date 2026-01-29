@@ -2432,6 +2432,58 @@
       }, true);
     })();
   </script>
+  <script>
+    (function () {
+      if (!("EventSource" in window)) {
+        return;
+      }
+      var source = new EventSource("/events");
+      source.addEventListener("toast", function () {
+        document.body.dispatchEvent(new CustomEvent("toast:refresh"));
+      });
+      source.addEventListener("ready", function () {});
+    })();
+  </script>
+  <script>
+    (function () {
+      if (!window.htmx) {
+        return;
+      }
+      document.body.addEventListener("htmx:afterRequest", function (event) {
+        if (!event.detail || !event.detail.xhr) {
+          return;
+        }
+        var trigger = event.detail.xhr.getResponseHeader("HX-Trigger");
+        if (!trigger || trigger.indexOf("toast:refresh") === -1) {
+          return;
+        }
+        document.body.dispatchEvent(new CustomEvent("toast:refresh"));
+      });
+    })();
+  </script>
+  <script>
+    (function () {
+      function closeTransientUI() {
+        document.querySelectorAll(".quick-launcher.is-open").forEach(function (launcher) {
+          launcher.classList.remove("is-open");
+          launcher.setAttribute("aria-hidden", "true");
+        });
+        var submenu = document.getElementById("quick-launcher-submenu-modal");
+        if (submenu) {
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+        }
+        var noteActions = document.getElementById("note-actions-modal");
+        if (noteActions) {
+          noteActions.classList.remove("is-open");
+          noteActions.setAttribute("aria-hidden", "true");
+        }
+      }
+      window.addEventListener("pageshow", function () {
+        closeTransientUI();
+      });
+    })();
+  </script>
 </body>
 </html>
 {{end}}
