@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"time"
 )
 
@@ -37,6 +38,7 @@ func (r retryRow) Scan(dest ...any) error {
 }
 
 func (i *Index) queryRowContext(ctx context.Context, query string, args ...any) rowScanner {
+	slog.Debug("sql query", "query", query, "args", args)
 	return retryRow{
 		ctx:     ctx,
 		query:   func() *sql.Row { return i.db.QueryRowContext(ctx, query, args...) },
@@ -45,6 +47,7 @@ func (i *Index) queryRowContext(ctx context.Context, query string, args ...any) 
 }
 
 func (i *Index) queryRowContextTx(ctx context.Context, tx *sql.Tx, query string, args ...any) rowScanner {
+	slog.Debug("sql query tx", "query", query, "args", args)
 	return retryRow{
 		ctx:     ctx,
 		query:   func() *sql.Row { return tx.QueryRowContext(ctx, query, args...) },
@@ -53,6 +56,7 @@ func (i *Index) queryRowContextTx(ctx context.Context, tx *sql.Tx, query string,
 }
 
 func (i *Index) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	slog.Debug("sql exec", "query", query, "args", args)
 	start := time.Now()
 	for attempt := 0; ; attempt++ {
 		res, err := i.db.ExecContext(ctx, query, args...)
@@ -73,6 +77,7 @@ func (i *Index) execContext(ctx context.Context, query string, args ...any) (sql
 }
 
 func (i *Index) execContextTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (sql.Result, error) {
+	slog.Debug("sql exec tx", "query", query, "args", args)
 	start := time.Now()
 	for attempt := 0; ; attempt++ {
 		res, err := tx.ExecContext(ctx, query, args...)
@@ -93,6 +98,7 @@ func (i *Index) execContextTx(ctx context.Context, tx *sql.Tx, query string, arg
 }
 
 func (i *Index) queryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	slog.Debug("sql query", "query", query, "args", args)
 	start := time.Now()
 	for attempt := 0; ; attempt++ {
 		rows, err := i.db.QueryContext(ctx, query, args...)
