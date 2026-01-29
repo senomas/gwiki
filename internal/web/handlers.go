@@ -28,6 +28,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alecthomas/chroma/v2"
+	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -70,6 +74,9 @@ var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(&attachmentVideoEmbedExtension{}),
 	goldmark.WithExtensions(&linkTitleExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
+	goldmark.WithRendererOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newCodeBlockHTMLRenderer(), 700),
+	)),
 )
 
 type linkTargetBlank struct{}
@@ -112,6 +119,120 @@ func shouldOpenNewTab(dest []byte) bool {
 		strings.HasPrefix(s, "https://") ||
 		strings.HasPrefix(s, "ftp://") ||
 		strings.HasPrefix(s, "//")
+}
+
+type codeBlockHTMLRenderer struct{}
+
+func newCodeBlockHTMLRenderer() renderer.NodeRenderer {
+	return &codeBlockHTMLRenderer{}
+}
+
+func (r *codeBlockHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(ast.KindFencedCodeBlock, r.renderFencedCodeBlock)
+	reg.Register(ast.KindCodeBlock, r.renderCodeBlock)
+}
+
+func (r *codeBlockHTMLRenderer) renderFencedCodeBlock(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*ast.FencedCodeBlock)
+	code := linesValue(n.Lines(), source)
+	lang := strings.TrimSpace(string(n.Language(source)))
+	renderCodeBlockHTML(w, code, lang)
+	return ast.WalkSkipChildren, nil
+}
+
+func (r *codeBlockHTMLRenderer) renderCodeBlock(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	n := node.(*ast.CodeBlock)
+	code := linesValue(n.Lines(), source)
+	renderCodeBlockHTML(w, code, "")
+	return ast.WalkSkipChildren, nil
+}
+
+func renderCodeBlockHTML(w util.BufWriter, code string, lang string) {
+	lines := strings.Split(code, "\n")
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	langLabel := "Plain"
+	if lang != "" {
+		langLabel = strings.ToUpper(lang)
+	}
+
+	_, _ = w.WriteString(`<div class="md-code-block my-4 rounded-2xl border border-slate-800/70 bg-[#0f1216]/90">`)
+	_, _ = w.WriteString(`<div class="flex items-center justify-between border-b border-slate-800/70 px-4 py-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">`)
+	_, _ = w.WriteString(`<span class="font-semibold">`)
+	_, _ = w.WriteString(html.EscapeString(langLabel))
+	_, _ = w.WriteString(`</span>`)
+	_, _ = w.WriteString(`<button type="button" class="js-code-copy rounded-lg border border-slate-800/80 bg-[#15181c] px-2.5 py-1 text-[10px] font-semibold text-slate-300 transition hover:text-slate-100">Copy</button>`)
+	_, _ = w.WriteString(`</div>`)
+	_, _ = w.WriteString(`<div class="md-code-row">`)
+	_, _ = w.WriteString(`<div class="select-none border-r border-slate-800/70 bg-[#0c0f12] px-3 py-3 text-right font-mono text-[13px] leading-relaxed text-slate-600">`)
+	for i := range lines {
+		_, _ = w.WriteString(`<div>`)
+		_, _ = w.WriteString(strconv.Itoa(i + 1))
+		_, _ = w.WriteString(`</div>`)
+	}
+	_, _ = w.WriteString(`</div>`)
+	_, _ = w.WriteString(`<pre class="m-0 w-full min-w-0 overflow-x-auto px-4 py-3 font-mono text-[13px] text-slate-100"><code`)
+	if lang != "" {
+		_, _ = w.WriteString(` class="language-`)
+		_, _ = w.WriteString(html.EscapeString(lang))
+		_, _ = w.WriteString(`"`)
+	}
+	_, _ = w.WriteString(`>`)
+	if highlighted, ok := highlightCodeHTML(code, lang); ok {
+		_, _ = w.WriteString(highlighted)
+	} else {
+		_, _ = w.WriteString(html.EscapeString(code))
+	}
+	_, _ = w.WriteString(`</code></pre>`)
+	_, _ = w.WriteString(`</div></div>`)
+}
+
+func linesValue(lines *text.Segments, source []byte) string {
+	if lines == nil || lines.Len() == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < lines.Len(); i++ {
+		segment := lines.At(i)
+		b.Write(segment.Value(source))
+	}
+	return b.String()
+}
+
+func highlightCodeHTML(code string, lang string) (string, bool) {
+	var lexer chroma.Lexer
+	if lang != "" {
+		lexer = lexers.Get(lang)
+	}
+	if lexer == nil {
+		lexer = lexers.Analyse(code)
+	}
+	if lexer == nil {
+		return "", false
+	}
+	lexer = chroma.Coalesce(lexer)
+	formatter := chromahtml.New(chromahtml.WithClasses(false), chromahtml.PreventSurroundingPre(true))
+	style := styles.Get("github-dark")
+	if style == nil {
+		style = styles.Fallback
+	}
+	iter, err := lexer.Tokenise(nil, code)
+	if err != nil {
+		return "", false
+	}
+	var b strings.Builder
+	if err := formatter.Format(&b, style, iter); err != nil {
+		return "", false
+	}
+	return b.String(), true
 }
 
 func (s *Server) attachViewData(r *http.Request, data *ViewData) {
