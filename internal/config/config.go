@@ -20,6 +20,7 @@ type Config struct {
 	NoteLockTimeout   time.Duration
 	UpdatedHistoryMax int
 	DBLockTimeout     time.Duration
+	DBBusyTimeout     time.Duration
 }
 
 func Load() Config {
@@ -45,6 +46,7 @@ func Load() Config {
 	cfg.NoteLockTimeout = parseDurationOr("WIKI_NOTE_LOCK_TIMEOUT", 5*time.Second)
 	cfg.UpdatedHistoryMax = parseIntOr("WIKI_UPDATED_HISTORY_MAX", 100)
 	cfg.DBLockTimeout = time.Duration(parseIntOr("WIKI_DB_LOCK_TIMEOUT_MS", 5000)) * time.Millisecond
+	cfg.DBBusyTimeout = time.Duration(parseIntOr("WIKI_DB_BUSY_TIMEOUT_MS", 10000)) * time.Millisecond
 	return cfg
 }
 

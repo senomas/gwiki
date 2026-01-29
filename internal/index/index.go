@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,6 +22,10 @@ import (
 type Index struct {
 	db          *sql.DB
 	lockTimeout time.Duration
+}
+
+type OpenOptions struct {
+	BusyTimeout time.Duration
 }
 
 type NoteSummary struct {
@@ -314,7 +319,27 @@ func slugify(input string) string {
 }
 
 func Open(path string) (*Index, error) {
-	db, err := sql.Open("sqlite", path)
+	return OpenWithOptions(path, OpenOptions{BusyTimeout: 10 * time.Second})
+}
+
+func OpenWithOptions(path string, opts OpenOptions) (*Index, error) {
+	busyTimeout := opts.BusyTimeout
+	if busyTimeout < 0 {
+		busyTimeout = 0
+	}
+
+	vals := url.Values{}
+	vals.Add("_pragma", "journal_mode=WAL")
+	vals.Add("_pragma", fmt.Sprintf("busy_timeout=%d", busyTimeout.Milliseconds()))
+
+	dsn := path
+	if strings.Contains(path, "?") {
+		dsn = path + "&" + vals.Encode()
+	} else {
+		dsn = path + "?" + vals.Encode()
+	}
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}

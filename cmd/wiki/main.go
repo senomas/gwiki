@@ -58,7 +58,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	idx, err := index.Open(filepath.Join(cfg.DataPath, "index.sqlite"))
+	idx, err := index.OpenWithOptions(filepath.Join(cfg.DataPath, "index.sqlite"), index.OpenOptions{
+		BusyTimeout: cfg.DBBusyTimeout,
+	})
 	if err != nil {
 		slog.Error("open index", "err", err)
 		os.Exit(1)

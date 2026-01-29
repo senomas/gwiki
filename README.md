@@ -81,6 +81,7 @@ The server creates `notes/` under `WIKI_REPO_PATH` and stores internal data unde
 - `WIKI_AUTH_FILE` (per-line `user:$argon2id$...[:role1,role2]`)
 - `WIKI_GIT_DEBOUNCE` (default: `3m`)
 - `WIKI_GIT_PUSH_DEBOUNCE` (default: `10m`)
+- `WIKI_DB_BUSY_TIMEOUT_MS` (default: `10000`)
 
 ### Auth file format
 
