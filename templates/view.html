@@ -1,38 +1,20 @@
 {{define "view"}}
-<div class="app-shell relative min-h-screen overflow-hidden">
-  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
-  <div class="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-8 lg:flex-row lg:gap-10 lg:px-6 lg:py-10">
-    <div id="sidebar-slot" class="w-full lg:w-72 lg:flex-none lg:self-start" hx-get="/sidebar" hx-trigger="load" hx-swap="outerHTML">
-      {{template "sidebar_skeleton" .}}
+<section class="space-y-6">
+  <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
+    <div
+      hx-get="/notes/{{.NotePath}}/detail"
+      hx-trigger="revealed, task-toggled from:body"
+      hx-swap="outerHTML"
+    >
+      {{template "note_detail_skeleton" .}}
     </div>
-
-    <section class="flex-1 space-y-6">
-      <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
-        <div class="flex items-center gap-2">
-          {{if and .AuthEnabled .IsAuthenticated}}
-            <a class="js-quick-launcher-open rounded-xl border border-slate-800/80 bg-[#15181c] px-2.5 py-1 text-[10px] text-slate-300" href="#">{{.CurrentUser.Name}}</a>
-          {{else if .AuthEnabled}}
-            <a class="text-slate-400 transition hover:text-slate-200" href="/login">Login</a>
-          {{end}}
-        </div>
-      </div>
-      <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
-        <div
-          hx-get="/notes/{{.NotePath}}/detail"
-          hx-trigger="revealed, task-toggled from:body"
-          hx-swap="outerHTML"
-        >
-          {{template "note_detail_skeleton" .}}
-        </div>
-      </article>
-      <div
-        hx-get="/notes/{{.NotePath}}/backlinks"
-        hx-trigger="revealed, task-toggled from:body"
-        hx-swap="outerHTML"
-      >
-        {{template "note_backlinks" .}}
-      </div>
-    </section>
+  </article>
+  <div
+    hx-get="/notes/{{.NotePath}}/backlinks"
+    hx-trigger="revealed, task-toggled from:body"
+    hx-swap="outerHTML"
+  >
+    {{template "note_backlinks" .}}
   </div>
-</div>
+</section>
 {{end}}

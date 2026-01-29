@@ -1,51 +1,33 @@
 {{define "tasks"}}
-<div class="app-shell relative min-h-screen overflow-hidden">
-  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
-  <div class="relative mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-8 lg:flex-row lg:gap-10 lg:px-6 lg:py-10">
-    <div id="sidebar-slot" class="w-full lg:w-72 lg:flex-none lg:self-start" hx-get="/sidebar" hx-trigger="load" hx-swap="outerHTML">
-      {{template "sidebar_skeleton" .}}
-    </div>
-
-    <section class="flex-1 space-y-6">
-      <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
-        <div class="flex items-center gap-2">
-          {{if and .AuthEnabled .IsAuthenticated}}
-            <a class="js-quick-launcher-open rounded-xl border border-slate-800/80 bg-[#15181c] px-2.5 py-1 text-[10px] text-slate-300" href="#">{{.CurrentUser.Name}}</a>
-          {{else if .AuthEnabled}}
-            <a class="text-slate-400 transition hover:text-slate-200" href="/login">Login</a>
+<section class="space-y-6">
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-100">Open tasks</h1>
+    <p class="text-sm text-slate-400">Unchecked tasks sorted by due date, then latest updates.</p>
+  </header>
+  <div class="space-y-3">
+    {{if not .OpenTasks}}
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
+        No open tasks.
+      </div>
+    {{end}}
+    {{range .OpenTasks}}
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+        <div class="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+          {{if .DueDate}}
+            <span class="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-200">Due {{.DueDate}}</span>
+          {{else}}
+            <span class="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-500">No due date</span>
           {{end}}
+          <span class="text-slate-500">Updated {{.UpdatedAt.Format "Jan 2, 2006"}}</span>
+        </div>
+        <div class="mt-2 text-base text-slate-100">{{.Text}}</div>
+        <div class="mt-2 text-sm">
+          <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">Open note</a>
+          <span class="text-slate-500">· line {{.LineNo}}</span>
+          <span class="text-slate-500">· {{.Title}}</span>
         </div>
       </div>
-      <header>
-        <h1 class="text-2xl font-semibold text-slate-100">Open tasks</h1>
-        <p class="text-sm text-slate-400">Unchecked tasks sorted by due date, then latest updates.</p>
-      </header>
-      <div class="space-y-3">
-        {{if not .OpenTasks}}
-          <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
-            No open tasks.
-          </div>
-        {{end}}
-        {{range .OpenTasks}}
-          <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-            <div class="flex flex-wrap items-center gap-2 text-sm text-slate-300">
-              {{if .DueDate}}
-                <span class="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-200">Due {{.DueDate}}</span>
-              {{else}}
-                <span class="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-500">No due date</span>
-              {{end}}
-              <span class="text-slate-500">Updated {{.UpdatedAt.Format "Jan 2, 2006"}}</span>
-            </div>
-            <div class="mt-2 text-base text-slate-100">{{.Text}}</div>
-            <div class="mt-2 text-sm">
-              <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">Open note</a>
-              <span class="text-slate-500">· line {{.LineNo}}</span>
-              <span class="text-slate-500">· {{.Title}}</span>
-            </div>
-          </div>
-        {{end}}
-      </div>
-    </section>
+    {{end}}
   </div>
-</div>
+</section>
 {{end}}

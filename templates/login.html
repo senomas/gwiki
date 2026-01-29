@@ -1,36 +1,33 @@
 {{define "login"}}
-<div class="app-shell relative min-h-screen overflow-hidden">
-  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
-  <div class="relative mx-auto flex min-h-screen max-w-4xl flex-col px-4 py-8 md:px-6 md:py-10">
-    <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
-      <span class="text-slate-400">Login</span>
-    </div>
-    <section id="login-panel" class="mt-10 rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
-      <h1 class="text-2xl font-semibold text-slate-100">Sign in</h1>
-      <p class="mt-2 text-sm text-slate-400">Use your wiki credentials to access private notes.</p>
-      {{if .ErrorMessage}}
-      <div class="mt-4 rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-        {{.ErrorMessage}}
-      </div>
-      {{end}}
-      <form id="login-form" class="mt-6 space-y-4" action="/login" method="post" hx-post="/login" hx-target="#login-panel" hx-select="#login-panel" hx-swap="outerHTML">
-        <div class="space-y-2">
-          <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Username</label>
-          <input id="login-username" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="username" autocomplete="username" required>
-        </div>
-        <div class="space-y-2">
-          <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Password</label>
-          <input id="login-password" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="password" name="password" autocomplete="current-password" required>
-        </div>
-        <div class="flex justify-end">
-          <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Login</button>
-        </div>
-        {{if .ReturnURL}}
-        <input type="hidden" name="return_to" value="{{.ReturnURL}}">
-        {{end}}
-      </form>
-    </section>
+<div class="relative mx-auto flex min-h-screen max-w-4xl flex-col px-4 py-8 md:px-6 md:py-10">
+  <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
+    <span class="text-slate-400">Login</span>
   </div>
+  <section id="login-panel" class="mt-10 rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
+    <h1 class="text-2xl font-semibold text-slate-100">Sign in</h1>
+    <p class="mt-2 text-sm text-slate-400">Use your wiki credentials to access private notes.</p>
+    {{if .ErrorMessage}}
+    <div class="mt-4 rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+      {{.ErrorMessage}}
+    </div>
+    {{end}}
+    <form id="login-form" class="mt-6 space-y-4" action="/login" method="post" hx-post="/login" hx-target="#login-panel" hx-select="#login-panel" hx-swap="outerHTML">
+      <div class="space-y-2">
+        <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Username</label>
+        <input id="login-username" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="username" autocomplete="username" required>
+      </div>
+      <div class="space-y-2">
+        <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Password</label>
+        <input id="login-password" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="password" name="password" autocomplete="current-password" required>
+      </div>
+      <div class="flex justify-end">
+        <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit">Login</button>
+      </div>
+      {{if .ReturnURL}}
+      <input type="hidden" name="return_to" value="{{.ReturnURL}}">
+      {{end}}
+    </form>
+  </section>
 </div>
 <script>
   (function () {

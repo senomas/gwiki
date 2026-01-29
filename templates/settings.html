@@ -1,18 +1,5 @@
 {{define "settings"}}
-<div class="app-shell relative min-h-screen overflow-hidden">
-  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_60%),radial-gradient(circle_at_bottom,_rgba(14,116,144,0.12),_transparent_65%)]"></div>
-  <div class="relative mx-auto flex min-h-screen max-w-4xl flex-col gap-6 px-4 py-8 md:px-6 md:py-10">
-
-    <section class="flex-1 space-y-6">
-      <div class="flex items-center justify-end text-xs uppercase tracking-[0.25em] text-slate-500">
-        <div class="flex items-center gap-2">
-          {{if and .AuthEnabled .IsAuthenticated}}
-            <a class="js-quick-launcher-open rounded-xl border border-slate-800/80 bg-[#15181c] px-2.5 py-1 text-[10px] text-slate-300" href="#">{{.CurrentUser.Name}}</a>
-          {{else if .AuthEnabled}}
-            <a class="text-slate-400 transition hover:text-slate-200" href="/login">Login</a>
-          {{end}}
-        </div>
-      </div>
+<section class="flex-1 space-y-6">
       <header class="space-y-2">
         <h1 class="text-2xl font-semibold text-slate-100">Settings</h1>
         <p class="text-sm text-slate-400">User preferences for your notes.</p>
@@ -117,8 +104,6 @@
         <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit" form="settings-form">Save</button>
       </div>
     </section>
-  </div>
-</div>
 <script>
   (function () {
     var items = document.querySelectorAll(".js-settings-accordion");

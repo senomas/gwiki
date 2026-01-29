@@ -846,31 +846,11 @@
     }
   </style>
 </head>
-  <body class="{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search") (eq .ContentTemplate "settings")}}min-h-screen bg-[#0b0d0f] text-slate-100{{else}}min-h-screen bg-slate-50 text-slate-900{{end}}" data-note-list-mode="{{if .CompactNoteList}}compact{{else}}full{{end}}">
-{{if or (eq .ContentTemplate "view") (eq .ContentTemplate "home") (eq .ContentTemplate "tasks") (eq .ContentTemplate "todo") (eq .ContentTemplate "edit") (eq .ContentTemplate "login") (eq .ContentTemplate "daily") (eq .ContentTemplate "rebuild") (eq .ContentTemplate "sync") (eq .ContentTemplate "broken") (eq .ContentTemplate "search") (eq .ContentTemplate "settings")}}
-  {{.ContentHTML}}
+<body class="min-h-screen bg-[#0b0d0f] text-slate-100" data-note-list-mode="{{if .CompactNoteList}}compact{{else}}full{{end}}">
+{{if or (eq .ContentTemplate "settings") (eq .ContentTemplate "login") (eq .ContentTemplate "edit")}}
+  {{template "layout_plain" .}}
 {{else}}
-  <div class="mx-auto max-w-5xl px-6 py-8">
-    <header class="flex flex-wrap items-end justify-between gap-4">
-      <div class="text-lg font-semibold">
-        <a class="text-emerald-600 hover:text-emerald-700" href="/">gwiki</a>
-      </div>
-      <form class="w-full max-w-xs" action="/search" method="get">
-        <input class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200" type="search" name="q" placeholder="Search" value="{{.SearchQuery}}">
-      </form>
-      {{if and .AuthEnabled .IsAuthenticated}}
-        <div class="flex items-center gap-2 text-sm">
-          <a class="js-quick-launcher-open rounded-md border border-slate-300 bg-white px-2.5 py-1 text-slate-700" href="#">{{.CurrentUser.Name}}</a>
-        </div>
-      {{else if .AuthEnabled}}
-        <a class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" href="/login">Login</a>
-      {{end}}
-    </header>
-    <hr class="my-6 border-slate-200">
-    <main class="max-w-4xl">
-      {{.ContentHTML}}
-    </main>
-  </div>
+  {{template "layout_sidebar" .}}
 {{end}}
   <div id="toast-stack" class="toast-stack" hx-get="/toast" hx-trigger="load, toast:refresh from:body" hx-swap="outerHTML"></div>
   <div id="quick-launcher" class="quick-launcher" aria-hidden="true">
