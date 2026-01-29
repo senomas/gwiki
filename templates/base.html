@@ -592,7 +592,7 @@
     .sidebar-shell {
       width: 100%;
     }
-    @media (min-width: 768px) {
+    @media (min-width: 1024px) {
       .sidebar-shell {
         flex: 0 0 18rem;
         max-width: 18rem;
@@ -1716,7 +1716,7 @@
   <script>
     (function () {
       function syncSidebarDetails() {
-        var isDesktop = window.matchMedia("(min-width: 768px)").matches;
+        var isDesktop = window.matchMedia("(min-width: 1024px)").matches;
         document.querySelectorAll("details[data-sidebar]").forEach(function (panel) {
           panel.open = isDesktop;
         });
