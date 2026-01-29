@@ -8769,7 +8769,6 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 
-	decision := r.Form.Get("rename_decision")
 	derivedTitle := index.DeriveTitleFromBody(content)
 	if derivedTitle == "" {
 		derivedTitle = time.Now().Format("2006-01-02 15-04")
@@ -8927,15 +8926,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	mergedContent = sanitizeTaskDoneTokens(mergedContent)
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
-	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))
-	if folder != "" {
-		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
-	}
-	desiredPath := filepath.ToSlash(filepath.Join(ownerName, desiredRel))
-	pathChanged := filepath.ToSlash(notePath) != desiredPath
-	autoMove := !preserveUpdated && !titleChanged && pathChanged
-	if !preserveUpdated && titleChanged && decision == "" {
-		newPath := desiredPath
+	if preserveUpdated && titleChanged {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
@@ -8943,14 +8934,20 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			NoteTitle:        derivedTitle,
 			RawContent:       content,
 			FrontmatterBlock: index.FrontmatterBlock(mergedContent),
-			NoteMeta:         index.FrontmatterAttributes(mergedContent),
-			RenamePrompt:     true,
-			RenameFromPath:   notePath,
-			RenameToPath:     newPath,
+			ErrorMessage:     "journal note title cannot change",
+			ErrorReturnURL:   "/notes/" + notePath + "/edit",
 			ReturnURL:        returnURL,
-		}, http.StatusOK)
+		}, http.StatusBadRequest)
 		return
 	}
+	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))
+	if folder != "" {
+		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
+	}
+	desiredPath := filepath.ToSlash(filepath.Join(ownerName, desiredRel))
+	pathChanged := filepath.ToSlash(notePath) != desiredPath
+	decision := r.Form.Get("rename_decision")
+	autoMove := !preserveUpdated && pathChanged
 
 	if err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
 		targetURL := "/notes/" + notePath
@@ -9007,7 +9004,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 
 	targetPath := notePath
 	targetFullPath := fullPath
-	moveConfirmed := decision == "confirm" || autoMove
+	moveConfirmed := (decision != "cancel") && (autoMove || (!preserveUpdated && titleChanged))
 	if !preserveUpdated && (titleChanged || pathChanged) && moveConfirmed {
 		targetPath = desiredPath
 		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
