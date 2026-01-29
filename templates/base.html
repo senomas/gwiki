@@ -2434,18 +2434,6 @@
   </script>
   <script>
     (function () {
-      if (!("EventSource" in window)) {
-        return;
-      }
-      var source = new EventSource("/events");
-      source.addEventListener("toast", function () {
-        document.body.dispatchEvent(new CustomEvent("toast:refresh"));
-      });
-      source.addEventListener("ready", function () {});
-    })();
-  </script>
-  <script>
-    (function () {
       if (!window.htmx) {
         return;
       }
