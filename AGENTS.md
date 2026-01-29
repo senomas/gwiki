@@ -163,6 +163,7 @@ In the edit textarea, typing a command and then a space will replace it on the c
 - `!d-N` → today minus N days (e.g., `!d-2`)
 - `!dN` → today plus N days (alias of `!d+N`)
 - `!t` → current time (`HH:mm:ss`)
+- `!@` → open quick launcher for inserting wiki links
 
 ---
 

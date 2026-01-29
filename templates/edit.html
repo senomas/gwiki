@@ -282,6 +282,8 @@
         var replacement = "";
         if (cmdTrim === "!!" && lineBeforeCmd === "") {
           replacement = line.slice(0, cmdStart - lineStart) + "- [ ] ";
+        } else if (cmdTrim === "!@") {
+          replacement = line.slice(0, cmdStart - lineStart);
         } else if (cmdTrim === "!d") {
           var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
           var now = new Date();
@@ -310,6 +312,13 @@
         }
         if (replacement) {
           textarea.setRangeText(replacement, lineStart, caret, "end");
+          if (cmdTrim === "!@") {
+            window.setTimeout(function () {
+              if (window.openEditLauncher) {
+                window.openEditLauncher();
+              }
+            }, 0);
+          }
         }
         commandState.active = false;
       });
@@ -364,6 +373,8 @@
       launcher.setAttribute("aria-hidden", "true");
       textarea.focus();
     }
+
+    window.openEditLauncher = openLauncher;
 
     function listVisibleItems(list) {
       if (!list) {
