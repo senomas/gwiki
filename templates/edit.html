@@ -286,6 +286,21 @@
           var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
           var now = new Date();
           replacement = line.slice(0, cmdStart - lineStart) + now.getDate() + " " + months[now.getMonth()] + " " + now.getFullYear() + " ";
+        } else if (cmdTrim && cmdTrim.indexOf("!d") === 0) {
+          var match = cmdTrim.match(/^!d([+-]?)(\d+)$/);
+          if (match) {
+            var sign = match[1] || "+";
+            var amount = parseInt(match[2], 10);
+            if (!isNaN(amount)) {
+              if (sign === "-") {
+                amount = -amount;
+              }
+              var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+              var base = new Date();
+              base.setDate(base.getDate() + amount);
+              replacement = line.slice(0, cmdStart - lineStart) + base.getDate() + " " + months[base.getMonth()] + " " + base.getFullYear() + " ";
+            }
+          }
         } else if (cmdTrim === "!t") {
           var nowTime = new Date();
           var pad = function (value) {

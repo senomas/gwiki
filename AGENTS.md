@@ -147,6 +147,19 @@ Path safety rules
 
 ---
 
+## Note edit commands
+
+In the edit textarea, typing a command and then a space will replace it on the current line:
+
+- `!!` → task checkbox (`- [ ] `)
+- `!d` → today’s date (e.g., `29 Jan 2026`)
+- `!d+N` → today plus N days (e.g., `!d+3`)
+- `!d-N` → today minus N days (e.g., `!d-2`)
+- `!dN` → today plus N days (alias of `!d+N`)
+- `!t` → current time (`HH:mm:ss`)
+
+---
+
 ## Persistence (DB) — derived index
 
 SQLite first. Postgres optional later behind an interface.
