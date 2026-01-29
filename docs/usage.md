@@ -54,11 +54,16 @@ Valid access values are `rw` and `ro`. Users listed with `rw` can create and edi
 
 Open Settings from the launcher. You can switch the list view between compact and full. Admin users also see a User Management section.
 
+Synchronization settings live here too. If the repo has git remotes, you can set a user and token per remote.
+
 ## Git Sync
 
-- Each user can store git credentials in `WIKI_DATA_PATH/<username>.cred`.
-- The file format matches `.git-credentials` so `git credential-store` can write to it.
+- Open Settings → Synchronization to enter the git user/token for each remote.
+- Leaving a token blank keeps the existing one; removing both user and token clears that entry.
+- Credentials are saved per user to `WIKI_DATA_PATH/<username>.cred` in `.git-credentials` format.
+- Token credentials apply to HTTPS remotes; SSH remotes use your local SSH keys.
 - Sync runs one at a time; if another sync is active, the UI shows a "sync already in progress" message after a short wait.
+- Run a manual sync from the launcher (Sync) or by visiting `/sync`.
 - The server runs a built-in scheduler (`WIKI_GIT_SCHEDULE`, default `10m`) for all users and groups with repos. Set it to `0` to disable.
 
 ## Markdown Basics

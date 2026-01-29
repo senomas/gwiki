@@ -6,7 +6,8 @@ and relies on Git for backup/history.
 
 ## Docs
 
-- Usage guide: `docs/usage.md`
+- Usage guide: [docs/usage.md](docs/usage.md)
+- Developer notes: [docs/developer.md](docs/developer.md)
 
 ## Highlights
 

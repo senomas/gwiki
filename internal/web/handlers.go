@@ -792,7 +792,7 @@ func buildTodoLink(raw string) string {
 	return "/todo?" + u.RawQuery
 }
 
-func noteCardETag(meta index.FrontmatterAttrs, hash string, etagTime int64) string {
+func noteCardETag(meta index.FrontmatterAttrs, hash string, etagTime int64, userKey string) string {
 	if hash == "" {
 		return ""
 	}
@@ -803,10 +803,10 @@ func noteCardETag(meta index.FrontmatterAttrs, hash string, etagTime int64) stri
 		}
 		etagTime = updated.Unix()
 	}
-	return fmt.Sprintf("\"%s-%d-%s\"", meta.ID, etagTime, hash)
+	return fmt.Sprintf("\"%s-%d-%s-%s\"", meta.ID, etagTime, hash, userKey)
 }
 
-func pageETag(scope string, rawURL string, etagTime int64) string {
+func pageETag(scope string, rawURL string, etagTime int64, userKey string) string {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "page"
@@ -822,7 +822,7 @@ func pageETag(scope string, rawURL string, etagTime int64) string {
 	if version == "" {
 		version = "dev"
 	}
-	return fmt.Sprintf("\"%s-%d-%s-%s\"", scope, etagTime, version, rawURL)
+	return fmt.Sprintf("\"%s-%d-%s-%s-%s\"", scope, etagTime, version, rawURL, userKey)
 }
 
 func setPrivateCacheHeaders(w http.ResponseWriter) {
@@ -4532,7 +4532,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
-		etag := pageETag("home", currentURLString(r), maxTime)
+		etag := pageETag("home", currentURLString(r), maxTime, currentUserName(r.Context()))
 		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 			w.Header().Set("ETag", etag)
 			setPrivateCacheHeaders(w)
@@ -5762,7 +5762,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
-		etag := pageETag("todo", currentURLString(r), maxTime)
+		etag := pageETag("todo", currentURLString(r), maxTime, currentUserName(r.Context()))
 		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 			w.Header().Set("ETag", etag)
 			setPrivateCacheHeaders(w)
@@ -6542,7 +6542,7 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 	}
 	sidebarReq, basePath := sidebarRequest(r)
 	if maxTime, err := s.idx.MaxEtagTime(sidebarReq.Context()); err == nil {
-		etag := pageETag("sidebar", currentURLString(sidebarReq), maxTime)
+		etag := pageETag("sidebar", currentURLString(sidebarReq), maxTime, currentUserName(r.Context()))
 		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 			w.Header().Set("ETag", etag)
 			setPrivateCacheHeaders(w)
@@ -6579,7 +6579,7 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	pageReq := *r
 	pageReq.URL = pageURL
 	if maxTime, err := s.idx.MaxEtagTime(pageReq.Context()); err == nil {
-		etag := pageETag("calendar", currentURLString(&pageReq), maxTime)
+		etag := pageETag("calendar", currentURLString(&pageReq), maxTime, currentUserName(r.Context()))
 		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 			w.Header().Set("ETag", etag)
 			setPrivateCacheHeaders(w)
@@ -7495,7 +7495,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 		if maxTime > combined {
 			combined = maxTime
 		}
-		etag := pageETag("note", currentURLString(r), combined)
+		etag := pageETag("note", currentURLString(r), combined, currentUserName(r.Context()))
 		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 			w.Header().Set("ETag", etag)
 			setPrivateCacheHeaders(w)
@@ -7524,7 +7524,7 @@ func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.attachViewData(r, &data)
-	etag := noteCardETag(data.NoteMeta, data.NoteHash, data.NoteEtagTime)
+	etag := noteCardETag(data.NoteMeta, data.NoteHash, data.NoteEtagTime, currentUserName(r.Context()))
 	if etag != "" && strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 		w.Header().Set("ETag", etag)
 		setPrivateCacheHeaders(w)
@@ -7556,7 +7556,7 @@ func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Requ
 		if maxTime > combined {
 			combined = maxTime
 		}
-		etag := pageETag("backlinks", currentURLString(r), combined)
+		etag := pageETag("backlinks", currentURLString(r), combined, currentUserName(r.Context()))
 		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 			w.Header().Set("ETag", etag)
 			setPrivateCacheHeaders(w)
@@ -7586,7 +7586,7 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 	}
 	s.attachViewData(r, &data)
 	data.Short = data.CompactNoteList
-	etag := noteCardETag(data.NoteMeta, data.NoteHash, data.NoteEtagTime)
+	etag := noteCardETag(data.NoteMeta, data.NoteHash, data.NoteEtagTime, currentUserName(r.Context()))
 	if etag != "" && strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 		w.Header().Set("ETag", etag)
 		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate, no-transform")
