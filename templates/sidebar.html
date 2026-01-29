@@ -5,9 +5,16 @@
     class="w-full rounded-3xl border border-slate-800/70 bg-[#121417]/80 p-4 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)] backdrop-blur md:p-5"
   >
     <summary class="cursor-pointer list-none text-sm font-semibold text-slate-200 lg:hidden">
-      Filters
+      {{template "sidebar_user_row" .}}
     </summary>
-    <div class="mt-4 space-y-6 md:mt-0">{{template "sidebar_content" .}}</div>
+    <div class="mt-4 flex min-h-[60vh] flex-col gap-6 md:mt-0">
+      {{template "sidebar_brand" .}}
+      <div class="space-y-6">{{template "sidebar_content" .}}</div>
+      <div class="flex-1"></div>
+      <div class="border-t border-slate-800/70 pt-4">
+        {{template "sidebar_user_row" .}}
+      </div>
+    </div>
   </details>
 </div>
 {{end}}
@@ -78,9 +85,34 @@
 </div>
 {{end}}
 
-<div class="text-xs uppercase tracking-[0.2em] text-slate-600">
-  <a class="transition hover:text-slate-300" href="https://github.com/senomas/gwiki" target="_blank" rel="noopener noreferrer">GWIKI V{{.BuildVersion}}</a>
-</div>
+{{end}}
+
+{{define "sidebar_brand"}}
+  <div class="flex items-center gap-3">
+    <div class="flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216] text-sm font-semibold text-slate-100">G</div>
+    <div class="space-y-0.5">
+      <div class="text-sm font-semibold tracking-[0.25em] text-slate-100">GWIKI</div>
+      <div class="text-[10px] uppercase tracking-[0.22em] text-slate-500">v{{.BuildVersion}}</div>
+    </div>
+  </div>
+{{end}}
+
+{{define "sidebar_user_row"}}
+  <div class="flex w-full items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+    {{if and .AuthEnabled .IsAuthenticated}}
+      <a class="js-quick-launcher-open text-xs text-slate-200 transition hover:text-slate-100" href="#">{{.CurrentUser.Name}}</a>
+      <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/logout" aria-label="Logout">
+        <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
+          <path d="M8.5 3.5h-3a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3v-1.5h-3a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h3V3.5z"/>
+          <path d="M12.94 6.44a.75.75 0 0 1 1.06 0l2.25 2.25c.29.3.29.77 0 1.06L14 12a.75.75 0 1 1-1.06-1.06l.97-.97H8.5a.75.75 0 0 1 0-1.5h5.41l-.97-.97a.75.75 0 0 1 0-1.06z"/>
+        </svg>
+      </a>
+    {{else if .AuthEnabled}}
+      <a class="text-xs text-slate-200 transition hover:text-slate-100" href="/login">Login</a>
+    {{else}}
+      <span class="text-slate-600">—</span>
+    {{end}}
+  </div>
 {{end}}
 
 {{define "sidebar_skeleton"}}
