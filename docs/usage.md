@@ -25,6 +25,18 @@ Tip: on index/todo pages, navigation focuses note titles. On note pages it focus
 - Selecting a note opens a submenu (Open/Edit/Delete). Enter activates the focused item.
 - Tag and folder results toggle filters on the current page (they keep your existing query params).
 
+## Edit Commands
+
+In the edit textarea, type a command and press space to expand it on the current line:
+
+- `!!` → task checkbox (`- [ ] `)
+- `!d` → today’s date (e.g., `29 Jan 2026`)
+- `!d+N` → today plus N days (e.g., `!d+3`)
+- `!d-N` → today minus N days (e.g., `!d-2`)
+- `!dN` → today plus N days (alias of `!d+N`)
+- `!t` → current time (`HH:mm:ss`)
+- `!@` → open the edit quick launcher (useful on mobile)
+
 ## Groups
 
 Create a group by adding a `.member.txt` file in a top-level folder under `WIKI_REPO_PATH`. The folder name becomes the group name.
