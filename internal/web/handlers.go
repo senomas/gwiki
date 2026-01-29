@@ -4896,7 +4896,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	results, err := s.idx.Search(r.Context(), query, 50)
+	ftsQuery := ftsPrefixQuery(query)
+	if ftsQuery == "" {
+		ftsQuery = query
+	}
+	results, err := s.idx.Search(r.Context(), ftsQuery, 50)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -5058,21 +5062,21 @@ func (s *Server) handleQuickNotes(w http.ResponseWriter, r *http.Request) {
 		s.views.RenderTemplate(w, "quick_notes", ViewData{})
 		return
 	}
-	notes, err := s.idx.NoteList(r.Context(), index.NoteListFilter{Limit: 200})
+	ftsQuery := ftsPrefixQuery(query)
+	if ftsQuery == "" {
+		ftsQuery = query
+	}
+	results, err := s.idx.Search(r.Context(), ftsQuery, 10)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	normalized := normalizeFuzzyTerm(strings.ToLower(query))
-	matches := make([]index.NoteSummary, 0, 10)
-	for _, note := range notes {
-		if !fuzzyMatchNote(normalized, note.Title, note.Path) {
-			continue
-		}
-		matches = append(matches, note)
-		if len(matches) >= 10 {
-			break
-		}
+	matches := make([]index.NoteSummary, 0, len(results))
+	for _, result := range results {
+		matches = append(matches, index.NoteSummary{
+			Path:  result.Path,
+			Title: result.Title,
+		})
 	}
 	s.views.RenderTemplate(w, "quick_notes", ViewData{RecentNotes: matches})
 }
@@ -5101,6 +5105,37 @@ func normalizeFuzzyTerm(value string) string {
 		}
 	}
 	return b.String()
+}
+
+func ftsPrefixQuery(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Fields(raw)
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		var b strings.Builder
+		for _, r := range part {
+			switch {
+			case r >= 'a' && r <= 'z':
+				b.WriteRune(r)
+			case r >= 'A' && r <= 'Z':
+				b.WriteRune(r + ('a' - 'A'))
+			case r >= '0' && r <= '9':
+				b.WriteRune(r)
+			}
+		}
+		token := b.String()
+		if token == "" {
+			continue
+		}
+		tokens = append(tokens, token+"*")
+	}
+	if len(tokens) == 0 {
+		return ""
+	}
+	return strings.Join(tokens, " AND ")
 }
 
 func (s *Server) quickLauncherEntries(r *http.Request, query string) ([]QuickLauncherEntry, error) {
@@ -5232,7 +5267,11 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string) ([]QuickLau
 		})
 	}
 
-	notes, err := s.idx.Search(r.Context(), query, 12)
+	ftsQuery := ftsPrefixQuery(query)
+	if ftsQuery == "" {
+		ftsQuery = query
+	}
+	notes, err := s.idx.Search(r.Context(), ftsQuery, 12)
 	if err != nil {
 		return nil, err
 	}

@@ -2272,10 +2272,9 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
-	exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
-	clauses := []string{"fts MATCH ?", exclusiveClause}
+	slog.Debug("fts search", "query", query, "limit", limit)
+	clauses := []string{"fts MATCH ?"}
 	args := []interface{}{query}
-	args = append(args, exclusiveArgs...)
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	queryStr := fmt.Sprintf(`
