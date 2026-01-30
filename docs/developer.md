@@ -242,6 +242,7 @@ Markdown parsing to metadata (tags, links, tasks).
 - `ParseContent`: parses content
 - `UncheckedTasksSnippet`: builds markdown snippet with unchecked tasks
 - `DueTasksSnippet`: builds markdown snippet with due tasks
+- `FilterCompletedTasksSnippet`: removes completed task blocks for index cards and returns completed count
 - `TaskLineHash`: helper for task line hash
 - `countIndentSpaces`: helper for count indent spaces
 - `expandTagPrefixes`: helper for expand tag prefixes
@@ -339,6 +340,7 @@ HTTP handlers, markdown rendering, embeds, and UI helpers.
 
 - `quickLauncherEntries`: builds quick launcher results
 - `handleQuickLauncher`: HTMX endpoint for quick launcher search
+- Index card rendering (`/notes/{path}/card`) hides completed task blocks and adds a completed-task summary footer; full note view (`/notes/{path}`) is unchanged.
 - `Extend`: helper for extend
 - `Transform`: helper for transform
 - `shouldOpenNewTab`: helper for should open new tab
