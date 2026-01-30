@@ -5271,7 +5271,7 @@ func ftsPrefixQuery(raw string) string {
 			}
 		}
 		token := b.String()
-		if token == "" {
+		if len(token) < 3 {
 			continue
 		}
 		tokens = append(tokens, token+"*")
@@ -5295,9 +5295,6 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 
 	actions := []QuickLauncherEntry{}
 	contextActions := []QuickLauncherEntry{}
-	addDefault := func(target *[]QuickLauncherEntry, entry QuickLauncherEntry) {
-		*target = append(*target, entry)
-	}
 	addAction := func(target *[]QuickLauncherEntry, entry QuickLauncherEntry) {
 		if entry.Hidden {
 			*target = append(*target, entry)
@@ -5313,7 +5310,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 	}
 
 	if authEnabled && !isAuth {
-		addDefault(&actions, QuickLauncherEntry{
+		addAction(&actions, QuickLauncherEntry{
 			ID:     "quick-launcher-create-note",
 			Kind:   "action",
 			Label:  "Create note",
@@ -5323,7 +5320,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:   "#",
 			Hidden: true,
 		})
-		addDefault(&actions, QuickLauncherEntry{
+		addAction(&actions, QuickLauncherEntry{
 			Kind:  "action",
 			Label: "Login",
 			Hint:  "Session",
@@ -5331,7 +5328,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:  "/login",
 		})
 	} else {
-		addDefault(&actions, QuickLauncherEntry{
+		addAction(&actions, QuickLauncherEntry{
 			ID:     "quick-launcher-create-note",
 			Kind:   "action",
 			Label:  "Create note",
@@ -5341,20 +5338,20 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:   "#",
 			Hidden: true,
 		})
-		addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: "/notes/new"})
-		addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: "/"})
-		addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: "/todo"})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: "/notes/new"})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: "/"})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: "/todo"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Search", Hint: "Find", Icon: "F", Href: "/search"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Sync", Hint: "Git", Icon: "G", Href: "/sync"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Settings", Hint: "Config", Icon: "S", Href: "/settings"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Broken links", Hint: "Fix", Icon: "B", Href: "/broken"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Scroll to top", Hint: "Jump", Icon: "T", Href: "#top", Action: "scroll-top"})
 		if isAuth && hasNote {
-			addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: "/notes/" + notePath + "/edit"})
-			addDefault(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: "/notes/" + notePath + "/delete"})
+			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: "/notes/" + notePath + "/edit"})
+			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: "/notes/" + notePath + "/delete"})
 		}
 		if authEnabled {
-			addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
+			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
 		}
 	}
 
