@@ -4,11 +4,11 @@
     data-sidebar
     class="w-full rounded-3xl border border-slate-800/70 bg-[#121417]/80 p-4 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)] backdrop-blur md:p-5"
   >
-    <summary class="cursor-pointer list-none text-sm font-semibold text-slate-200 lg:hidden">
-      {{template "sidebar_user_row" .}}
+    <summary class="sidebar-summary cursor-pointer list-none text-sm font-semibold text-slate-200 lg:hidden">
+      {{template "sidebar_brand_display" .}}
     </summary>
     <div class="mt-4 flex min-h-[60vh] flex-col gap-6 md:mt-0">
-      {{template "sidebar_brand" .}}
+      {{template "sidebar_brand_button" .}}
       <div class="space-y-6">{{template "sidebar_content" .}}</div>
       <div class="flex-1"></div>
       <div class="border-t border-slate-800/70 pt-4">
@@ -87,8 +87,18 @@
 
 {{end}}
 
-{{define "sidebar_brand"}}
-  <div class="flex items-center gap-3">
+{{define "sidebar_brand_button"}}
+  <button type="button" class="js-sidebar-toggle flex w-full items-center gap-3 text-left">
+    <div class="flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216] text-sm font-semibold text-slate-100">G</div>
+    <div class="space-y-0.5">
+      <div class="text-sm font-semibold tracking-[0.25em] text-slate-100">GWIKI</div>
+      <div class="text-[10px] uppercase tracking-[0.22em] text-slate-500">v{{.BuildVersion}}</div>
+    </div>
+  </button>
+{{end}}
+
+{{define "sidebar_brand_display"}}
+  <div class="flex w-full items-center gap-3 text-left">
     <div class="flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216] text-sm font-semibold text-slate-100">G</div>
     <div class="space-y-0.5">
       <div class="text-sm font-semibold tracking-[0.25em] text-slate-100">GWIKI</div>

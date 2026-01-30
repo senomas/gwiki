@@ -206,6 +206,12 @@
       max-width: 100%;
       overflow-x: auto;
     }
+    .sidebar-summary {
+      display: block;
+    }
+    details[open] > .sidebar-summary {
+      display: none;
+    }
     .note-body .map-card {
       margin: 1rem 0;
       padding: 0.75rem;
@@ -2478,6 +2484,22 @@
             button.textContent = original;
           }, 1600);
         });
+      });
+    })();
+  </script>
+  <script>
+    (function () {
+      document.addEventListener("click", function (event) {
+        var toggle = event.target.closest(".js-sidebar-toggle");
+        if (!toggle) {
+          return;
+        }
+        var details = toggle.closest("details[data-sidebar]");
+        if (!details || !details.hasAttribute("open")) {
+          return;
+        }
+        event.preventDefault();
+        details.open = false;
       });
     })();
   </script>
