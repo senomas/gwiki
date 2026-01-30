@@ -170,6 +170,57 @@ func UncheckedTasksSnippet(input string) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
 }
 
+func FilterCompletedTasksSnippet(input string) (string, int) {
+	body := StripFrontmatter(input)
+	lines := strings.Split(body, "\n")
+	type blockState struct {
+		indent int
+		keep   bool
+	}
+	stack := make([]blockState, 0, 8)
+	out := make([]string, 0, len(lines))
+	completed := 0
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			if len(stack) > 0 && i+1 < len(lines) && countIndentSpaces(lines[i+1]) > stack[len(stack)-1].indent {
+				if stack[len(stack)-1].keep {
+					out = append(out, line)
+				}
+				continue
+			}
+			for len(stack) > 0 && 0 <= stack[len(stack)-1].indent {
+				stack = stack[:len(stack)-1]
+			}
+			out = append(out, line)
+			continue
+		}
+
+		indent := countIndentSpaces(line)
+		for len(stack) > 0 && indent <= stack[len(stack)-1].indent {
+			stack = stack[:len(stack)-1]
+		}
+		match := taskRe.FindStringSubmatch(line)
+		if len(match) > 0 {
+			done := strings.TrimSpace(match[1]) != ""
+			if done {
+				completed++
+			} else {
+				out = append(out, line)
+			}
+			stack = append(stack, blockState{indent: indent, keep: !done})
+			continue
+		}
+		if len(stack) == 0 || stack[len(stack)-1].keep {
+			out = append(out, line)
+		}
+	}
+
+	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", completed
+}
+
 func extractTaskTags(lines []string, start int) []string {
 	if start < 0 || start >= len(lines) {
 		return nil

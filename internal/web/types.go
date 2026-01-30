@@ -78,6 +78,8 @@ type ViewData struct {
 	JournalYear      JournalYearNode
 	JournalMonth     JournalMonthNode
 	DueByPath        map[string]string
+	CompletedTaskCount int
+	ShowCompletedSummary bool
 	RebuildScanned   int
 	RebuildUpdated   int
 	RebuildCleaned   int

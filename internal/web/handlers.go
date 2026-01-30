@@ -7828,7 +7828,7 @@ func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, notePath string) {
-	data, status, err := s.buildNoteCardData(r, notePath)
+	data, status, err := s.buildNoteCardData(r, notePath, true)
 	if err != nil {
 		if status == http.StatusNotFound {
 			http.NotFound(w, r)
@@ -7876,7 +7876,7 @@ func (s *Server) renderLoginPrompt(w http.ResponseWriter, r *http.Request, retur
 }
 
 func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, error) {
-	data, status, err := s.buildNoteCardData(r, notePath)
+	data, status, err := s.buildNoteCardData(r, notePath, false)
 	if err != nil {
 		return NoteCard{}, err
 	}
@@ -8079,7 +8079,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	return data, http.StatusOK, nil
 }
 
-func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, int, error) {
+func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideCompleted bool) (ViewData, int, error) {
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		return ViewData{}, http.StatusBadRequest, err
@@ -8134,7 +8134,16 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 	} else if ok {
 		renderCtx = withCollapsibleSectionState(renderCtx, state)
 	}
-	htmlStr, err := s.renderNoteBody(renderCtx, normalizedContent)
+	renderContent := normalizedContent
+	renderTasks := meta.Tasks
+	completedCount := 0
+	if hideCompleted {
+		filtered, count := index.FilterCompletedTasksSnippet(string(normalizedContent))
+		renderContent = []byte(filtered)
+		completedCount = count
+		renderTasks = index.ParseContent(filtered).Tasks
+	}
+	htmlStr, err := s.renderNoteBody(renderCtx, renderContent)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
@@ -8143,7 +8152,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 		return ViewData{}, http.StatusInternalServerError, err
 	}
 	if err == nil && IsAuthenticated(r.Context()) {
-		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, meta.Tasks)
+		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, renderTasks)
 	}
 	if info != nil {
 		labelTime := info.ModTime()
@@ -8177,6 +8186,8 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string) (ViewData, 
 		RenderedHTML: template.HTML(htmlStr),
 		NoteURL:      noteURL,
 		FolderLabel:  folderLabel,
+		CompletedTaskCount: completedCount,
+		ShowCompletedSummary: hideCompleted,
 	}
 	return data, http.StatusOK, nil
 }
