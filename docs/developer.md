@@ -39,14 +39,23 @@ Groups are discovered by scanning top-level folders under `WIKI_REPO_PATH` for a
 
 ## Quick launcher pipeline
 
-Quick launcher entries are generated server-side and rendered immediately on page load (no network on open). When the user types, the client calls `GET /quick/launcher?q=...` to fetch a unified list ordered as actions → tags → folders → notes. Actions are also filtered by the query.
+Quick launcher entries are generated server-side and rendered immediately on page load (no network on open). When the user types, the client calls `GET /quick/launcher?q=...&uri=...` to fetch a unified list ordered as actions → tags → folders → notes. Actions are also filtered by the query.
+
+Default actions render immediately when the launcher opens; extra context actions (e.g., Sync/Settings/Search/Broken/Scroll-to-top) appear only when the query length is 3+ characters. Context actions are injected directly below the default actions and can be further restricted later using the `uri` parameter (pattern matching on the current page).
+
+Current action behavior by page context:
+- Default actions (any page): New note, Home, Todo, Logout (when auth enabled).
+- Unauthenticated: Login is the only visible action (Create note is hidden but kept for the launcher UI).
+- Note view (`/notes/{path}` only): Edit and Delete appear as default actions when the user is authenticated.
+- Note edit (`/notes/{path}/edit`) and other blocked note routes (`/preview`, `/save`, `/wikilink`, `/detail`, `/card`, `/collapsed`, `/backlinks`): Edit/Delete are not shown.
+- Context actions (query length ≥ 3): Search, Sync, Settings, Broken links, Scroll to top. These are added just below default actions.
 
 Tag and folder results toggle filters on the current page by mutating only the `t` or `f` query params while preserving other params. Notes are searched via FTS (`Index.Search`). The `JOURNAL` tag is injected into results when it matches the query.
 
 Key pieces:
 - `internal/web/handlers.go`: `quickLauncherEntries`, `handleQuickLauncher`, and URL toggle helpers.
 - `templates/quick_launcher_entries.html`: shared rendering fragment.
-- `templates/base.html`: quick launcher UI + HTMX wiring.
+- `templates/base.html`: quick launcher UI + HTMX wiring (passes `uri`).
 
 ## Git sync and credentials
 
