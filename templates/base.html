@@ -1591,7 +1591,8 @@
         submenu.classList.remove("is-open");
         submenu.setAttribute("aria-hidden", "true");
         clearActive(actionList);
-        htmx.ajax("GET", "/quick/launcher?q=" + encodeURIComponent(value), "#quick-launcher-actions");
+        var uri = encodeURIComponent(window.location.href || "");
+        htmx.ajax("GET", "/quick/launcher?q=" + encodeURIComponent(value) + "&uri=" + uri, "#quick-launcher-actions");
       });
       actionList.addEventListener("htmx:afterSwap", function (event) {
         if (event.target && event.target.id === "quick-launcher-actions") {
