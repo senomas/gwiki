@@ -5459,6 +5459,17 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 	}
 	entries := make([]QuickLauncherEntry, 0, 32)
 
+	actionEntries := []QuickLauncherEntry{
+		{Kind: "action", Label: "Tomorrow", Hint: "+1 day", Icon: "1", Action: "tomorrow"},
+		{Kind: "action", Label: "Next week", Hint: "+7 days", Icon: "7", Action: "next-week"},
+		{Kind: "action", Label: "Next month", Hint: "+1 month", Icon: "M", Action: "next-month"},
+	}
+	for _, entry := range actionEntries {
+		if fuzzyMatchAction(normalized, entry.Label, entry.Hint) {
+			entries = append(entries, entry)
+		}
+	}
+
 	tags, err := s.idx.ListTags(r.Context(), 200, "", false, false)
 	if err != nil {
 		return nil, err

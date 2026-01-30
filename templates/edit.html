@@ -315,7 +315,9 @@
       input.value = "";
       dynamic.innerHTML = "";
       dynamic.classList.add("hidden");
+      filterDefaultActions("");
       clearActive();
+      applyItemLimit();
       input.focus();
     }
 
@@ -327,7 +329,45 @@
 
     function listVisibleItems() {
       return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item"), function (item) {
-        return !item.classList.contains("hidden") && item.offsetParent !== null;
+        return !item.classList.contains("hidden") && !item.classList.contains("quick-launcher__item--capped") && item.offsetParent !== null;
+      });
+    }
+
+    function applyItemLimit() {
+      var items = list.querySelectorAll(".quick-launcher__item");
+      var visibleCount = 0;
+      items.forEach(function (item) {
+        item.classList.remove("quick-launcher__item--capped");
+        if (item.classList.contains("hidden")) {
+          return;
+        }
+        visibleCount += 1;
+        if (visibleCount > 10) {
+          item.classList.add("quick-launcher__item--capped");
+        }
+      });
+    }
+
+    function normalizeQuery(value) {
+      return (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    }
+
+    function filterDefaultActions(query) {
+      var term = normalizeQuery(query);
+      var items = list.querySelectorAll("[data-action]");
+      items.forEach(function (item) {
+        if (!term) {
+          item.classList.remove("hidden");
+          return;
+        }
+        var label = (item.getAttribute("data-label") || "").toLowerCase();
+        var hint = (item.getAttribute("data-hint") || "").toLowerCase();
+        var candidate = normalizeQuery(label + " " + hint);
+        if (candidate.indexOf(term) !== -1) {
+          item.classList.remove("hidden");
+        } else {
+          item.classList.add("hidden");
+        }
       });
     }
 
@@ -524,10 +564,13 @@
       if (value.trim() === "") {
         dynamic.innerHTML = "";
         dynamic.classList.add("hidden");
+        filterDefaultActions("");
         clearActive();
+        applyItemLimit();
         activateIndex(0);
         return;
       }
+      filterDefaultActions(value);
       htmx.ajax("GET", "/quick/edit-actions?q=" + encodeURIComponent(value), "#note-edit-actions-dynamic");
     });
 
@@ -542,7 +585,10 @@
         dynamic.classList.add("hidden");
       }
       clearActive();
-      activateIndex(0);
+      window.requestAnimationFrame(function () {
+        applyItemLimit();
+        activateIndex(0);
+      });
     });
 
     launcher.addEventListener("click", function (event) {

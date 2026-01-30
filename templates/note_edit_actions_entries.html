@@ -1,6 +1,14 @@
 {{define "note_edit_actions_entries"}}
 {{range .QuickEntries}}
-  {{if eq .Kind "tag"}}
+  {{if eq .Kind "action"}}
+    <button class="quick-launcher__item" type="button" data-action="{{.Action}}">
+      <span class="quick-launcher__icon">{{.Icon}}</span>
+      <span class="quick-launcher__meta">
+        <span class="quick-launcher__label">{{.Label}}</span>
+        {{if .Hint}}<span class="quick-launcher__hint">{{.Hint}}</span>{{end}}
+      </span>
+    </button>
+  {{else if eq .Kind "tag"}}
     <button class="quick-launcher__item" type="button" data-tag="{{.Tag}}">
       <span class="quick-launcher__icon">#</span>
       <span class="quick-launcher__meta">
