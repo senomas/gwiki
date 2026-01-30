@@ -5225,6 +5225,22 @@ func (s *Server) handleQuickLauncher(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderTemplate(w, "quick_launcher_entries", data)
 }
 
+func (s *Server) handleQuickEditActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	entries, err := s.quickEditActionsEntries(r, query)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := ViewData{QuickEntries: entries}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "note_edit_actions_entries", data)
+}
+
 func normalizeFuzzyTerm(value string) string {
 	var b strings.Builder
 	for _, r := range value {
@@ -5426,6 +5442,75 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 				NoteTitle: note.Title,
 			})
 		}
+	}
+	return entries, nil
+}
+
+func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]QuickLauncherEntry, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	tagQuery := strings.TrimPrefix(query, "#")
+	normalized := normalizeFuzzyTerm(strings.ToLower(tagQuery))
+	ftsQuerySource := query
+	if strings.HasPrefix(query, "#") {
+		ftsQuerySource = ""
+	}
+	entries := make([]QuickLauncherEntry, 0, 32)
+
+	tags, err := s.idx.ListTags(r.Context(), 200, "", false, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, tag := range tags {
+		if !fuzzyMatchTag(normalized, strings.ToLower(tag.Name)) {
+			continue
+		}
+		entries = append(entries, QuickLauncherEntry{
+			Kind: "tag",
+			Label: "#" + tag.Name,
+			Hint: "Tag",
+			Icon: "#",
+			Tag:  tag.Name,
+		})
+	}
+	journalLower := strings.ToLower(journalTagName)
+	if fuzzyMatchTag(normalized, journalLower) {
+		entries = append(entries, QuickLauncherEntry{
+			Kind:  "tag",
+			Label: "#" + journalTagName,
+			Hint:  "Tag",
+			Icon:  "#",
+			Tag:   journalTagName,
+		})
+	}
+
+	if len([]rune(ftsQuerySource)) < 3 {
+		return entries, nil
+	}
+
+	ftsQuery := ftsPrefixQuery(ftsQuerySource)
+	if ftsQuery == "" {
+		ftsQuery = ftsQuerySource
+	}
+	notes, err := s.idx.Search(r.Context(), ftsQuery, 12)
+	if err != nil {
+		return nil, err
+	}
+	for _, note := range notes {
+		label := note.Title
+		if label == "" {
+			label = note.Path
+		}
+		entries = append(entries, QuickLauncherEntry{
+			Kind:      "note",
+			Label:     label,
+			Hint:      note.Path,
+			Icon:      "N",
+			NotePath:  note.Path,
+			NoteTitle: note.Title,
+		})
 	}
 	return entries, nil
 }

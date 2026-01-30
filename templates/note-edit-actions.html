@@ -1,0 +1,52 @@
+{{define "note_edit_actions"}}
+  <div id="note-edit-actions" class="quick-launcher" aria-hidden="true">
+    <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Note edit actions">
+      <input id="note-edit-actions-input" class="quick-launcher__input" type="search" placeholder="Insert..." autocomplete="off">
+      <div id="note-edit-actions-list" class="quick-launcher__list">
+        <button class="quick-launcher__item" type="button" data-action="todo">
+          <span class="quick-launcher__icon">T</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Todo</span>
+            <span class="quick-launcher__hint">Insert checkbox</span>
+          </span>
+        </button>
+        <button class="quick-launcher__item" type="button" data-action="date">
+          <span class="quick-launcher__icon">D</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Date</span>
+            <span class="quick-launcher__hint">Today</span>
+          </span>
+        </button>
+        <button class="quick-launcher__item" type="button" data-action="time">
+          <span class="quick-launcher__icon">I</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Time</span>
+            <span class="quick-launcher__hint">Now</span>
+          </span>
+        </button>
+        <button class="quick-launcher__item" type="button" data-action="tomorrow">
+          <span class="quick-launcher__icon">1</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Tomorrow</span>
+            <span class="quick-launcher__hint">+1 day</span>
+          </span>
+        </button>
+        <button class="quick-launcher__item" type="button" data-action="next-week">
+          <span class="quick-launcher__icon">7</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Next week</span>
+            <span class="quick-launcher__hint">+7 days</span>
+          </span>
+        </button>
+        <button class="quick-launcher__item" type="button" data-action="next-month">
+          <span class="quick-launcher__icon">M</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Next month</span>
+            <span class="quick-launcher__hint">+1 month</span>
+          </span>
+        </button>
+        <div id="note-edit-actions-dynamic" class="note-edit-actions__dynamic hidden"></div>
+      </div>
+    </div>
+  </div>
+{{end}}

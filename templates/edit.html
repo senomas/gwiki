@@ -108,6 +108,7 @@
   </form>
       {{template "attachments_list" .}}
     </article>
+    {{template "note_edit_actions" .}}
   </div>
 <script>
   (function () {
@@ -293,6 +294,260 @@
         }
         event.preventDefault();
         window.location.href = cancel.getAttribute("href");
+      }
+    });
+  })();
+</script>
+<script>
+  (function () {
+    var textarea = document.getElementById("note-content");
+    var launcher = document.getElementById("note-edit-actions");
+    var input = document.getElementById("note-edit-actions-input");
+    var list = document.getElementById("note-edit-actions-list");
+    var dynamic = document.getElementById("note-edit-actions-dynamic");
+    if (!textarea || !launcher || !input || !list || !dynamic || !window.htmx) {
+      return;
+    }
+
+    function openLauncher() {
+      launcher.classList.add("is-open");
+      launcher.setAttribute("aria-hidden", "false");
+      input.value = "";
+      dynamic.innerHTML = "";
+      dynamic.classList.add("hidden");
+      clearActive();
+      input.focus();
+    }
+
+    function closeLauncher() {
+      launcher.classList.remove("is-open");
+      launcher.setAttribute("aria-hidden", "true");
+      textarea.focus();
+    }
+
+    function listVisibleItems() {
+      return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item"), function (item) {
+        return !item.classList.contains("hidden") && item.offsetParent !== null;
+      });
+    }
+
+    function clearActive() {
+      listVisibleItems().forEach(function (item) {
+        item.classList.remove("is-active");
+      });
+    }
+
+    function activateIndex(index) {
+      var items = listVisibleItems();
+      if (!items.length) {
+        return;
+      }
+      var target = items[index];
+      if (!target) {
+        return;
+      }
+      items.forEach(function (item) {
+        item.classList.toggle("is-active", item === target);
+      });
+      target.scrollIntoView({block: "nearest"});
+    }
+
+    function activeIndex() {
+      var items = listVisibleItems();
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].classList.contains("is-active")) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    function moveActive(delta) {
+      var items = listVisibleItems();
+      if (!items.length) {
+        return;
+      }
+      var index = activeIndex();
+      var nextIndex = index + delta;
+      if (index < 0) {
+        nextIndex = delta > 0 ? 0 : items.length - 1;
+      }
+      if (nextIndex < 0) {
+        nextIndex = items.length - 1;
+      }
+      if (nextIndex >= items.length) {
+        nextIndex = 0;
+      }
+      activateIndex(nextIndex);
+    }
+
+    function insertText(insert) {
+      var start = textarea.selectionStart || 0;
+      var end = textarea.selectionEnd || 0;
+      textarea.setRangeText(insert, start, end, "end");
+      textarea.focus();
+    }
+
+    function formatDate(now) {
+      var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return now.getDate() + " " + months[now.getMonth()] + " " + now.getFullYear();
+    }
+
+    function addDays(now, amount) {
+      var next = new Date(now.getTime());
+      next.setDate(next.getDate() + amount);
+      return next;
+    }
+
+    function addMonths(now, amount) {
+      var next = new Date(now.getTime());
+      next.setMonth(next.getMonth() + amount);
+      return next;
+    }
+
+    function formatTime(now) {
+      var pad = function (value) {
+        return String(value).padStart(2, "0");
+      };
+      return pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+    }
+
+    function handleAction(action) {
+      var now = new Date();
+      if (action === "todo") {
+        insertText("- [ ] ");
+      } else if (action === "date") {
+        insertText(formatDate(now) + " ");
+      } else if (action === "time") {
+        insertText(formatTime(now) + " ");
+      } else if (action === "tomorrow") {
+        insertText(formatDate(addDays(now, 1)) + " ");
+      } else if (action === "next-week") {
+        insertText(formatDate(addDays(now, 7)) + " ");
+      } else if (action === "next-month") {
+        insertText(formatDate(addMonths(now, 1)) + " ");
+      }
+      closeLauncher();
+    }
+
+    function handleTag(tag) {
+      var value = (tag || "").replace(/^#/, "");
+      if (!value) {
+        return;
+      }
+      insertText("#" + value + " ");
+      closeLauncher();
+    }
+
+    function handleNote(path) {
+      if (!path) {
+        return;
+      }
+      insertText("[[" + path + "]] ");
+      closeLauncher();
+    }
+
+    function handleItem(target) {
+      if (!target) {
+        return;
+      }
+      var action = target.getAttribute("data-action");
+      if (action) {
+        handleAction(action);
+        return;
+      }
+      var tag = target.getAttribute("data-tag");
+      if (tag) {
+        handleTag(tag);
+        return;
+      }
+      var notePath = target.getAttribute("data-note-path");
+      if (notePath) {
+        handleNote(notePath);
+      }
+    }
+
+    textarea.addEventListener("keydown", function (event) {
+      if (!event.ctrlKey || event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (launcher.classList.contains("is-open")) {
+        closeLauncher();
+        return;
+      }
+      openLauncher();
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (!launcher.classList.contains("is-open")) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeLauncher();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        var items = listVisibleItems();
+        if (!items.length) {
+          return;
+        }
+        var index = activeIndex();
+        handleItem(index >= 0 ? items[index] : items[0]);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveActive(1);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveActive(-1);
+      }
+    });
+
+    list.addEventListener("click", function (event) {
+      var target = event.target.closest(".quick-launcher__item");
+      if (!target) {
+        return;
+      }
+      event.preventDefault();
+      handleItem(target);
+    });
+
+    input.addEventListener("input", function (event) {
+      var value = event.target.value || "";
+      if (value.trim() === "") {
+        dynamic.innerHTML = "";
+        dynamic.classList.add("hidden");
+        clearActive();
+        activateIndex(0);
+        return;
+      }
+      htmx.ajax("GET", "/quick/edit-actions?q=" + encodeURIComponent(value), "#note-edit-actions-dynamic");
+    });
+
+    document.body.addEventListener("htmx:afterSwap", function (event) {
+      if (!event.target || event.target.id !== "note-edit-actions-dynamic") {
+        return;
+      }
+      var hasItems = !!dynamic.querySelector(".quick-launcher__item");
+      if (hasItems) {
+        dynamic.classList.remove("hidden");
+      } else {
+        dynamic.classList.add("hidden");
+      }
+      clearActive();
+      activateIndex(0);
+    });
+
+    launcher.addEventListener("click", function (event) {
+      if (event.target === launcher) {
+        closeLauncher();
       }
     });
   })();

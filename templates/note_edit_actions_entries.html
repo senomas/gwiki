@@ -1,0 +1,21 @@
+{{define "note_edit_actions_entries"}}
+{{range .QuickEntries}}
+  {{if eq .Kind "tag"}}
+    <button class="quick-launcher__item" type="button" data-tag="{{.Tag}}">
+      <span class="quick-launcher__icon">#</span>
+      <span class="quick-launcher__meta">
+        <span class="quick-launcher__label">{{.Label}}</span>
+        <span class="quick-launcher__hint">{{.Hint}}</span>
+      </span>
+    </button>
+  {{else if eq .Kind "note"}}
+    <button class="quick-launcher__item" type="button" data-note-path="{{.NotePath}}">
+      <span class="quick-launcher__icon">N</span>
+      <span class="quick-launcher__meta">
+        <span class="quick-launcher__label">{{.Label}}</span>
+        <span class="quick-launcher__hint">{{.Hint}}</span>
+      </span>
+    </button>
+  {{end}}
+{{end}}
+{{end}}

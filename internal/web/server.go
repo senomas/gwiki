@@ -167,6 +167,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/broken", s.handleBroken)
 	s.mux.HandleFunc("/quick/notes", s.handleQuickNotes)
 	s.mux.HandleFunc("/quick/launcher", s.handleQuickLauncher)
+	s.mux.HandleFunc("/quick/edit-actions", s.handleQuickEditActions)
 	s.mux.HandleFunc("/sync", s.handleSync)
 	s.mux.HandleFunc("/tasks/toggle", s.handleToggleTask)
 	s.mux.HandleFunc("/rebuild", s.handleRebuild)
