@@ -218,7 +218,45 @@ func FilterCompletedTasksSnippet(input string) (string, int) {
 		}
 	}
 
+	out = filterEmptyH2(out)
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", completed
+}
+
+func filterEmptyH2(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	keep := make([]bool, len(lines))
+	for i := range lines {
+		keep[i] = true
+	}
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "## ") {
+			continue
+		}
+		hasContent := false
+		for j := i + 1; j < len(lines); j++ {
+			next := strings.TrimSpace(lines[j])
+			if strings.HasPrefix(next, "#") {
+				break
+			}
+			if next != "" {
+				hasContent = true
+				break
+			}
+		}
+		if !hasContent {
+			keep[i] = false
+		}
+	}
+	filtered := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if keep[i] {
+			filtered = append(filtered, line)
+		}
+	}
+	return filtered
 }
 
 func extractTaskTags(lines []string, start int) []string {
