@@ -5017,6 +5017,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	_, shortTokens := splitSearchTokens(query)
 	ftsQuery := ftsPrefixQuery(query)
 	if ftsQuery == "" {
 		ftsQuery = query
@@ -5026,9 +5027,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	filtered := make([]index.SearchResult, 0, len(results))
+	for _, result := range results {
+		if !matchesShortTokens(shortTokens, result.Title, result.Path, result.Snippet) {
+			continue
+		}
+		filtered = append(filtered, result)
+	}
 	data := ViewData{
 		SearchQuery:   query,
-		SearchResults: results,
+		SearchResults: filtered,
 	}
 	s.attachViewData(r, &data)
 	if r.Header.Get("HX-Request") == "true" {
@@ -5251,13 +5259,14 @@ func normalizeFuzzyTerm(value string) string {
 	return b.String()
 }
 
-func ftsPrefixQuery(raw string) string {
+func splitSearchTokens(raw string) ([]string, []string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return ""
+		return nil, nil
 	}
 	parts := strings.Fields(raw)
-	tokens := make([]string, 0, len(parts))
+	longTokens := make([]string, 0, len(parts))
+	shortTokens := make([]string, 0, len(parts))
 	for _, part := range parts {
 		var b strings.Builder
 		for _, r := range part {
@@ -5271,9 +5280,53 @@ func ftsPrefixQuery(raw string) string {
 			}
 		}
 		token := b.String()
-		if len(token) < 3 {
+		if token == "" {
 			continue
 		}
+		if len(token) < 3 {
+			shortTokens = append(shortTokens, token)
+			continue
+		}
+		longTokens = append(longTokens, token)
+	}
+	return longTokens, shortTokens
+}
+
+func normalizeSearchText(value string) string {
+	return normalizeFuzzyTerm(strings.ToLower(value))
+}
+
+func matchesShortTokens(shortTokens []string, fields ...string) bool {
+	if len(shortTokens) == 0 {
+		return true
+	}
+	var b strings.Builder
+	for _, field := range fields {
+		if field == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString(" ")
+		}
+		b.WriteString(field)
+	}
+	hay := normalizeSearchText(b.String())
+	for _, token := range shortTokens {
+		if !strings.Contains(hay, token) {
+			return false
+		}
+	}
+	return true
+}
+
+func ftsPrefixQuery(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	longTokens, _ := splitSearchTokens(raw)
+	tokens := make([]string, 0, len(longTokens))
+	for _, token := range longTokens {
 		tokens = append(tokens, token+"*")
 	}
 	if len(tokens) == 0 {
@@ -5284,6 +5337,7 @@ func ftsPrefixQuery(raw string) string {
 
 func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL *url.URL) ([]QuickLauncherEntry, error) {
 	query = strings.TrimSpace(query)
+	_, shortTokens := splitSearchTokens(query)
 	normalized := normalizeFuzzyTerm(strings.ToLower(query))
 	isAuth := IsAuthenticated(r.Context())
 	authEnabled := s.auth != nil
@@ -5425,6 +5479,9 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			return nil, err
 		}
 		for _, note := range notes {
+			if !matchesShortTokens(shortTokens, note.Title, note.Path) {
+				continue
+			}
 			label := note.Title
 			if label == "" {
 				label = note.Path
@@ -5454,6 +5511,7 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 	if strings.HasPrefix(query, "#") {
 		ftsQuerySource = ""
 	}
+	_, shortTokens := splitSearchTokens(ftsQuerySource)
 	entries := make([]QuickLauncherEntry, 0, 32)
 
 	actionEntries := []QuickLauncherEntry{
@@ -5507,6 +5565,9 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 		return nil, err
 	}
 	for _, note := range notes {
+		if !matchesShortTokens(shortTokens, note.Title, note.Path) {
+			continue
+		}
 		label := note.Title
 		if label == "" {
 			label = note.Path
