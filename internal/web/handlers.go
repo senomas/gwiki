@@ -5304,7 +5304,7 @@ func ftsPrefixQuery(raw string) string {
 
 func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL *url.URL) ([]QuickLauncherEntry, error) {
 	query = strings.TrimSpace(query)
-	_, shortTokens := splitSearchTokens(query)
+	longTokens, shortTokens := splitSearchTokens(query)
 	normalized := normalizeFuzzyTerm(strings.ToLower(query))
 	isAuth := IsAuthenticated(r.Context())
 	authEnabled := s.auth != nil
@@ -5436,11 +5436,11 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		})
 	}
 
-	ftsQuery := ftsPrefixQuery(query)
-	if ftsQuery == "" {
-		ftsQuery = query
-	}
-	if len([]rune(query)) >= 3 {
+	if len(longTokens) > 0 {
+		ftsQuery := ftsPrefixQuery(query)
+		if ftsQuery == "" {
+			ftsQuery = query
+		}
 		notes, err := s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 12)
 		if err != nil {
 			return nil, err
@@ -5475,7 +5475,7 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 	if strings.HasPrefix(query, "#") {
 		ftsQuerySource = ""
 	}
-	_, shortTokens := splitSearchTokens(ftsQuerySource)
+	longTokens, shortTokens := splitSearchTokens(ftsQuerySource)
 	entries := make([]QuickLauncherEntry, 0, 32)
 
 	actionEntries := []QuickLauncherEntry{
@@ -5516,7 +5516,7 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 		})
 	}
 
-	if len([]rune(ftsQuerySource)) < 3 {
+	if len(longTokens) == 0 {
 		return entries, nil
 	}
 
