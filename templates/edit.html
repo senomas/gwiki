@@ -539,12 +539,12 @@
         handleItem(index >= 0 ? items[index] : items[0]);
         return;
       }
-      if (event.key === "ArrowDown") {
+      if (event.key === "ArrowDown" || (event.ctrlKey && event.key === "j")) {
         event.preventDefault();
         moveActive(1);
         return;
       }
-      if (event.key === "ArrowUp") {
+      if (event.key === "ArrowUp" || (event.ctrlKey && event.key === "k")) {
         event.preventDefault();
         moveActive(-1);
       }

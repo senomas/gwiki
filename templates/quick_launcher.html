@@ -1,12 +1,12 @@
 {{define "quick_launcher"}}
-  <div id="quick-launcher" class="quick-launcher" aria-hidden="true">
+  <div id="quick-launcher" class="quick-launcher ui-overlay" aria-hidden="true">
     <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
       <input id="quick-launcher-input" class="quick-launcher__input" type="search" placeholder="Search..." autocomplete="off">
       <div id="quick-launcher-actions" class="quick-launcher__list">
         {{template "quick_launcher_entries" .}}
       </div>
     </div>
-    <div id="quick-launcher-submenu-modal" class="quick-launcher__submenu-modal" aria-hidden="true">
+    <div id="quick-launcher-submenu-modal" class="quick-launcher__submenu-modal ui-overlay" aria-hidden="true">
       <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
         <a id="quick-note-open" class="quick-launcher__item" href="#">
           <span class="quick-launcher__icon">O</span>

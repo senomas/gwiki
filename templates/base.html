@@ -874,7 +874,7 @@
 {{end}}
   <div id="toast-stack" class="toast-stack" hx-get="/toast" hx-trigger="load, toast:refresh from:body" hx-swap="outerHTML"></div>
   {{template "quick_launcher" .}}
-  <div id="note-actions-modal" class="note-actions-modal" aria-hidden="true">
+  <div id="note-actions-modal" class="note-actions-modal ui-overlay" aria-hidden="true">
     <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
       <a id="note-action-open" class="quick-launcher__item" href="#">
         <span class="quick-launcher__icon">O</span>
@@ -1168,7 +1168,7 @@
         return -1;
       }
 
-      function moveActive(list, delta) {
+      function moveActive(list, delta, closeSubmenu) {
         var items = listVisibleItems(list);
         if (!items.length) {
           return;
@@ -1185,8 +1185,10 @@
           nextIndex = 0;
         }
         activateItem(list, nextIndex);
-        submenu.classList.remove("is-open");
-        submenu.setAttribute("aria-hidden", "true");
+        if (closeSubmenu !== false) {
+          submenu.classList.remove("is-open");
+          submenu.setAttribute("aria-hidden", "true");
+        }
       }
 
       function moveCombined(delta) {
@@ -1344,7 +1346,7 @@
         return true;
       }
       function isAnyLauncherOpen() {
-        return !!document.querySelector(".quick-launcher.is-open");
+        return !!document.querySelector(".ui-overlay.is-open");
       }
       window.isEditableTarget = isEditableTarget;
       window.isAnyLauncherOpen = isAnyLauncherOpen;
@@ -1527,19 +1529,19 @@
           activateActionTarget(combinedTarget);
           return;
         }
-        if (event.key === "ArrowDown") {
+        if (event.key === "ArrowDown" || (event.ctrlKey && event.key === "j")) {
           event.preventDefault();
           if (submenu.classList.contains("is-open")) {
-            moveActive(submenuPanel, 1);
+            moveActive(submenuPanel, 1, false);
           } else {
             moveCombined(1);
           }
           return;
         }
-        if (event.key === "ArrowUp") {
+        if (event.key === "ArrowUp" || (event.ctrlKey && event.key === "k")) {
           event.preventDefault();
           if (submenu.classList.contains("is-open")) {
-            moveActive(submenuPanel, -1);
+            moveActive(submenuPanel, -1, false);
           } else {
             moveCombined(-1);
           }
