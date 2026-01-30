@@ -695,6 +695,13 @@
     .quick-launcher__item--capped {
       display: none;
     }
+    .quick-launcher__entry--more {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(148, 163, 184, 0.7);
+    }
     .quick-launcher__icon {
       width: 2rem;
       height: 2rem;
@@ -1071,6 +1078,16 @@
 
       function applyItemLimit() {
         var items = actionList.querySelectorAll(".quick-launcher__item");
+        var totalVisible = 0;
+        var existingMore = document.getElementById("quick-launcher-more");
+        if (existingMore) {
+          existingMore.remove();
+        }
+        items.forEach(function (item) {
+          if (!item.classList.contains("hidden")) {
+            totalVisible += 1;
+          }
+        });
         var visibleCount = 0;
         items.forEach(function (item) {
           item.classList.remove("quick-launcher__item--capped");
@@ -1082,6 +1099,13 @@
             item.classList.add("quick-launcher__item--capped");
           }
         });
+        if (totalVisible > 10) {
+          var more = document.createElement("div");
+          more.id = "quick-launcher-more";
+          more.className = "quick-launcher__entry quick-launcher__entry--more";
+          more.textContent = "+" + (totalVisible - 10) + " more…";
+          actionList.appendChild(more);
+        }
       }
 
       function clearActive(list) {
