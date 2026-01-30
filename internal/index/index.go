@@ -602,6 +602,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 25
+		case 25:
+			slog.Info("schema migration", "from", 25, "to", 26)
+			if err := i.migrate25To26(ctx); err != nil {
+				return err
+			}
+			version = 26
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -842,6 +848,23 @@ func (i *Index) migrate23To24(ctx context.Context) error {
 
 func (i *Index) migrate24To25(ctx context.Context) error {
 	return i.ensureColumn(ctx, "files", "etag_time", "INTEGER NOT NULL DEFAULT 0")
+}
+
+func (i *Index) migrate25To26(ctx context.Context) error {
+	if _, err := i.execContext(ctx, `DROP TABLE IF EXISTS fts`); err != nil {
+		return err
+	}
+	_, err := i.execContext(ctx, `
+		CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
+			user_id UNINDEXED,
+			group_id UNINDEXED,
+			path,
+			title,
+			body,
+			tokenize='trigram'
+		)
+	`)
+	return err
 }
 
 func (i *Index) ensureColumn(ctx context.Context, table string, column string, ddl string) error {

@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 25
+const schemaVersion = 26
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -158,7 +158,7 @@ CREATE INDEX IF NOT EXISTS broken_links_by_file ON broken_links(from_file_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 	user_id UNINDEXED,
 	group_id UNINDEXED,
-	path UNINDEXED,
+	path,
 	title,
 	body,
 	tokenize='trigram'
