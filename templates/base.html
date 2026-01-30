@@ -692,6 +692,9 @@
     .quick-launcher__item.hidden {
       display: none;
     }
+    .quick-launcher__item--capped {
+      display: none;
+    }
     .quick-launcher__icon {
       width: 2rem;
       height: 2rem;
@@ -859,41 +862,7 @@
   {{template "layout_sidebar" .}}
 {{end}}
   <div id="toast-stack" class="toast-stack" hx-get="/toast" hx-trigger="load, toast:refresh from:body" hx-swap="outerHTML"></div>
-  <div id="quick-launcher" class="quick-launcher" aria-hidden="true">
-    <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
-      <input id="quick-launcher-input" class="quick-launcher__input" type="search" placeholder="Search..." autocomplete="off">
-      <div id="quick-launcher-actions" class="quick-launcher__list">
-        {{template "quick_launcher_entries" .}}
-      </div>
-    </div>
-    <div id="quick-launcher-submenu-modal" class="quick-launcher__submenu-modal" aria-hidden="true">
-      <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
-        <a id="quick-note-open" class="quick-launcher__item" href="#">
-          <span class="quick-launcher__icon">O</span>
-          <span class="quick-launcher__meta">
-            <span class="quick-launcher__label">Open</span>
-            <span class="quick-launcher__hint">View</span>
-          </span>
-        </a>
-        <a id="quick-note-edit" class="quick-launcher__item" href="#">
-          <span class="quick-launcher__icon">E</span>
-          <span class="quick-launcher__meta">
-            <span class="quick-launcher__label">Edit</span>
-            <span class="quick-launcher__hint">Modify</span>
-          </span>
-        </a>
-        <form id="quick-note-delete" method="post">
-          <button class="quick-launcher__item quick-launcher__item--danger" type="submit">
-            <span class="quick-launcher__icon">D</span>
-            <span class="quick-launcher__meta">
-              <span class="quick-launcher__label">Delete</span>
-              <span class="quick-launcher__hint">Remove</span>
-            </span>
-          </button>
-        </form>
-      </div>
-    </div>
-  </div>
+  {{template "quick_launcher" .}}
   <div id="note-actions-modal" class="note-actions-modal" aria-hidden="true">
     <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
       <a id="note-action-open" class="quick-launcher__item" href="#">
@@ -919,23 +888,6 @@
           </span>
         </button>
       </form>
-    </div>
-  </div>
-  <div id="wiki-link-launcher" class="quick-launcher" aria-hidden="true">
-    <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Create note">
-      <input id="wiki-link-input" class="quick-launcher__input" type="search" placeholder="Search or create..." autocomplete="off">
-      <div id="wiki-link-actions" class="quick-launcher__list">
-        <a id="wiki-link-create-note" class="quick-launcher__item" href="#" data-label="create note" data-action="wiki-create">
-          <span class="quick-launcher__icon">+</span>
-          <span class="quick-launcher__meta">
-            <span class="quick-launcher__label">Create note</span>
-            <span class="quick-launcher__hint">New</span>
-          </span>
-        </a>
-      </div>
-      <div class="quick-launcher__note-row">
-        <div id="wiki-link-notes" class="quick-launcher__list hidden"></div>
-      </div>
     </div>
   </div>
   <script>
@@ -1037,6 +989,7 @@
         clearActive(actionList);
         refreshCreateNoteEntry();
         refreshActionDelete();
+        applyItemLimit();
         input.focus();
       }
 
@@ -1108,12 +1061,27 @@
           return [];
         }
         return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item"), function (item) {
-          return !item.classList.contains("hidden");
+          return !item.classList.contains("hidden") && !item.classList.contains("quick-launcher__item--capped");
         });
       }
 
       function listCombinedItems() {
         return listVisibleItems(actionList);
+      }
+
+      function applyItemLimit() {
+        var items = actionList.querySelectorAll(".quick-launcher__item");
+        var visibleCount = 0;
+        items.forEach(function (item) {
+          item.classList.remove("quick-launcher__item--capped");
+          if (item.classList.contains("hidden")) {
+            return;
+          }
+          visibleCount += 1;
+          if (visibleCount > 10) {
+            item.classList.add("quick-launcher__item--capped");
+          }
+        });
       }
 
       function clearActive(list) {
@@ -1583,6 +1551,7 @@
         if (value.trim() === "") {
           actionList.innerHTML = defaultEntriesHTML;
           clearActive(actionList);
+          applyItemLimit();
           activateCombined(0);
           submenu.classList.remove("is-open");
           submenu.setAttribute("aria-hidden", "true");
@@ -1597,6 +1566,7 @@
       actionList.addEventListener("htmx:afterSwap", function (event) {
         if (event.target && event.target.id === "quick-launcher-actions") {
           clearActive(actionList);
+          applyItemLimit();
           activateCombined(0);
           refreshCreateNoteEntry();
           refreshActionDelete();
@@ -1652,10 +1622,6 @@
         }
         ref = ref.trim();
         if (!ref) {
-          return;
-        }
-        if (window.openWikiLinkLauncher) {
-          window.openWikiLinkLauncher(ref, target);
           return;
         }
         openWikiLauncher(ref, target);
@@ -1722,251 +1688,6 @@
         }
       });
       window.addEventListener("resize", syncSidebarDetails);
-    })();
-  </script>
-  <script>
-    (function () {
-      var launcher = document.getElementById("wiki-link-launcher");
-      var input = document.getElementById("wiki-link-input");
-      var actionList = document.getElementById("wiki-link-actions");
-      var notesList = document.getElementById("wiki-link-notes");
-      var createNote = document.getElementById("wiki-link-create-note");
-      if (!launcher || !input || !actionList || !notesList || !createNote) {
-        return;
-      }
-
-      var wikiLinkRef = "";
-      var wikiLinkElement = null;
-      var wikiLinkNotePath = "";
-
-      function ensureNotePath(raw) {
-        var value = (raw || "").trim();
-        if (!value) {
-          return value;
-        }
-        if (!/\.md$/i.test(value)) {
-          value += ".md";
-        }
-        return value;
-      }
-
-      function buildNoteURL(path) {
-        return encodeURI("/notes/" + path);
-      }
-
-      function listVisibleItems(list) {
-        if (!list) {
-          return [];
-        }
-        return Array.prototype.filter.call(list.querySelectorAll(".quick-launcher__item"), function (item) {
-          return !item.classList.contains("hidden");
-        });
-      }
-
-      function listCombinedItems() {
-        return listVisibleItems(actionList).concat(listVisibleItems(notesList));
-      }
-
-      function activateCombined(index) {
-        var items = listCombinedItems();
-        if (!items.length) {
-          return;
-        }
-        var target = items[index];
-        if (!target) {
-          return;
-        }
-        items.forEach(function (item) {
-          item.classList.toggle("is-active", item === target);
-        });
-        target.scrollIntoView({block: "nearest"});
-      }
-
-      function activeCombinedIndex() {
-        var items = listCombinedItems();
-        for (var i = 0; i < items.length; i++) {
-          if (items[i].classList.contains("is-active")) {
-            return i;
-          }
-        }
-        return -1;
-      }
-
-      function moveCombined(delta) {
-        var items = listCombinedItems();
-        if (!items.length) {
-          return;
-        }
-        var index = activeCombinedIndex();
-        var nextIndex = index + delta;
-        if (index < 0) {
-          nextIndex = delta > 0 ? 0 : items.length - 1;
-        }
-        if (nextIndex < 0) {
-          nextIndex = items.length - 1;
-        }
-        if (nextIndex >= items.length) {
-          nextIndex = 0;
-        }
-        activateCombined(nextIndex);
-      }
-
-      function applyWikiLinkSelection(item) {
-        if (!item) {
-          return;
-        }
-        var path = item.getAttribute("data-note-path") || "";
-        if (!path || !wikiLinkNotePath || !wikiLinkRef) {
-          return;
-        }
-        var payload = {
-          from: wikiLinkRef,
-          to: path,
-        };
-        fetch(buildNoteURL(wikiLinkNotePath) + "/wikilink", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(payload),
-        })
-          .then(function (resp) {
-            if (!resp.ok) {
-              throw new Error("update failed");
-            }
-            return resp.json();
-          })
-          .then(function (data) {
-            if (wikiLinkElement) {
-              var label = data.title || item.getAttribute("data-note-title") || path;
-              wikiLinkElement.textContent = label;
-              wikiLinkElement.setAttribute("href", "/notes/" + data.path);
-              wikiLinkElement.classList.remove("js-wiki-missing");
-              wikiLinkElement.removeAttribute("data-wiki-ref");
-            }
-            closeLauncher();
-          })
-          .catch(function () {
-            closeLauncher();
-          });
-      }
-
-      function activateActionTarget(target) {
-        if (!target) {
-          return;
-        }
-        if (target.getAttribute("data-action") === "wiki-create") {
-          var href = target.getAttribute("href");
-          if (href) {
-            window.location.href = href;
-          }
-          return;
-        }
-        if (target.getAttribute("data-note-path")) {
-          applyWikiLinkSelection(target);
-        }
-      }
-
-      function openLauncher(ref, element) {
-        wikiLinkRef = ref;
-        wikiLinkElement = element;
-        var body = element ? element.closest(".note-body") : null;
-        wikiLinkNotePath = body ? (body.getAttribute("data-note-path") || "") : "";
-        var targetPath = ensureNotePath(ref);
-        var owner = "";
-        if (wikiLinkNotePath) {
-          owner = wikiLinkNotePath.split("/")[0] || "";
-        }
-        var createHref = "/notes/new?path=" + encodeURIComponent(targetPath);
-        if (owner) {
-          createHref += "&owner=" + encodeURIComponent(owner);
-        }
-        createNote.setAttribute("href", createHref);
-        launcher.classList.add("is-open");
-        launcher.setAttribute("aria-hidden", "false");
-        input.value = ref;
-        notesList.classList.add("hidden");
-        notesList.innerHTML = "";
-        input.focus();
-        input.dispatchEvent(new Event("input", {bubbles: true}));
-        activateCombined(0);
-      }
-
-      function closeLauncher() {
-        launcher.classList.remove("is-open");
-        launcher.setAttribute("aria-hidden", "true");
-        wikiLinkRef = "";
-        wikiLinkElement = null;
-        wikiLinkNotePath = "";
-      }
-
-      input.addEventListener("input", function (event) {
-        var value = event.target.value || "";
-        if (!value.trim()) {
-          notesList.classList.add("hidden");
-          notesList.innerHTML = "";
-          activateCombined(0);
-          return;
-        }
-        htmx.ajax("GET", "/quick/notes?q=" + encodeURIComponent(value), "#wiki-link-notes");
-        notesList.classList.remove("hidden");
-      });
-
-      notesList.addEventListener("click", function (event) {
-        var item = event.target.closest(".quick-launcher__item");
-        if (!item) {
-          return;
-        }
-        applyWikiLinkSelection(item);
-      });
-
-      actionList.addEventListener("click", function (event) {
-        var item = event.target.closest(".quick-launcher__item");
-        if (!item) {
-          return;
-        }
-        activateActionTarget(item);
-      });
-
-      document.addEventListener("keydown", function (event) {
-        if (!launcher.classList.contains("is-open")) {
-          return;
-        }
-        if (event.key === "Escape") {
-          event.preventDefault();
-          closeLauncher();
-          return;
-        }
-        if (event.key === "Enter") {
-          event.preventDefault();
-          var combined = listCombinedItems();
-          var combinedIndex = activeCombinedIndex();
-          var target = combinedIndex >= 0 ? combined[combinedIndex] : combined[0];
-          if (!target) {
-            return;
-          }
-          activateActionTarget(target);
-          return;
-        }
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          moveCombined(1);
-          return;
-        }
-        if (event.key === "ArrowUp") {
-          event.preventDefault();
-          moveCombined(-1);
-          return;
-        }
-      });
-
-      launcher.addEventListener("click", function (event) {
-        if (event.target === launcher) {
-          closeLauncher();
-        }
-      });
-
-      window.openWikiLinkLauncher = function (ref, element) {
-        openLauncher(ref, element);
-      };
     })();
   </script>
   <script>

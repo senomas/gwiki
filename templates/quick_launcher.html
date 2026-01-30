@@ -1,0 +1,37 @@
+{{define "quick_launcher"}}
+  <div id="quick-launcher" class="quick-launcher" aria-hidden="true">
+    <div class="quick-launcher__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
+      <input id="quick-launcher-input" class="quick-launcher__input" type="search" placeholder="Search..." autocomplete="off">
+      <div id="quick-launcher-actions" class="quick-launcher__list">
+        {{template "quick_launcher_entries" .}}
+      </div>
+    </div>
+    <div id="quick-launcher-submenu-modal" class="quick-launcher__submenu-modal" aria-hidden="true">
+      <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
+        <a id="quick-note-open" class="quick-launcher__item" href="#">
+          <span class="quick-launcher__icon">O</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Open</span>
+            <span class="quick-launcher__hint">View</span>
+          </span>
+        </a>
+        <a id="quick-note-edit" class="quick-launcher__item" href="#">
+          <span class="quick-launcher__icon">E</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Edit</span>
+            <span class="quick-launcher__hint">Modify</span>
+          </span>
+        </a>
+        <form id="quick-note-delete" method="post">
+          <button class="quick-launcher__item quick-launcher__item--danger" type="submit">
+            <span class="quick-launcher__icon">D</span>
+            <span class="quick-launcher__meta">
+              <span class="quick-launcher__label">Delete</span>
+              <span class="quick-launcher__hint">Remove</span>
+            </span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+{{end}}

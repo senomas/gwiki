@@ -5279,6 +5279,9 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 
 	actions := []QuickLauncherEntry{}
 	contextActions := []QuickLauncherEntry{}
+	addDefault := func(target *[]QuickLauncherEntry, entry QuickLauncherEntry) {
+		*target = append(*target, entry)
+	}
 	addAction := func(target *[]QuickLauncherEntry, entry QuickLauncherEntry) {
 		if entry.Hidden {
 			*target = append(*target, entry)
@@ -5294,7 +5297,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 	}
 
 	if authEnabled && !isAuth {
-		addAction(&actions, QuickLauncherEntry{
+		addDefault(&actions, QuickLauncherEntry{
 			ID:     "quick-launcher-create-note",
 			Kind:   "action",
 			Label:  "Create note",
@@ -5304,7 +5307,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:   "#",
 			Hidden: true,
 		})
-		addAction(&actions, QuickLauncherEntry{
+		addDefault(&actions, QuickLauncherEntry{
 			Kind:  "action",
 			Label: "Login",
 			Hint:  "Session",
@@ -5312,7 +5315,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:  "/login",
 		})
 	} else {
-		addAction(&actions, QuickLauncherEntry{
+		addDefault(&actions, QuickLauncherEntry{
 			ID:     "quick-launcher-create-note",
 			Kind:   "action",
 			Label:  "Create note",
@@ -5322,20 +5325,20 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:   "#",
 			Hidden: true,
 		})
-		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: "/notes/new"})
-		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: "/"})
-		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: "/todo"})
+		addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: "/notes/new"})
+		addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: "/"})
+		addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: "/todo"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Search", Hint: "Find", Icon: "F", Href: "/search"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Sync", Hint: "Git", Icon: "G", Href: "/sync"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Settings", Hint: "Config", Icon: "S", Href: "/settings"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Broken links", Hint: "Fix", Icon: "B", Href: "/broken"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Scroll to top", Hint: "Jump", Icon: "T", Href: "#top", Action: "scroll-top"})
 		if isAuth && hasNote {
-			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: "/notes/" + notePath + "/edit"})
-			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: "/notes/" + notePath + "/delete"})
+			addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: "/notes/" + notePath + "/edit"})
+			addDefault(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: "/notes/" + notePath + "/delete"})
 		}
 		if authEnabled {
-			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
+			addDefault(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
 		}
 	}
 
@@ -5345,9 +5348,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 
 	entries := make([]QuickLauncherEntry, 0, len(actions)+len(contextActions)+20)
 	entries = append(entries, actions...)
-	if len([]rune(query)) >= 3 {
-		entries = append(entries, contextActions...)
-	}
+	entries = append(entries, contextActions...)
 
 	tags, err := s.idx.ListTags(r.Context(), 200, "", false, false)
 	if err != nil {
@@ -5405,24 +5406,26 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 	if ftsQuery == "" {
 		ftsQuery = query
 	}
-	notes, err := s.idx.Search(r.Context(), ftsQuery, 12)
-	if err != nil {
-		return nil, err
-	}
-	for _, note := range notes {
-		label := note.Title
-		if label == "" {
-			label = note.Path
+	if len([]rune(query)) >= 3 {
+		notes, err := s.idx.Search(r.Context(), ftsQuery, 12)
+		if err != nil {
+			return nil, err
 		}
-		entries = append(entries, QuickLauncherEntry{
-			Kind:      "note",
-			Label:     label,
-			Hint:      note.Path,
-			Icon:      "N",
-			Href:      "/notes/" + note.Path,
-			NotePath:  note.Path,
-			NoteTitle: note.Title,
-		})
+		for _, note := range notes {
+			label := note.Title
+			if label == "" {
+				label = note.Path
+			}
+			entries = append(entries, QuickLauncherEntry{
+				Kind:      "note",
+				Label:     label,
+				Hint:      note.Path,
+				Icon:      "N",
+				Href:      "/notes/" + note.Path,
+				NotePath:  note.Path,
+				NoteTitle: note.Title,
+			})
+		}
 	}
 	return entries, nil
 }
