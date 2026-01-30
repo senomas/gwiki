@@ -5019,24 +5019,18 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	_, shortTokens := splitSearchTokens(query)
 	ftsQuery := ftsPrefixQuery(query)
-	if ftsQuery == "" {
-		ftsQuery = query
-	}
-	results, err := s.idx.Search(r.Context(), ftsQuery, 50)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	filtered := make([]index.SearchResult, 0, len(results))
-	for _, result := range results {
-		if !matchesShortTokens(shortTokens, result.Title, result.Path, result.Snippet) {
-			continue
+	var results []index.SearchResult
+	if ftsQuery != "" {
+		var err error
+		results, err = s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 50)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		filtered = append(filtered, result)
 	}
 	data := ViewData{
 		SearchQuery:   query,
-		SearchResults: filtered,
+		SearchResults: results,
 	}
 	s.attachViewData(r, &data)
 	if r.Header.Get("HX-Request") == "true" {
@@ -5292,33 +5286,6 @@ func splitSearchTokens(raw string) ([]string, []string) {
 	return longTokens, shortTokens
 }
 
-func normalizeSearchText(value string) string {
-	return normalizeFuzzyTerm(strings.ToLower(value))
-}
-
-func matchesShortTokens(shortTokens []string, fields ...string) bool {
-	if len(shortTokens) == 0 {
-		return true
-	}
-	var b strings.Builder
-	for _, field := range fields {
-		if field == "" {
-			continue
-		}
-		if b.Len() > 0 {
-			b.WriteString(" ")
-		}
-		b.WriteString(field)
-	}
-	hay := normalizeSearchText(b.String())
-	for _, token := range shortTokens {
-		if !strings.Contains(hay, token) {
-			return false
-		}
-	}
-	return true
-}
-
 func ftsPrefixQuery(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -5474,14 +5441,11 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		ftsQuery = query
 	}
 	if len([]rune(query)) >= 3 {
-		notes, err := s.idx.Search(r.Context(), ftsQuery, 12)
+		notes, err := s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 12)
 		if err != nil {
 			return nil, err
 		}
 		for _, note := range notes {
-			if !matchesShortTokens(shortTokens, note.Title, note.Path) {
-				continue
-			}
 			label := note.Title
 			if label == "" {
 				label = note.Path
@@ -5560,14 +5524,11 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 	if ftsQuery == "" {
 		ftsQuery = ftsQuerySource
 	}
-	notes, err := s.idx.Search(r.Context(), ftsQuery, 12)
+	notes, err := s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 12)
 	if err != nil {
 		return nil, err
 	}
 	for _, note := range notes {
-		if !matchesShortTokens(shortTokens, note.Title, note.Path) {
-			continue
-		}
 		label := note.Title
 		if label == "" {
 			label = note.Path

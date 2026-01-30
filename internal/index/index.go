@@ -1334,7 +1334,8 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
 	}
-	if _, err := i.execContextTx(ctx, tx, "INSERT INTO fts(user_id, group_id, path, title, body) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), relPath, meta.Title, string(content)); err != nil {
+	body := StripFrontmatter(string(content))
+	if _, err := i.execContextTx(ctx, tx, "INSERT INTO fts(user_id, group_id, path, title, body) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), relPath, meta.Title, body); err != nil {
 		return err
 	}
 
@@ -2323,6 +2324,53 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	slog.Debug("fts search", "query", query, "limit", limit)
 	clauses := []string{"fts MATCH ?"}
 	args := []interface{}{query}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	queryStr := fmt.Sprintf(`
+		SELECT files.path, files.title, snippet(fts, 2, '', '', '...', 10), %s
+		FROM fts
+		%s
+		WHERE %s
+		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "))
+	args = append(args, limit)
+	rows, err := i.queryContext(ctx, queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &r.Title, &r.Snippet, &ownerName); err != nil {
+			return nil, err
+		}
+		r.Path = joinOwnerPath(ownerName, relPath)
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (i *Index) SearchWithShortTokens(ctx context.Context, query string, shortTokens []string, limit int) ([]SearchResult, error) {
+	if len(shortTokens) == 0 {
+		return i.Search(ctx, query, limit)
+	}
+	if strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	slog.Debug("fts search", "query", query, "limit", limit)
+	clauses := []string{"fts MATCH ?"}
+	args := []interface{}{query}
+	for _, token := range shortTokens {
+		if token == "" {
+			continue
+		}
+		clauses = append(clauses, "(fts.title LIKE ? OR fts.body LIKE ? OR fts.path LIKE ?)")
+		like := "%" + token + "%"
+		args = append(args, like, like, like)
+	}
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	queryStr := fmt.Sprintf(`
