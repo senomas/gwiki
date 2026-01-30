@@ -6240,6 +6240,11 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []in
 		currentLine++
 		for currentLine <= len(lines) {
 			line = lines[currentLine-1]
+			if strings.TrimSpace(line) == "" {
+				out.WriteString("\n")
+				currentLine++
+				continue
+			}
 			if match := taskToggleLineRe.FindStringSubmatch(line); len(match) > 0 && strings.ToLower(match[2]) != "x" {
 				line = taskDoneTokenRe.ReplaceAllString(line, "")
 			}
