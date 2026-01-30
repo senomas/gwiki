@@ -39,23 +39,41 @@ Groups are discovered by scanning top-level folders under `WIKI_REPO_PATH` for a
 
 ## Quick launcher pipeline
 
-Quick launcher entries are generated server-side and rendered immediately on page load (no network on open). When the user types, the client calls `GET /quick/launcher?q=...&uri=...` to fetch a unified list ordered as actions → tags → folders → notes. Actions are also filtered by the query.
+Quick launcher entries are generated server-side and rendered immediately on page load (no network on open). When the user types, the client calls `GET /quick/launcher?q=...&uri=...` to fetch a unified list ordered as actions → tags → folders → notes. Actions are also filtered by the query, and the visible list is capped to 10 items (with a “+N more…” indicator).
 
-Default actions render immediately when the launcher opens; extra context actions (e.g., Sync/Settings/Search/Broken/Scroll-to-top) appear only when the query length is 3+ characters. Context actions are injected directly below the default actions and can be further restricted later using the `uri` parameter (pattern matching on the current page).
+Default actions render immediately when the launcher opens; context actions (e.g., Sync/Settings/Search/Broken/Scroll-to-top) appear once the query is non-empty. Context actions are injected directly below the default actions and can be further restricted later using the `uri` parameter (pattern matching on the current page). FTS note results only appear when the query length is 3+ characters.
 
 Current action behavior by page context:
 - Default actions (any page): New note, Home, Todo, Logout (when auth enabled).
 - Unauthenticated: Login is the only visible action (Create note is hidden but kept for the launcher UI).
 - Note view (`/notes/{path}` only): Edit and Delete appear as default actions when the user is authenticated.
 - Note edit (`/notes/{path}/edit`) and other blocked note routes (`/preview`, `/save`, `/wikilink`, `/detail`, `/card`, `/collapsed`, `/backlinks`): Edit/Delete are not shown.
-- Context actions (query length ≥ 3): Search, Sync, Settings, Broken links, Scroll to top. These are added just below default actions.
+- Context actions (query length ≥ 1): Search, Sync, Settings, Broken links, Scroll to top. These are added just below default actions. Note results appear at 3+ characters.
 
-Tag and folder results toggle filters on the current page by mutating only the `t` or `f` query params while preserving other params. Notes are searched via FTS (`Index.Search`). The `JOURNAL` tag is injected into results when it matches the query.
+Tag and folder results toggle filters on the current page by mutating only the `t` or `f` query params while preserving other params. Notes are searched via FTS (`Index.Search`) after 3+ characters. The `JOURNAL` tag is injected into results when it matches the query.
 
 Key pieces:
 - `internal/web/handlers.go`: `quickLauncherEntries`, `handleQuickLauncher`, and URL toggle helpers.
 - `templates/quick_launcher_entries.html`: shared rendering fragment.
-- `templates/base.html`: quick launcher UI + HTMX wiring (passes `uri`).
+- `templates/base.html`: quick launcher UI + HTMX wiring (passes `uri`, enforces 10-item cap).
+- `templates/quick_launcher.html`: quick launcher markup.
+
+## Note edit actions launcher
+
+The note edit launcher is a lightweight quick action menu scoped to the edit textarea. It is opened with `Ctrl+Space` while focused in the textarea and is independent of the global quick launcher.
+
+Behavior:
+- Default actions (no network): Todo, Date, Time.
+- Dynamic actions (query ≥ 1): tags plus date shortcuts (Tomorrow, Next week, Next month).
+- FTS notes (query ≥ 3): note matches returned by the index.
+- Selecting a tag inserts `#tag` at the cursor. Selecting a note inserts `[[note-path]]`.
+- The list is capped to 10 visible items to avoid overflow.
+
+Key pieces:
+- `internal/web/handlers.go`: `handleQuickEditActions`, `quickEditActionsEntries`.
+- `internal/web/server.go`: `/quick/edit-actions` route.
+- `templates/note-edit-actions.html`: edit launcher UI.
+- `templates/note_edit_actions_entries.html`: dynamic entries (tags, actions, notes).
 
 ## Git sync and credentials
 
