@@ -6709,6 +6709,12 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	renderSource := fullBody
 	var tasksForNote []index.Task
 	currentURL := r.Header.Get("HX-Current-URL")
+	isIndex := false
+	if currentURL != "" {
+		if parsed, err := url.Parse(currentURL); err == nil && parsed.Path == "/" {
+			isIndex = true
+		}
+	}
 	if strings.Contains(currentURL, "/todo") {
 		noteTags, activeDue, dueDate, activeFolder, activeRoot, activeJournal := todoFiltersFromURL(currentURL)
 		tasks, err := s.idx.OpenTasks(renderCtx, noteTags, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
@@ -6728,6 +6734,10 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 				tasksForNote = checkboxTasks
 			}
 		}
+	} else if isIndex {
+		filtered, _, tasks := index.FilterCompletedTasksSnippet(updatedContent)
+		renderSource = filtered
+		tasksForNote = tasks
 	} else {
 		metaTasks := index.ParseContent(updatedContent).Tasks
 		tasksForNote = make([]index.Task, 0, len(metaTasks))
