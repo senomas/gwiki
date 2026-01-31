@@ -158,6 +158,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/journal/year/", s.handleJournalYear)
 	s.mux.HandleFunc("/journal/month/", s.handleJournalMonth)
 	s.mux.HandleFunc("/sync/run", s.handleSyncRun)
+	s.mux.HandleFunc("/favicon.ico", s.handleFavicon)
 	s.mux.HandleFunc("/static/", s.handleStaticFile)
 	s.mux.HandleFunc("/attachments/", s.handleAttachmentFile)
 	s.mux.HandleFunc("/assets/", s.handleAssetFile)

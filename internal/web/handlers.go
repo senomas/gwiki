@@ -8922,6 +8922,11 @@ func (s *Server) handleStaticFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fullPath)
 }
 
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	r.URL.Path = "/static/scroll.png"
+	s.handleStaticFile(w, r)
+}
+
 func firstPathSegment(clean string) (string, bool) {
 	parts := strings.Split(clean, string(filepath.Separator))
 	if len(parts) < 2 {
