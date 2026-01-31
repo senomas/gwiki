@@ -83,7 +83,7 @@ func TestExclusiveTagsFiltering(t *testing.T) {
 		t.Fatalf("expected no notes when filtering by work+bni, got %#v", notes)
 	}
 
-	tags, err := idx.ListTags(ctx, 100, "", false, false)
+	tags, err := idx.ListTags(ctx, 100, "", false, false, "")
 	if err != nil {
 		t.Fatalf("list tags: %v", err)
 	}
