@@ -2291,50 +2291,6 @@
       });
     })();
   </script>
-  <script>
-    (function () {
-      function parseTaskID(value) {
-        if (!value || value.indexOf("task-") !== 0) {
-          return null;
-        }
-        var parts = value.slice(5).split("-");
-        if (parts.length < 3) {
-          return null;
-        }
-        return {
-          fileID: parts[0],
-          lineNo: parts[1],
-          hash: parts.slice(2).join("-"),
-        };
-      }
-      document.addEventListener("change", function (event) {
-        var target = event.target;
-        if (!target || target.tagName !== "INPUT" || target.type !== "checkbox") {
-          return;
-        }
-        var path = window.location.pathname;
-        if (!(path === "/" || path.startsWith("/notes/"))) {
-          return;
-        }
-        var taskID = target.getAttribute("data-task-id");
-        if (!taskID) {
-          return;
-        }
-        var parsed = parseTaskID(taskID);
-        var note = target.closest(".note-body");
-        var notePath = note ? note.getAttribute("data-note-path") : "";
-        console.log("[task-toggle]", {
-          taskID: taskID,
-          fileID: parsed ? parsed.fileID : "",
-          lineNo: parsed ? parsed.lineNo : "",
-          hash: parsed ? parsed.hash : "",
-          notePath: notePath,
-          checked: !!target.checked,
-          href: window.location.href,
-        });
-      });
-    })();
-  </script>
 </body>
 </html>
 {{end}}
