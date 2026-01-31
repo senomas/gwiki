@@ -8138,10 +8138,10 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 	renderTasks := meta.Tasks
 	completedCount := 0
 	if hideCompleted {
-		filtered, count := index.FilterCompletedTasksSnippet(string(normalizedContent))
+		filtered, count, tasks := index.FilterCompletedTasksSnippet(string(normalizedContent))
 		renderContent = []byte(filtered)
 		completedCount = count
-		renderTasks = index.ParseContent(filtered).Tasks
+		renderTasks = tasks
 	}
 	htmlStr, err := s.renderNoteBody(renderCtx, renderContent)
 	if err != nil {

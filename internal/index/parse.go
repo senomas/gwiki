@@ -170,7 +170,7 @@ func UncheckedTasksSnippet(input string) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
 }
 
-func FilterCompletedTasksSnippet(input string) (string, int) {
+func FilterCompletedTasksSnippet(input string) (string, int, []Task) {
 	body := StripFrontmatter(input)
 	lines := strings.Split(body, "\n")
 	type blockState struct {
@@ -180,6 +180,7 @@ func FilterCompletedTasksSnippet(input string) (string, int) {
 	stack := make([]blockState, 0, 8)
 	out := make([]string, 0, len(lines))
 	completed := 0
+	tasks := make([]Task, 0)
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -209,6 +210,12 @@ func FilterCompletedTasksSnippet(input string) (string, int) {
 				completed++
 			} else {
 				out = append(out, line)
+				tasks = append(tasks, Task{
+					LineNo: i + 1,
+					Text:   line,
+					Done:   false,
+					Hash:   TaskLineHash(line),
+				})
 			}
 			stack = append(stack, blockState{indent: indent, keep: !done})
 			continue
@@ -219,7 +226,7 @@ func FilterCompletedTasksSnippet(input string) (string, int) {
 	}
 
 	out = filterEmptyH2(out)
-	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", completed
+	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", completed, tasks
 }
 
 func filterEmptyH2(lines []string) []string {

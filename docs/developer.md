@@ -242,7 +242,7 @@ Markdown parsing to metadata (tags, links, tasks).
 - `ParseContent`: parses content
 - `UncheckedTasksSnippet`: builds markdown snippet with unchecked tasks
 - `DueTasksSnippet`: builds markdown snippet with due tasks
-- `FilterCompletedTasksSnippet`: removes completed task blocks for index cards and returns completed count
+- `FilterCompletedTasksSnippet`: removes completed task blocks for index cards, returns completed count, and preserves original task line numbers for checkbox IDs
 - `TaskLineHash`: helper for task line hash
 - `countIndentSpaces`: helper for count indent spaces
 - `expandTagPrefixes`: helper for expand tag prefixes
