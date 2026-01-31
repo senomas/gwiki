@@ -2273,8 +2273,21 @@
           noteActions.setAttribute("aria-hidden", "true");
         }
       }
-      window.addEventListener("pageshow", function () {
+      function shouldReloadOnRestore(pathname) {
+        if (pathname === "/login" || pathname === "/settings") {
+          return false;
+        }
+        if (pathname.startsWith("/notes/") && pathname.endsWith("/edit")) {
+          return false;
+        }
+        return true;
+      }
+      window.addEventListener("pageshow", function (event) {
         closeTransientUI();
+        var shouldReload = !!(event && event.persisted && shouldReloadOnRestore(window.location.pathname));
+        if (shouldReload) {
+          window.location.reload();
+        }
       });
     })();
   </script>
