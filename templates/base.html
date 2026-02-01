@@ -1477,10 +1477,11 @@
       });
 
       document.addEventListener("click", function (event) {
-        var target = event.target.closest(".js-quick-launcher-open");
+        var target = event.target.closest("[data-quick-launcher]");
         if (!target) {
           return;
         }
+        event.stopPropagation();
         event.preventDefault();
         openLauncher();
       });
@@ -2257,6 +2258,18 @@
   </script>
   <script>
     (function () {
+      document.addEventListener("click", function (event) {
+        var launcherTrigger = event.target.closest("[data-quick-launcher]");
+        if (!launcherTrigger) {
+          return;
+        }
+        var summary = launcherTrigger.closest("summary");
+        if (!summary) {
+          return;
+        }
+        event.preventDefault();
+      }, true);
+
       function closeTransientUI() {
         document.querySelectorAll(".quick-launcher.is-open").forEach(function (launcher) {
           launcher.classList.remove("is-open");
