@@ -69,17 +69,20 @@
   </div>
 </div>
 
-{{if .Groups}}
+{{if or (and .IsAuthenticated .CurrentUser.Name) .Groups}}
 <div class="border-t border-slate-800/70 pt-4">
   <div
     class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500"
   >
-    <span>Groups</span>
+    <span>User &amp; Groups</span>
     <span class="text-slate-600">.</span>
   </div>
   <div class="mt-3 flex flex-wrap gap-2 text-xs">
+    {{if and .IsAuthenticated .CurrentUser.Name}}
+      <a class="rounded-full border border-slate-800/70 bg-[#15181c]/60 px-2.5 py-1 text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="/{{.CurrentUser.Name}}">{{.CurrentUser.Name}}</a>
+    {{end}}
     {{range .Groups}}
-      <span class="rounded-full border border-slate-800/70 bg-[#15181c]/60 px-2.5 py-1 text-slate-300">{{.}}</span>
+      <a class="rounded-full border border-slate-800/70 bg-[#15181c]/60 px-2.5 py-1 text-slate-300 transition hover:border-slate-500 hover:text-slate-100" href="/{{.}}">{{.}}</a>
     {{end}}
   </div>
 </div>
