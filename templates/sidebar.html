@@ -117,13 +117,20 @@
 {{define "sidebar_user_row"}}
   <div class="flex w-full items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
     {{if and .AuthEnabled .IsAuthenticated}}
-      <a class="js-quick-launcher-open text-xs text-slate-200 transition hover:text-slate-100" href="#">{{.CurrentUser.Name}}</a>
-      <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/logout" aria-label="Logout">
-        <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
-          <path d="M8.5 3.5h-3a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3v-1.5h-3a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h3V3.5z"/>
-          <path d="M12.94 6.44a.75.75 0 0 1 1.06 0l2.25 2.25c.29.3.29.77 0 1.06L14 12a.75.75 0 1 1-1.06-1.06l.97-.97H8.5a.75.75 0 0 1 0-1.5h5.41l-.97-.97a.75.75 0 0 1 0-1.06z"/>
-        </svg>
-      </a>
+      <a class="text-xs text-slate-200 transition hover:text-slate-100" href="/{{.CurrentUser.Name}}">{{.CurrentUser.Name}}</a>
+      <div class="flex items-center gap-2">
+        <button type="button" class="js-quick-launcher-open inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" aria-label="Quick launcher">
+          <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
+            <path d="M8.5 3a5.5 5.5 0 1 0 3.46 9.78l3.13 3.12a.75.75 0 0 0 1.06-1.06l-3.12-3.13A5.5 5.5 0 0 0 8.5 3Zm0 1.5a4 4 0 1 1 0 8a4 4 0 0 1 0-8Z"/>
+          </svg>
+        </button>
+        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/logout" aria-label="Logout">
+          <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
+            <path d="M8.5 3.5h-3a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3v-1.5h-3a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h3V3.5z"/>
+            <path d="M12.94 6.44a.75.75 0 0 1 1.06 0l2.25 2.25c.29.3.29.77 0 1.06L14 12a.75.75 0 1 1-1.06-1.06l.97-.97H8.5a.75.75 0 0 1 0-1.5h5.41l-.97-.97a.75.75 0 0 1 0-1.06z"/>
+          </svg>
+        </a>
+      </div>
     {{else if .AuthEnabled}}
       <a class="text-xs text-slate-200 transition hover:text-slate-100" href="/login">Login</a>
     {{else}}
