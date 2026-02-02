@@ -95,24 +95,25 @@
     <button type="button" data-quick-launcher="true" class="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216]" aria-label="Quick launcher">
       <img class="h-9 w-9 object-contain" src="/static/scroll.png" alt="Gwiki">
     </button>
-    <button type="button" class="js-sidebar-toggle space-y-0.5 text-left lg:pointer-events-none" aria-label="Toggle sidebar">
-      <div class="text-sm font-semibold tracking-[0.25em] text-slate-100">GWIKI</div>
-      <div class="text-[10px] uppercase tracking-[0.22em] text-slate-500">v{{.BuildVersion}}</div>
+    <button type="button" class="js-sidebar-toggle text-left lg:pointer-events-none" aria-label="Toggle sidebar">
+      {{template "sidebar_brand_text" .}}
     </button>
   </div>
 {{end}}
 
 {{define "sidebar_brand_display"}}
-  <div class="flex w-full items-center justify-between gap-3 text-left">
-    <div class="flex items-center gap-3">
-      <button type="button" data-quick-launcher="true" class="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216]" aria-label="Quick launcher">
-        <img class="h-9 w-9 object-contain" src="/static/scroll.png" alt="Gwiki">
-      </button>
-      <div class="space-y-0.5">
-        <div class="text-sm font-semibold tracking-[0.25em] text-slate-100">GWIKI</div>
-        <div class="text-[10px] uppercase tracking-[0.22em] text-slate-500">v{{.BuildVersion}}</div>
-      </div>
-    </div>
+  <div class="flex w-full items-center gap-3 text-left">
+    <button type="button" data-quick-launcher="true" class="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216]" aria-label="Quick launcher">
+      <img class="h-9 w-9 object-contain" src="/static/scroll.png" alt="Gwiki">
+    </button>
+    {{template "sidebar_brand_text" .}}
+  </div>
+{{end}}
+
+{{define "sidebar_brand_text"}}
+  <div class="space-y-0.5 text-left font-normal leading-tight">
+    <div class="text-sm font-semibold tracking-[0.25em] text-slate-100">GWIKI</div>
+    <div class="text-[10px] font-normal uppercase tracking-[0.22em] text-slate-500">v{{.BuildVersion}}</div>
   </div>
 {{end}}
 
