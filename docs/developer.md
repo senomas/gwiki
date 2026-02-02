@@ -75,6 +75,34 @@ Key pieces:
 - `templates/note-edit-actions.html`: edit launcher UI.
 - `templates/note_edit_actions_entries.html`: dynamic entries (tags, actions, notes).
 
+## Home index sections
+
+Home/index note feed is grouped into time/priority sections and rendered as collapsible blocks.
+
+Current section order:
+1. Important (`priority <= 5`)
+2. Today
+3. Planned (future updates)
+4. This Week
+5. This Month
+6. This Year
+7. Last Year
+8. Others
+
+Notes are assigned to exactly one section by `section_rank` in `Index.NoteList` (home mode), then sorted by `priority ASC, updated_at DESC` inside each section.
+
+UI behavior:
+- Section headers show `(<n> notes)` and are collapsible (`<details>` / `<summary>`).
+- No extra icon/glyph is added for the collapsible UI.
+- `Today` header is always shown (including `0 notes`).
+- Other sections are hidden when empty.
+- Headers are rendered only on the first home chunk (`offset=0`) so they do not repeat on paging.
+
+Key pieces:
+- `internal/index/index.go`: `NoteList` home section ranking.
+- `internal/web/handlers.go`: `loadHomeNotes`, `splitHomeSections`, home/page handlers.
+- `templates/home_notes.html`: section headers + collapsible rendering.
+
 ## Git sync and credentials
 
 Sync runs through `internal/syncer` and is guarded by a process-wide lock so only one sync happens at a time (the caller waits up to ~10s). Each user can have their own git credentials file stored at `WIKI_DATA_PATH/<username>.cred` (same format as `.git-credentials`). Sync uses `GIT_CONFIG_GLOBAL` pointing at `WIKI_DATA_PATH/<username>.gitconfig`, and writes `credential.helper` to store credentials in that per-user `.cred` file.
