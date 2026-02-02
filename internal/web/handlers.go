@@ -4646,7 +4646,10 @@ func mapsEmbedQueryURL(value string) string {
 	return "https://www.google.com/maps?output=embed&q=" + url.QueryEscape(value)
 }
 
-const homeNotesPageSize = 6
+const (
+	homeNotesPageSize    = 6
+	homeSectionsMaxNotes = 5000
+)
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -4787,7 +4790,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	priorityNotes, todayNotes, otherNotes := splitHomeSections(homeNotes)
+	priorityNotes, todayNotes, plannedNotes, weekNotes, monthNotes, yearNotes, lastYearNotes, otherNotes := splitHomeSections(homeNotes)
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), ownerName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -4813,6 +4816,11 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		HomeNotes:         homeNotes,
 		HomePriorityNotes: priorityNotes,
 		HomeTodayNotes:    todayNotes,
+		HomePlannedNotes:  plannedNotes,
+		HomeWeekNotes:     weekNotes,
+		HomeMonthNotes:    monthNotes,
+		HomeYearNotes:     yearNotes,
+		HomeLastYearNotes: lastYearNotes,
 		HomeOtherNotes:    otherNotes,
 		HomeHasMore:       hasMore,
 		NextHomeOffset:    nextOffset,
@@ -5943,11 +5951,16 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	priorityNotes, todayNotes, otherNotes := splitHomeSections(homeNotes)
+	priorityNotes, todayNotes, plannedNotes, weekNotes, monthNotes, yearNotes, lastYearNotes, otherNotes := splitHomeSections(homeNotes)
 	data := ViewData{
 		HomeNotes:         homeNotes,
 		HomePriorityNotes: priorityNotes,
 		HomeTodayNotes:    todayNotes,
+		HomePlannedNotes:  plannedNotes,
+		HomeWeekNotes:     weekNotes,
+		HomeMonthNotes:    monthNotes,
+		HomeYearNotes:     yearNotes,
+		HomeLastYearNotes: lastYearNotes,
 		HomeOtherNotes:    otherNotes,
 		HomeHasMore:       hasMore,
 		NextHomeOffset:    nextOffset,
@@ -7066,6 +7079,9 @@ func calendarReferenceDate(r *http.Request) time.Time {
 }
 
 func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, activeDate string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string) ([]NoteCard, int, bool, error) {
+	if offset > 0 {
+		return []NoteCard{}, offset, false, nil
+	}
 	notes, err := s.idx.NoteList(ctx, index.NoteListFilter{
 		Tags:         tags,
 		Date:         activeDate,
@@ -7075,16 +7091,13 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 		JournalOnly:  journalOnly,
 		OwnerName:    ownerName,
 		HomeSections: true,
-		Limit:        homeNotesPageSize + 1,
-		Offset:       offset,
+		Limit:        homeSectionsMaxNotes,
+		Offset:       0,
 	})
 	if err != nil {
 		return nil, offset, false, err
 	}
-	hasMore := len(notes) > homeNotesPageSize
-	if hasMore {
-		notes = notes[:homeNotesPageSize]
-	}
+	hasMore := false
 	cards := make([]NoteCard, 0, len(notes))
 	for _, note := range notes {
 		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, note.Path)
@@ -7115,12 +7128,17 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 			SectionRank: note.SectionRank,
 		})
 	}
-	return cards, offset + len(notes), hasMore, nil
+	return cards, len(notes), hasMore, nil
 }
 
-func splitHomeSections(notes []NoteCard) ([]NoteCard, []NoteCard, []NoteCard) {
+func splitHomeSections(notes []NoteCard) ([]NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard) {
 	priority := make([]NoteCard, 0, len(notes))
 	today := make([]NoteCard, 0, len(notes))
+	planned := make([]NoteCard, 0, len(notes))
+	week := make([]NoteCard, 0, len(notes))
+	month := make([]NoteCard, 0, len(notes))
+	year := make([]NoteCard, 0, len(notes))
+	lastYear := make([]NoteCard, 0, len(notes))
 	others := make([]NoteCard, 0, len(notes))
 	for _, note := range notes {
 		switch note.SectionRank {
@@ -7128,11 +7146,21 @@ func splitHomeSections(notes []NoteCard) ([]NoteCard, []NoteCard, []NoteCard) {
 			priority = append(priority, note)
 		case 1:
 			today = append(today, note)
+		case 2:
+			planned = append(planned, note)
+		case 3:
+			week = append(week, note)
+		case 4:
+			month = append(month, note)
+		case 5:
+			year = append(year, note)
+		case 6:
+			lastYear = append(lastYear, note)
 		default:
 			others = append(others, note)
 		}
 	}
-	return priority, today, others
+	return priority, today, planned, week, month, year, lastYear, others
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {

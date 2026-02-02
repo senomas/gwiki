@@ -37,6 +37,11 @@ type ViewData struct {
 	HomeNotes            []NoteCard
 	HomePriorityNotes    []NoteCard
 	HomeTodayNotes       []NoteCard
+	HomePlannedNotes     []NoteCard
+	HomeWeekNotes        []NoteCard
+	HomeMonthNotes       []NoteCard
+	HomeYearNotes        []NoteCard
+	HomeLastYearNotes    []NoteCard
 	HomeOtherNotes       []NoteCard
 	HomeHasMore          bool
 	NextHomeOffset       int

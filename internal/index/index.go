@@ -1555,10 +1555,35 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		now := time.Now()
 		startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
 		endOfDay := startOfDay + 86400
+		weekday := int(now.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		startOfWeek := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -(weekday - 1)).Unix()
+		startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Unix()
+		startOfYear := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location()).Unix()
+		startOfLastYear := time.Date(now.Year()-1, 1, 1, 0, 0, 0, 0, now.Location()).Unix()
 		sectionExpr = fmt.Sprintf(
-			"CASE WHEN files.priority <= 5 THEN 0 WHEN files.updated_at >= %d AND files.updated_at < %d THEN 1 ELSE 2 END",
+			"CASE "+
+				"WHEN files.priority <= 5 THEN 0 "+
+				"WHEN files.updated_at >= %d AND files.updated_at < %d THEN 1 "+
+				"WHEN files.updated_at >= %d THEN 2 "+
+				"WHEN files.updated_at >= %d AND files.updated_at < %d THEN 3 "+
+				"WHEN files.updated_at >= %d AND files.updated_at < %d THEN 4 "+
+				"WHEN files.updated_at >= %d AND files.updated_at < %d THEN 5 "+
+				"WHEN files.updated_at >= %d AND files.updated_at < %d THEN 6 "+
+				"ELSE 7 END",
 			startOfDay,
 			endOfDay,
+			endOfDay,
+			startOfWeek,
+			startOfDay,
+			startOfMonth,
+			startOfWeek,
+			startOfYear,
+			startOfMonth,
+			startOfLastYear,
+			startOfYear,
 		)
 	}
 	sqlStr := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, files.uid, files.priority, files.updated_at, %s AS section_rank, %s FROM files %s", sectionExpr, ownerNameExpr(), ownerJoins("files"))

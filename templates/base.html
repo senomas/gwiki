@@ -736,6 +736,16 @@
     .quick-launcher__note-row {
       margin-top: 0.9rem;
     }
+    .home-section-summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .home-section-summary::marker {
+      content: "";
+    }
+    .home-section-summary::-webkit-details-marker {
+      display: none;
+    }
     .quick-launcher__submenu-modal {
       position: fixed;
       inset: 0;

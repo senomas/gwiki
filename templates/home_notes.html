@@ -1,35 +1,125 @@
 {{define "home_notes"}}
-{{if .HomePriorityNotes}}
-<div class="space-y-4">
-{{range .HomePriorityNotes}}
-{{template "home_note_item" (dict "Note" . "Root" $)}}
+{{if and (eq .HomeOffset 0) .HomePriorityNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Important ({{len .HomePriorityNotes}} notes)</summary>
 {{end}}
-</div>
+{{if .HomePriorityNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomePriorityNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if and (eq .HomeOffset 0) .HomePriorityNotes}}
+</details>
 {{end}}
 
-{{if and .HomeTodayNotes (eq .HomeOffset 0)}}
-<div class="pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Today</div>
+{{if eq .HomeOffset 0}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Today ({{len .HomeTodayNotes}} notes)</summary>
 {{end}}
 {{if .HomeTodayNotes}}
-<div class="space-y-4">
-{{range .HomeTodayNotes}}
-{{template "home_note_item" (dict "Note" . "Root" $)}}
+  <div class="space-y-4 pt-2">
+  {{range .HomeTodayNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
 {{end}}
-</div>
+{{if eq .HomeOffset 0}}
+</details>
 {{end}}
 
-{{if and .HomeOtherNotes (eq .HomeOffset 0)}}
-<div class="pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Others</div>
+{{if and (eq .HomeOffset 0) .HomePlannedNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Planned ({{len .HomePlannedNotes}} notes)</summary>
+{{end}}
+{{if .HomePlannedNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomePlannedNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if and (eq .HomeOffset 0) .HomePlannedNotes}}
+</details>
+{{end}}
+
+{{if and (eq .HomeOffset 0) .HomeWeekNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Week ({{len .HomeWeekNotes}} notes)</summary>
+{{end}}
+{{if .HomeWeekNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomeWeekNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if and (eq .HomeOffset 0) .HomeWeekNotes}}
+</details>
+{{end}}
+
+{{if and (eq .HomeOffset 0) .HomeMonthNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Month ({{len .HomeMonthNotes}} notes)</summary>
+{{end}}
+{{if .HomeMonthNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomeMonthNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if and (eq .HomeOffset 0) .HomeMonthNotes}}
+</details>
+{{end}}
+
+{{if and (eq .HomeOffset 0) .HomeYearNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Year ({{len .HomeYearNotes}} notes)</summary>
+{{end}}
+{{if .HomeYearNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomeYearNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if and (eq .HomeOffset 0) .HomeYearNotes}}
+</details>
+{{end}}
+
+{{if and (eq .HomeOffset 0) .HomeLastYearNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Last Year ({{len .HomeLastYearNotes}} notes)</summary>
+{{end}}
+{{if .HomeLastYearNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomeLastYearNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if and (eq .HomeOffset 0) .HomeLastYearNotes}}
+</details>
+{{end}}
+
+{{if and (eq .HomeOffset 0) .HomeOtherNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Others ({{len .HomeOtherNotes}} notes)</summary>
 {{end}}
 {{if .HomeOtherNotes}}
-<div class="space-y-4">
-{{range .HomeOtherNotes}}
-{{template "home_note_item" (dict "Note" . "Root" $)}}
+  <div class="space-y-4 pt-2">
+  {{range .HomeOtherNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
 {{end}}
-</div>
+{{if and (eq .HomeOffset 0) .HomeOtherNotes}}
+</details>
 {{end}}
 
-{{if not (or .HomePriorityNotes .HomeTodayNotes .HomeOtherNotes)}}
+{{if and (eq .HomeOffset 0) (not (or .HomePriorityNotes .HomeTodayNotes .HomePlannedNotes .HomeWeekNotes .HomeMonthNotes .HomeYearNotes .HomeLastYearNotes .HomeOtherNotes))}}
 <div class="py-6 text-sm text-slate-500">No notes yet.</div>
 {{end}}
 
