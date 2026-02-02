@@ -119,13 +119,20 @@
 {{define "sidebar_user_row"}}
   <div class="flex w-full items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
     {{if and .AuthEnabled .IsAuthenticated}}
-      <a class="text-xs text-slate-200 transition hover:text-slate-100" href="/">{{.CurrentUser.Name}}</a>
-      <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/logout" aria-label="Logout">
-        <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
-          <path d="M8.5 3.5h-3a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3v-1.5h-3a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h3V3.5z"/>
-          <path d="M12.94 6.44a.75.75 0 0 1 1.06 0l2.25 2.25c.29.3.29.77 0 1.06L14 12a.75.75 0 1 1-1.06-1.06l.97-.97H8.5a.75.75 0 0 1 0-1.5h5.41l-.97-.97a.75.75 0 0 1 0-1.06z"/>
-        </svg>
-      </a>
+      <span class="text-xs text-slate-200">{{.CurrentUser.Name}}</span>
+      <div class="flex items-center gap-2">
+        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/" aria-label="Home">
+          <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
+            <path d="M10 3.4 3.7 8.6a.75.75 0 1 0 .96 1.15l.84-.7v6.04c0 .41.34.75.75.75h2.8a.75.75 0 0 0 .75-.75v-3.4h1.4v3.4c0 .41.34.75.75.75h2.8c.41 0 .75-.34.75-.75V9.2l.84.7a.75.75 0 0 0 .96-1.15L10.48 3.4a.75.75 0 0 0-.96 0Z"/>
+          </svg>
+        </a>
+        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/logout" aria-label="Logout">
+          <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
+            <path d="M8.5 3.5h-3a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3v-1.5h-3a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h3V3.5z"/>
+            <path d="M12.94 6.44a.75.75 0 0 1 1.06 0l2.25 2.25c.29.3.29.77 0 1.06L14 12a.75.75 0 1 1-1.06-1.06l.97-.97H8.5a.75.75 0 0 1 0-1.5h5.41l-.97-.97a.75.75 0 0 1 0-1.06z"/>
+          </svg>
+        </a>
+      </div>
     {{else if .AuthEnabled}}
       <a class="text-xs text-slate-200 transition hover:text-slate-100" href="/login">Login</a>
     {{else}}
