@@ -1,30 +1,39 @@
-{{define "home_notes"}} {{range .HomeNotes}}
-<article
-  class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]"
->
-  <div class="mt-4">
-    <div class="flex items-start justify-between gap-4">
-      <div class="flex-1">
-        {{ $noteURL := printf "/notes/%s" .Path }}
-        {{ if $.RawQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.RawQuery }}{{ end }}
-        {{ $cardURL := printf "/notes/%s/card" .Path }}
-        {{ if $.RawQuery }}{{ $cardURL = printf "/notes/%s/card?%s" .Path $.RawQuery }}{{ end }}
-        <div
-          hx-get="{{ $cardURL }}"
-          hx-trigger="revealed"
-          hx-swap="outerHTML"
-        >
-          {{template "note_detail_skeleton" (dict "NoteTitle" .Title "NoteMeta" .Meta "NotePath" .Path "NoteURL" $noteURL "NoteFileName" .FileName)}}
-        </div>
-      </div>
-      {{if and $.AuthEnabled $.IsAuthenticated}}
-      {{end}}
-    </div>
-  </div>
-</article>
-{{else}}
+{{define "home_notes"}}
+{{if .HomePriorityNotes}}
+<div class="space-y-4">
+{{range .HomePriorityNotes}}
+{{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+</div>
+{{end}}
+
+{{if and .HomeTodayNotes (eq .HomeOffset 0)}}
+<div class="pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Today</div>
+{{end}}
+{{if .HomeTodayNotes}}
+<div class="space-y-4">
+{{range .HomeTodayNotes}}
+{{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+</div>
+{{end}}
+
+{{if and .HomeOtherNotes (eq .HomeOffset 0)}}
+<div class="pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Others</div>
+{{end}}
+{{if .HomeOtherNotes}}
+<div class="space-y-4">
+{{range .HomeOtherNotes}}
+{{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+</div>
+{{end}}
+
+{{if not (or .HomePriorityNotes .HomeTodayNotes .HomeOtherNotes)}}
 <div class="py-6 text-sm text-slate-500">No notes yet.</div>
-{{end}} {{if .HomeHasMore}}
+{{end}}
+
+{{if .HomeHasMore}}
 <div
   class="h-10"
   hx-get="/notes/page?offset={{.NextHomeOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
@@ -32,4 +41,33 @@
   hx-swap="outerHTML"
   aria-hidden="true"
 ></div>
-{{end}} {{end}}
+{{end}}
+{{end}}
+
+{{define "home_note_item"}}
+<article
+  class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]"
+>
+  <div class="mt-4">
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex-1">
+        {{ $note := .Note }}
+        {{ $root := .Root }}
+        {{ $noteURL := printf "/notes/%s" $note.Path }}
+        {{ if $root.RawQuery }}{{ $noteURL = printf "/notes/%s?%s" $note.Path $root.RawQuery }}{{ end }}
+        {{ $cardURL := printf "/notes/%s/card" $note.Path }}
+        {{ if $root.RawQuery }}{{ $cardURL = printf "/notes/%s/card?%s" $note.Path $root.RawQuery }}{{ end }}
+        <div
+          hx-get="{{ $cardURL }}"
+          hx-trigger="revealed"
+          hx-swap="outerHTML"
+        >
+          {{template "note_detail_skeleton" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "NoteFileName" $note.FileName)}}
+        </div>
+      </div>
+      {{if and $root.AuthEnabled $root.IsAuthenticated}}
+      {{end}}
+    </div>
+  </div>
+</article>
+{{end}}

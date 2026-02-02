@@ -29,10 +29,13 @@ type OpenOptions struct {
 }
 
 type NoteSummary struct {
-	Path  string
-	Title string
-	MTime time.Time
-	UID   string
+	Path        string
+	Title       string
+	MTime       time.Time
+	UID         string
+	Priority    int
+	UpdatedAt   time.Time
+	SectionRank int
 }
 
 type NoteHashSummary struct {
@@ -42,16 +45,17 @@ type NoteHashSummary struct {
 }
 
 type NoteListFilter struct {
-	Tags        []string
-	Date        string
-	Query       string
-	Folder      string
-	Root        bool
-	JournalOnly bool
-	ExcludeUID  string
-	OwnerName   string
-	Limit       int
-	Offset      int
+	Tags         []string
+	Date         string
+	Query        string
+	Folder       string
+	Root         bool
+	JournalOnly  bool
+	ExcludeUID   string
+	OwnerName    string
+	HomeSections bool
+	Limit        int
+	Offset       int
 }
 
 type SearchResult struct {
@@ -1546,7 +1550,18 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		args = append(args, clauseArgs...)
 	}
 
-	sqlStr := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, files.uid, %s FROM files %s", ownerNameExpr(), ownerJoins("files"))
+	sectionExpr := "2"
+	if filter.HomeSections {
+		now := time.Now()
+		startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+		endOfDay := startOfDay + 86400
+		sectionExpr = fmt.Sprintf(
+			"CASE WHEN files.priority <= 5 THEN 0 WHEN files.updated_at >= %d AND files.updated_at < %d THEN 1 ELSE 2 END",
+			startOfDay,
+			endOfDay,
+		)
+	}
+	sqlStr := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, files.uid, files.priority, files.updated_at, %s AS section_rank, %s FROM files %s", sectionExpr, ownerNameExpr(), ownerJoins("files"))
 	if len(joins) > 0 {
 		sqlStr += " " + strings.Join(joins, " ")
 	}
@@ -1560,7 +1575,11 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		sqlStr += " HAVING COUNT(DISTINCT tags.name) = ?"
 		args = append(args, len(tagList))
 	}
-	sqlStr += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
+	if filter.HomeSections {
+		sqlStr += " ORDER BY section_rank ASC, files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
+	} else {
+		sqlStr += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
+	}
 	args = append(args, limit, offset)
 
 	rows, err := i.queryContext(ctx, sqlStr, args...)
@@ -1573,13 +1592,15 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	for rows.Next() {
 		var n NoteSummary
 		var mtimeUnix int64
+		var updatedUnix int64
 		var ownerName string
 		var relPath string
-		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &n.UID, &ownerName); err != nil {
+		if err := rows.Scan(&relPath, &n.Title, &mtimeUnix, &n.UID, &n.Priority, &updatedUnix, &n.SectionRank, &ownerName); err != nil {
 			return nil, err
 		}
 		n.Path = joinOwnerPath(ownerName, relPath)
 		n.MTime = time.Unix(mtimeUnix, 0).UTC()
+		n.UpdatedAt = time.Unix(updatedUnix, 0).UTC()
 		notes = append(notes, n)
 	}
 	return notes, rows.Err()

@@ -4787,6 +4787,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	priorityNotes, todayNotes, otherNotes := splitHomeSections(homeNotes)
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), ownerName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -4807,30 +4808,34 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		title = ownerName
 	}
 	data := ViewData{
-		Title:            title,
-		ContentTemplate:  "home",
-		HomeNotes:        homeNotes,
-		HomeHasMore:      hasMore,
-		NextHomeOffset:   nextOffset,
-		HomeOwner:        ownerName,
-		Tags:             tags,
-		TagLinks:         tagLinks,
-		TodoCount:        todoCount,
-		DueCount:         dueCount,
-		ActiveTags:       urlTags,
-		TagQuery:         tagQuery,
-		FolderTree:       folderTree,
-		ActiveFolder:     activeFolder,
-		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:      filterQuery,
-		HomeURL:          baseURL,
-		ActiveDate:       activeDate,
-		DateQuery:        buildDateQuery(activeDate),
-		SearchQuery:      activeSearch,
-		SearchQueryParam: buildSearchQuery(activeSearch),
-		UpdateDays:       updateDays,
-		CalendarMonth:    calendar,
-		JournalSidebar:   journalSidebar,
+		Title:             title,
+		ContentTemplate:   "home",
+		HomeNotes:         homeNotes,
+		HomePriorityNotes: priorityNotes,
+		HomeTodayNotes:    todayNotes,
+		HomeOtherNotes:    otherNotes,
+		HomeHasMore:       hasMore,
+		NextHomeOffset:    nextOffset,
+		HomeOffset:        0,
+		HomeOwner:         ownerName,
+		Tags:              tags,
+		TagLinks:          tagLinks,
+		TodoCount:         todoCount,
+		DueCount:          dueCount,
+		ActiveTags:        urlTags,
+		TagQuery:          tagQuery,
+		FolderTree:        folderTree,
+		ActiveFolder:      activeFolder,
+		FolderQuery:       buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:       filterQuery,
+		HomeURL:           baseURL,
+		ActiveDate:        activeDate,
+		DateQuery:         buildDateQuery(activeDate),
+		SearchQuery:       activeSearch,
+		SearchQueryParam:  buildSearchQuery(activeSearch),
+		UpdateDays:        updateDays,
+		CalendarMonth:     calendar,
+		JournalSidebar:    journalSidebar,
 	}
 	applyCalendarLinks(&data, baseURL)
 	s.attachViewData(r, &data)
@@ -5938,20 +5943,25 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	priorityNotes, todayNotes, otherNotes := splitHomeSections(homeNotes)
 	data := ViewData{
-		HomeNotes:        homeNotes,
-		HomeHasMore:      hasMore,
-		NextHomeOffset:   nextOffset,
-		HomeOwner:        ownerName,
-		ActiveTags:       urlTags,
-		TagQuery:         buildTagsQuery(urlTags),
-		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:      queryWithout(baseURL, "d"),
-		HomeURL:          baseURL,
-		ActiveDate:       activeDate,
-		DateQuery:        buildDateQuery(activeDate),
-		SearchQuery:      activeSearch,
-		SearchQueryParam: buildSearchQuery(activeSearch),
+		HomeNotes:         homeNotes,
+		HomePriorityNotes: priorityNotes,
+		HomeTodayNotes:    todayNotes,
+		HomeOtherNotes:    otherNotes,
+		HomeHasMore:       hasMore,
+		NextHomeOffset:    nextOffset,
+		HomeOffset:        offset,
+		HomeOwner:         ownerName,
+		ActiveTags:        urlTags,
+		TagQuery:          buildTagsQuery(urlTags),
+		FolderQuery:       buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:       queryWithout(baseURL, "d"),
+		HomeURL:           baseURL,
+		ActiveDate:        activeDate,
+		DateQuery:         buildDateQuery(activeDate),
+		SearchQuery:       activeSearch,
+		SearchQueryParam:  buildSearchQuery(activeSearch),
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "home_notes", data)
@@ -7057,15 +7067,16 @@ func calendarReferenceDate(r *http.Request) time.Time {
 
 func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, activeDate string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string) ([]NoteCard, int, bool, error) {
 	notes, err := s.idx.NoteList(ctx, index.NoteListFilter{
-		Tags:        tags,
-		Date:        activeDate,
-		Query:       activeSearch,
-		Folder:      folder,
-		Root:        rootOnly,
-		JournalOnly: journalOnly,
-		OwnerName:   ownerName,
-		Limit:       homeNotesPageSize + 1,
-		Offset:      offset,
+		Tags:         tags,
+		Date:         activeDate,
+		Query:        activeSearch,
+		Folder:       folder,
+		Root:         rootOnly,
+		JournalOnly:  journalOnly,
+		OwnerName:    ownerName,
+		HomeSections: true,
+		Limit:        homeNotesPageSize + 1,
+		Offset:       offset,
 	})
 	if err != nil {
 		return nil, offset, false, err
@@ -7101,9 +7112,27 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 			FileName:    filepath.Base(note.Path),
 			Meta:        metaAttrs,
 			FolderLabel: folderLabel,
+			SectionRank: note.SectionRank,
 		})
 	}
 	return cards, offset + len(notes), hasMore, nil
+}
+
+func splitHomeSections(notes []NoteCard) ([]NoteCard, []NoteCard, []NoteCard) {
+	priority := make([]NoteCard, 0, len(notes))
+	today := make([]NoteCard, 0, len(notes))
+	others := make([]NoteCard, 0, len(notes))
+	for _, note := range notes {
+		switch note.SectionRank {
+		case 0:
+			priority = append(priority, note)
+		case 1:
+			today = append(today, note)
+		default:
+			others = append(others, note)
+		}
+	}
+	return priority, today, others
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {

@@ -35,8 +35,12 @@ type ViewData struct {
 	SearchResults        []index.SearchResult
 	RecentNotes          []index.NoteSummary
 	HomeNotes            []NoteCard
+	HomePriorityNotes    []NoteCard
+	HomeTodayNotes       []NoteCard
+	HomeOtherNotes       []NoteCard
 	HomeHasMore          bool
 	NextHomeOffset       int
+	HomeOffset           int
 	HomeOwner            string
 	Tags                 []index.TagSummary
 	UpdateDays           []index.UpdateDaySummary
@@ -193,6 +197,7 @@ type NoteCard struct {
 	RenderedHTML template.HTML
 	Meta         index.FrontmatterAttrs
 	FolderLabel  string
+	SectionRank  int
 }
 
 type JournalDay struct {
