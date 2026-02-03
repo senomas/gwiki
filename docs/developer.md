@@ -75,6 +75,21 @@ Key pieces:
 - `templates/note-edit-actions.html`: edit launcher UI.
 - `templates/note_edit_actions_entries.html`: dynamic entries (tags, actions, notes).
 
+## Edit command settings
+
+The edit textarea supports shorthand commands expanded on space. These are configurable per user via Settings and stored in `config.json`.
+
+Config keys and defaults:
+- `edit-command-trigger` (`!`): prefix for all commands.
+- `edit-command-todo` (`!`): trigger + token inserts `- [ ] `.
+- `edit-command-today` (`d`): trigger + token inserts today’s date.
+- `edit-command-date-base` (`d`): trigger + token + number inserts date offset (supports `+N`, `-N`, or `N`).
+- `edit-command-time` (`t`): trigger + token inserts current time (`HH:mm:ss`).
+
+Implementation notes:
+- Values are single characters and validated in `handleSettingsSave` via `validEditCommandToken`.
+- The edit page passes settings as `data-cmd-*` attributes on the textarea; JS in `templates/edit.html` builds the command strings from these values.
+
 ## Home index sections
 
 Home/index note feed is grouped into time/priority sections and rendered as collapsible blocks.

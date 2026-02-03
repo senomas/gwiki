@@ -27,15 +27,15 @@ Tip: on index/todo pages, navigation focuses note titles. On note pages it focus
 
 ## Edit Commands
 
-In the edit textarea, type a command and press space to expand it on the current line:
+In the edit textarea, type a command and press space to expand it on the current line. Commands are configurable in Settings (Appearance → Edit commands) using a trigger + token system. Defaults shown below.
 
+Defaults (trigger `!`):
 - `!!` → task checkbox (`- [ ] `)
 - `!d` → today’s date (e.g., `29 Jan 2026`)
 - `!d+N` → today plus N days (e.g., `!d+3`)
 - `!d-N` → today minus N days (e.g., `!d-2`)
 - `!dN` → today plus N days (alias of `!d+N`)
 - `!t` → current time (`HH:mm:ss`)
-- `!@` → open the edit quick launcher (useful on mobile)
 
 ## Groups
 
@@ -53,6 +53,13 @@ Valid access values are `rw` and `ro`. Users listed with `rw` can create and edi
 ## Settings
 
 Open Settings from the launcher. You can switch the list view between compact and full. Admin users also see a User Management section.
+
+Edit commands are configurable in Settings → Appearance. Each token is a single character:
+- Trigger: prefix for all commands (default `!`).
+- Todo token: trigger + token inserts checkbox (default `!` → `!!`).
+- Today token: trigger + token inserts today (default `d` → `!d`).
+- Date offset token: trigger + token + number inserts date with offset (default `d` → `!d+N`).
+- Time token: trigger + token inserts current time (default `t` → `!t`).
 
 Synchronization settings live here too. If the repo has git remotes, you can set a user and token per remote.
 
