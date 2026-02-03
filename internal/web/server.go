@@ -147,6 +147,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/toast/", s.handleToastDismiss)
 	s.mux.HandleFunc("/settings", s.handleSettings)
 	s.mux.HandleFunc("/settings/save", s.handleSettingsSave)
+	s.mux.HandleFunc("/settings/remotes/add", s.handleSettingsRemoteAdd)
+	s.mux.HandleFunc("/settings/remotes/remove", s.handleSettingsRemoteRemove)
 	s.mux.HandleFunc("/settings/users/create", s.handleSettingsUserCreate)
 	s.mux.HandleFunc("/settings/users/delete", s.handleSettingsUserDelete)
 	s.mux.HandleFunc("/sidebar", s.handleSidebar)

@@ -7052,6 +7052,119 @@ func gitOriginURL(repoPath string) string {
 	return ""
 }
 
+func validGitRemoteAlias(alias string) bool {
+	if alias == "" {
+		return false
+	}
+	for _, r := range alias {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func addGitRemote(ctx context.Context, repoPath, alias, url string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "remote", "add", alias, url)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git remote add failed: %s", msg)
+	}
+	return nil
+}
+
+func removeGitRemote(ctx context.Context, repoPath, alias string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "remote", "remove", alias)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git remote remove failed: %s", msg)
+	}
+	return nil
+}
+
+func upsertGitCredential(dataPath, owner, rawURL, user, token string) error {
+	dataPath = strings.TrimSpace(dataPath)
+	if dataPath == "" {
+		return fmt.Errorf("data path required")
+	}
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("invalid remote URL")
+	}
+	host := parsed.Host
+	credPath := filepath.Join(dataPath, owner+".cred")
+	entries := parseGitCredentialsFile(credPath)
+	next := make([]gitCredentialEntry, 0, len(entries)+1)
+	updated := false
+	for _, entry := range entries {
+		if entry.Host == host {
+			next = append(next, gitCredentialEntry{Host: host, User: user, Pass: token})
+			updated = true
+			continue
+		}
+		next = append(next, entry)
+	}
+	if !updated {
+		next = append(next, gitCredentialEntry{Host: host, User: user, Pass: token})
+	}
+	return writeGitCredentialsFile(credPath, next)
+}
+
+func removeGitCredential(dataPath, owner, host string) error {
+	if host == "" {
+		return nil
+	}
+	dataPath = strings.TrimSpace(dataPath)
+	if dataPath == "" {
+		return fmt.Errorf("data path required")
+	}
+	credPath := filepath.Join(dataPath, owner+".cred")
+	entries := parseGitCredentialsFile(credPath)
+	if len(entries) == 0 {
+		return nil
+	}
+	next := entries[:0]
+	for _, entry := range entries {
+		if entry.Host == host {
+			continue
+		}
+		next = append(next, entry)
+	}
+	return writeGitCredentialsFile(credPath, next)
+}
+
+func writeGitCredentialsFile(path string, entries []gitCredentialEntry) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Host == "" || entry.User == "" || entry.Pass == "" {
+			continue
+		}
+		u := &url.URL{
+			Scheme: "https",
+			User:   url.UserPassword(entry.User, entry.Pass),
+			Host:   entry.Host,
+		}
+		lines = append(lines, u.String())
+	}
+	content := strings.Join(lines, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	return fs.WriteFileAtomic(path, []byte(content), 0o600)
+}
+
 func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -7126,28 +7239,6 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
-	if dataPath != "" {
-		if err := os.MkdirAll(dataPath, 0o755); err != nil {
-			http.Error(w, "failed to save credentials", http.StatusInternalServerError)
-			return
-		}
-		if owner != "" {
-			credPath := filepath.Join(dataPath, owner+".cred")
-			remotes, err := listGitRemotes(ownerRepo)
-			if err == nil {
-				existing := parseGitCredentialsFile(credPath)
-				entries := buildGitCredentialEntries(remotes, existing, r.Form)
-				content := strings.Join(entries, "\n")
-				if content != "" {
-					content += "\n"
-				}
-				if err := fs.WriteFileAtomic(credPath, []byte(content), 0o600); err != nil {
-					http.Error(w, "failed to save credentials", http.StatusInternalServerError)
-					return
-				}
-			}
-		}
-	}
 	s.addToast(r, Toast{
 		ID:              uuid.NewString(),
 		Message:         "Settings saved.",
@@ -7159,6 +7250,181 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	if returnURL == "" {
 		returnURL = "/settings"
 	}
+	http.Redirect(w, r, returnURL, http.StatusSeeOther)
+}
+
+func (s *Server) handleSettingsRemoteAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	returnURL := sanitizeReturnURL(r, r.FormValue("return"))
+	if returnURL == "" {
+		returnURL = "/settings"
+	}
+	fail := func(message string) {
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         message,
+			Kind:            "error",
+			DurationSeconds: 6,
+			CreatedAt:       time.Now(),
+		})
+		http.Redirect(w, r, returnURL, http.StatusSeeOther)
+	}
+	alias := strings.TrimSpace(r.FormValue("alias"))
+	rawURL := strings.TrimSpace(r.FormValue("url"))
+	user := strings.TrimSpace(r.FormValue("user"))
+	token := strings.TrimSpace(r.FormValue("token"))
+	if rawURL == "" {
+		fail("Remote URL is required.")
+		return
+	}
+	owner := currentUserName(r.Context())
+	if owner == "" {
+		fail("Owner required.")
+		return
+	}
+	repoPath := s.ownerRepoPath(owner)
+	if repoPath == "" {
+		fail("Repo path required.")
+		return
+	}
+	remotes, err := listGitRemotes(repoPath)
+	if err != nil {
+		fail("Failed to list git remotes.")
+		return
+	}
+	if len(remotes) == 0 {
+		alias = "origin"
+	}
+	if alias == "" {
+		fail("Alias is required.")
+		return
+	}
+	if !validGitRemoteAlias(alias) {
+		fail("Invalid alias.")
+		return
+	}
+	for _, remote := range remotes {
+		if strings.EqualFold(remote.Alias, alias) {
+			fail("Remote alias already exists.")
+			return
+		}
+	}
+	if err := addGitRemote(r.Context(), repoPath, alias, rawURL); err != nil {
+		fail(err.Error())
+		return
+	}
+	if user != "" && token != "" {
+		dataPath := strings.TrimSpace(s.cfg.DataPath)
+		if dataPath == "" && s.cfg.RepoPath != "" {
+			dataPath = filepath.Join(s.cfg.RepoPath, ".wiki")
+		}
+		if absPath, err := filepath.Abs(dataPath); err == nil {
+			dataPath = absPath
+		}
+		if err := upsertGitCredential(dataPath, owner, rawURL, user, token); err != nil {
+			fail("Failed to save credentials.")
+			return
+		}
+	}
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "Remote added.",
+		Kind:            "success",
+		DurationSeconds: 4,
+		CreatedAt:       time.Now(),
+	})
+	http.Redirect(w, r, returnURL, http.StatusSeeOther)
+}
+
+func (s *Server) handleSettingsRemoteRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	returnURL := sanitizeReturnURL(r, r.FormValue("return"))
+	if returnURL == "" {
+		returnURL = "/settings"
+	}
+	fail := func(message string) {
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         message,
+			Kind:            "error",
+			DurationSeconds: 6,
+			CreatedAt:       time.Now(),
+		})
+		http.Redirect(w, r, returnURL, http.StatusSeeOther)
+	}
+	alias := strings.TrimSpace(r.FormValue("alias"))
+	if alias == "" {
+		fail("Alias required.")
+		return
+	}
+	owner := currentUserName(r.Context())
+	if owner == "" {
+		fail("Owner required.")
+		return
+	}
+	repoPath := s.ownerRepoPath(owner)
+	if repoPath == "" {
+		fail("Repo path required.")
+		return
+	}
+	remotes, err := listGitRemotes(repoPath)
+	if err != nil {
+		fail("Failed to list git remotes.")
+		return
+	}
+	host := ""
+	for _, remote := range remotes {
+		if strings.EqualFold(remote.Alias, alias) {
+			host = remote.Host
+			break
+		}
+	}
+	if host == "" {
+		fail("Remote not found.")
+		return
+	}
+	if err := removeGitRemote(r.Context(), repoPath, alias); err != nil {
+		fail(err.Error())
+		return
+	}
+	dataPath := strings.TrimSpace(s.cfg.DataPath)
+	if dataPath == "" && s.cfg.RepoPath != "" {
+		dataPath = filepath.Join(s.cfg.RepoPath, ".wiki")
+	}
+	if absPath, err := filepath.Abs(dataPath); err == nil {
+		dataPath = absPath
+	}
+	if err := removeGitCredential(dataPath, owner, host); err != nil {
+		fail("Failed to update credentials.")
+		return
+	}
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "Remote removed.",
+		Kind:            "success",
+		DurationSeconds: 4,
+		CreatedAt:       time.Now(),
+	})
 	http.Redirect(w, r, returnURL, http.StatusSeeOther)
 }
 
@@ -10829,7 +11095,6 @@ func listGitRemotes(repoDir string) ([]GitRemoteCred, error) {
 	}
 	lines := strings.Split(string(output), "\n")
 	seen := map[string]GitRemoteCred{}
-	foundOrigin := false
 	for _, line := range lines {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) < 2 {
@@ -10847,17 +11112,11 @@ func listGitRemotes(repoDir string) ([]GitRemoteCred, error) {
 		if _, ok := seen[key]; ok {
 			continue
 		}
-		if alias == "origin" {
-			foundOrigin = true
-		}
 		seen[key] = GitRemoteCred{
 			Alias: alias,
 			URL:   rawURL,
 			Host:  host,
 		}
-	}
-	if !foundOrigin {
-		seen["origin||"] = GitRemoteCred{Alias: "origin"}
 	}
 	out := make([]GitRemoteCred, 0, len(seen))
 	for _, value := range seen {
@@ -10921,43 +11180,6 @@ func mergeGitRemoteCreds(remotes []GitRemoteCred, creds []gitCredentialEntry) []
 		}
 	}
 	return remotes
-}
-
-func buildGitCredentialEntries(remotes []GitRemoteCred, existing []gitCredentialEntry, form url.Values) []string {
-	existingByHost := map[string]gitCredentialEntry{}
-	for _, cred := range existing {
-		if cred.Host == "" {
-			continue
-		}
-		existingByHost[cred.Host] = cred
-	}
-	entries := make([]string, 0, len(remotes))
-	for i, remote := range remotes {
-		if remote.Host == "" {
-			continue
-		}
-		user := strings.TrimSpace(form.Get(fmt.Sprintf("git_user_%d", i)))
-		token := strings.TrimSpace(form.Get(fmt.Sprintf("git_token_%d", i)))
-		hasToken := strings.TrimSpace(form.Get(fmt.Sprintf("git_token_has_%d", i))) != ""
-		if token == "" && hasToken {
-			if existingCred, ok := existingByHost[remote.Host]; ok {
-				token = existingCred.Pass
-				if user == "" {
-					user = existingCred.User
-				}
-			}
-		}
-		if user == "" || token == "" {
-			continue
-		}
-		u := &url.URL{
-			Scheme: "https",
-			User:   url.UserPassword(user, token),
-			Host:   remote.Host,
-		}
-		entries = append(entries, u.String())
-	}
-	return entries
 }
 
 func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {

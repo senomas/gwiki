@@ -55,44 +55,38 @@
         <summary class="js-form-summary cursor-pointer list-none text-2xl font-semibold" tabindex="0">Synchronization</summary>
         <div class="mt-6 space-y-4">
           {{if .GitRemoteCreds}}
-            {{range $i, $remote := .GitRemoteCreds}}
-              <div class="space-y-3 rounded-2xl border border-slate-800/70 bg-[#0f1216]/80 p-4">
-                <div class="text-xs uppercase tracking-[0.2em] text-slate-500">{{$remote.Alias}}</div>
-                <div class="text-xs text-slate-400">
-                  {{if $remote.URL}}{{$remote.URL}}{{else}}(no remote URL configured){{end}}
-                </div>
-                <div class="grid gap-3 sm:grid-cols-2">
-                  <div class="space-y-2">
-                    <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">User</label>
-                    <input
-                      class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-xs text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
-                      name="git_user_{{$i}}"
-                      form="settings-form"
-                      value="{{$remote.User}}"
-                      spellcheck="false"
-                    >
-                  </div>
-                  <div class="space-y-2">
-                    <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">Token</label>
-                    <input
-                      class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-xs text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
-                      name="git_token_{{$i}}"
-                      form="settings-form"
-                      type="password"
-                      value=""
-                      {{if $remote.HasToken}}placeholder="••••••••"{{end}}
-                      spellcheck="false"
-                    >
-                    {{if $remote.HasToken}}
-                      <input type="hidden" name="git_token_has_{{$i}}" value="1" form="settings-form">
-                    {{end}}
-                  </div>
-                </div>
-              </div>
-            {{end}}
+            <div class="overflow-hidden rounded-xl border border-slate-800/70 bg-[#0f1216]/80">
+              <table class="min-w-full text-left text-xs">
+                <thead class="bg-[#0c0f12] text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                  <tr>
+                    <th class="px-4 py-2 font-semibold">Alias</th>
+                    <th class="px-4 py-2 font-semibold">URL</th>
+                    <th class="px-4 py-2 font-semibold">Action</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/70 text-slate-300">
+                  {{range .GitRemoteCreds}}
+                    <tr>
+                      <td class="px-4 py-2 font-medium text-slate-100">{{.Alias}}</td>
+                      <td class="px-4 py-2 text-slate-400">{{if .URL}}{{.URL}}{{else}}—{{end}}</td>
+                      <td class="px-4 py-2">
+                        <form action="/settings/remotes/remove" method="post">
+                          <input type="hidden" name="alias" value="{{.Alias}}">
+                          <input type="hidden" name="return" value="/settings?s=synchronization">
+                          <button class="rounded-lg border border-red-700/70 bg-[#2a1212] px-3 py-1 text-[11px] font-semibold text-red-200 transition hover:border-red-500" type="submit">Remove</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
           {{else}}
             <p class="text-sm text-slate-500">No git remotes found.</p>
           {{end}}
+          <div class="flex justify-end">
+            <button type="button" class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" data-add-remote="true">Add remote</button>
+          </div>
         </div>
       </details>
       {{if .IsAdmin}}
@@ -193,6 +187,30 @@
                 </svg>
               </span>
             </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div id="remote-add-modal" class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/60 opacity-0 transition">
+      <div class="w-full max-w-lg rounded-2xl border border-slate-800/70 bg-[#111419] p-6 text-slate-200">
+        <div class="text-lg font-semibold text-slate-100">Add remote</div>
+        <p class="mt-2 text-sm text-slate-400">Add a git remote and optionally store credentials.</p>
+        <form id="remote-add-form" class="mt-4 space-y-3" action="/settings/remotes/add" method="post">
+          <input type="hidden" name="return" value="/settings?s=synchronization">
+          {{if eq (len .GitRemoteCreds) 0}}
+            <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="alias" value="origin" readonly>
+            <p class="text-xs text-slate-500">First remote is locked to origin.</p>
+          {{else}}
+            <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="alias" placeholder="Alias (e.g., origin)" autocomplete="off" required>
+          {{end}}
+          <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="url" placeholder="Remote URL" required>
+          <div class="grid grid-cols-2 gap-3">
+            <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="user" placeholder="User">
+            <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="token" type="password" placeholder="Token">
+          </div>
+          <div class="flex justify-end gap-2">
+            <button type="button" id="remote-add-cancel" class="rounded-lg border border-slate-700/70 bg-[#171a1f] px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-slate-500">Cancel</button>
+            <button type="submit" class="rounded-lg border border-emerald-700/70 bg-[#102219] px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500">Add</button>
           </div>
         </form>
       </div>
@@ -327,6 +345,32 @@
         if (event.target === createModal) {
           createModal.classList.add("pointer-events-none", "opacity-0");
           createModal.classList.remove("opacity-100");
+        }
+      });
+    }
+    var remoteModal = document.getElementById("remote-add-modal");
+    var remoteCancel = document.getElementById("remote-add-cancel");
+    if (remoteModal && remoteCancel) {
+      document.addEventListener("click", function (event) {
+        var trigger = event.target.closest("[data-add-remote]");
+        if (!trigger) {
+          return;
+        }
+        remoteModal.classList.remove("pointer-events-none", "opacity-0");
+        remoteModal.classList.add("opacity-100");
+        var firstRemoteInput = remoteModal.querySelector("input[name='alias']");
+        if (firstRemoteInput && !firstRemoteInput.hasAttribute("readonly")) {
+          firstRemoteInput.focus();
+        }
+      });
+      remoteCancel.addEventListener("click", function () {
+        remoteModal.classList.add("pointer-events-none", "opacity-0");
+        remoteModal.classList.remove("opacity-100");
+      });
+      remoteModal.addEventListener("click", function (event) {
+        if (event.target === remoteModal) {
+          remoteModal.classList.add("pointer-events-none", "opacity-0");
+          remoteModal.classList.remove("opacity-100");
         }
       });
     }
