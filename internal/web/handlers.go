@@ -6905,15 +6905,26 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) settingsUsersWithOrigin(ctx context.Context) []UserSummary {
-	users := s.auth.ListUsers()
-	if len(users) == 0 {
-		return users
+	if strings.TrimSpace(s.cfg.AuthFile) == "" {
+		return nil
 	}
+	fileUsers, err := auth.LoadFile(s.cfg.AuthFile)
+	if err != nil {
+		slog.Warn("load auth file", "err", err)
+		return nil
+	}
+	users := make([]UserSummary, 0, len(fileUsers))
+	for name, entry := range fileUsers {
+		users = append(users, UserSummary{
+			Name:  name,
+			Roles: entry.Roles,
+		})
+	}
+	sort.Slice(users, func(i, j int) bool {
+		return strings.ToLower(users[i].Name) < strings.ToLower(users[j].Name)
+	})
 	for i := range users {
 		repoPath := s.ownerRepoPath(users[i].Name)
-		if repoPath == "" {
-			repoPath = s.cfg.RepoPath
-		}
 		users[i].GitOrigin = gitOriginURL(repoPath)
 	}
 	return users
@@ -7054,35 +7065,56 @@ func (s *Server) handleSettingsUserDelete(w http.ResponseWriter, r *http.Request
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	returnURL := sanitizeReturnURL(r, r.FormValue("return"))
+	if returnURL == "" {
+		returnURL = "/settings"
+	}
+	fail := func(message string) {
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         message,
+			Kind:            "error",
+			DurationSeconds: 6,
+			CreatedAt:       time.Now(),
+		})
+		http.Redirect(w, r, returnURL, http.StatusSeeOther)
+	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		fail("Invalid request.")
 		return
 	}
 	userName := strings.TrimSpace(r.FormValue("username"))
 	confirm := strings.TrimSpace(r.FormValue("confirm"))
 	if userName == "" || confirm == "" {
-		http.Error(w, "username confirmation required", http.StatusBadRequest)
+		fail("Username confirmation required.")
 		return
 	}
 	if !strings.EqualFold(userName, confirm) {
-		http.Error(w, "confirmation does not match username", http.StatusBadRequest)
+		fail("Confirmation does not match username.")
 		return
 	}
 	if strings.EqualFold(userName, currentUserName(r.Context())) {
-		http.Error(w, "cannot delete current user", http.StatusBadRequest)
+		fail("Cannot delete current user.")
 		return
 	}
 	if strings.TrimSpace(s.cfg.AuthFile) == "" {
-		http.Error(w, "auth file not configured", http.StatusBadRequest)
+		fail("Auth file not configured.")
 		return
+	}
+	repoPath := s.ownerRepoPath(userName)
+	if repoPath != "" {
+		if err := os.RemoveAll(repoPath); err != nil {
+			fail("Failed to remove repo folder: " + err.Error())
+			return
+		}
 	}
 	removed, err := removeAuthUser(s.cfg.AuthFile, userName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		fail(err.Error())
 		return
 	}
 	if !removed {
-		http.Error(w, "user not found", http.StatusNotFound)
+		fail("User not found.")
 		return
 	}
 	if s.auth != nil {
@@ -7100,11 +7132,208 @@ func (s *Server) handleSettingsUserDelete(w http.ResponseWriter, r *http.Request
 		DurationSeconds: 4,
 		CreatedAt:       time.Now(),
 	})
+	http.Redirect(w, r, returnURL, http.StatusSeeOther)
+}
+
+func (s *Server) handleSettingsUserCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !isAdmin(r.Context()) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	returnURL := sanitizeReturnURL(r, r.FormValue("return"))
 	if returnURL == "" {
 		returnURL = "/settings"
 	}
+	fail := func(message string) {
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         message,
+			Kind:            "error",
+			DurationSeconds: 6,
+			CreatedAt:       time.Now(),
+		})
+		http.Redirect(w, r, returnURL, http.StatusSeeOther)
+	}
+	if err := r.ParseForm(); err != nil {
+		fail("Invalid request.")
+		return
+	}
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := strings.TrimSpace(r.FormValue("password"))
+	repoURL := strings.TrimSpace(r.FormValue("git_repo"))
+	gitUser := strings.TrimSpace(r.FormValue("git_user"))
+	gitToken := strings.TrimSpace(r.FormValue("git_token"))
+	if username == "" || password == "" || repoURL == "" || gitUser == "" || gitToken == "" {
+		fail("All fields are required.")
+		return
+	}
+	if _, ok := ownerHomeName("/" + username); !ok {
+		fail("Invalid username.")
+		return
+	}
+	if strings.TrimSpace(s.cfg.AuthFile) == "" {
+		fail("Auth file not configured.")
+		return
+	}
+	repoPath := filepath.Join(s.cfg.RepoPath, username)
+	if _, err := os.Stat(repoPath); err == nil {
+		fail("Repo already exists at " + repoPath + ".")
+		return
+	} else if !os.IsNotExist(err) {
+		fail("Failed to check repo path.")
+		return
+	}
+
+	dataPath := strings.TrimSpace(s.cfg.DataPath)
+	if dataPath == "" && s.cfg.RepoPath != "" {
+		dataPath = filepath.Join(s.cfg.RepoPath, ".wiki")
+	}
+	if dataPath == "" {
+		fail("Data path required.")
+		return
+	}
+	if absPath, err := filepath.Abs(dataPath); err == nil {
+		dataPath = absPath
+	}
+	if err := os.MkdirAll(dataPath, 0o755); err != nil {
+		fail("Failed to create data path.")
+		return
+	}
+	gitConfigPath := filepath.Join(dataPath, username+".gitconfig")
+	gitCredPath := filepath.Join(dataPath, username+".cred")
+	cleanup := func() {
+		_ = os.Remove(gitConfigPath)
+		_ = os.Remove(gitCredPath)
+		_ = os.RemoveAll(repoPath)
+	}
+	if err := writeGitConfig(gitConfigPath, gitCredPath); err != nil {
+		cleanup()
+		fail("Failed to prepare git config.")
+		return
+	}
+	credEntry, err := gitCredentialForRepo(repoURL, gitUser, gitToken)
+	if err != nil {
+		cleanup()
+		fail("Invalid git repo URL.")
+		return
+	}
+	if err := os.WriteFile(gitCredPath, []byte(credEntry+"\n"), 0o600); err != nil {
+		cleanup()
+		fail("Failed to save credentials.")
+		return
+	}
+
+	if err := cloneRepoWithCreds(r.Context(), repoURL, repoPath, dataPath, gitConfigPath, gitCredPath); err != nil {
+		cleanup()
+		fail(err.Error())
+		return
+	}
+	if err := addAuthUser(s.cfg.AuthFile, username, password); err != nil {
+		cleanup()
+		fail(err.Error())
+		return
+	}
+	if s.auth != nil {
+		dbUsers, err := s.idx.ListUsers(r.Context())
+		if err == nil {
+			_ = s.auth.ReloadWithExtra(dbUsers)
+		} else {
+			_ = s.auth.Reload()
+		}
+	}
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "User created: " + username,
+		Kind:            "success",
+		DurationSeconds: 4,
+		CreatedAt:       time.Now(),
+	})
 	http.Redirect(w, r, returnURL, http.StatusSeeOther)
+}
+
+func writeGitConfig(path string, credPath string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	content := fmt.Sprintf("[credential]\n\thelper = store --file=%s\n", credPath)
+	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+func gitCredentialForRepo(repoURL, user, token string) (string, error) {
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL == "" {
+		return "", fmt.Errorf("git repo required")
+	}
+	if !strings.Contains(repoURL, "://") {
+		repoURL = "https://" + repoURL
+	}
+	parsed, err := url.Parse(repoURL)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("invalid git repo URL")
+	}
+	parsed.User = url.UserPassword(user, token)
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func cloneRepoWithCreds(ctx context.Context, repoURL, repoPath, dataPath, gitConfigPath, gitCredPath string) error {
+	env := append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"HOME="+dataPath,
+		"GIT_CONFIG_GLOBAL="+gitConfigPath,
+		"GIT_CREDENTIALS_FILE="+gitCredPath,
+	)
+	cmd := exec.CommandContext(ctx, "git", "clone", repoURL, repoPath)
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git clone failed: %s", msg)
+	}
+	return nil
+}
+
+func addAuthUser(path string, username string, password string) error {
+	users, err := auth.LoadFile(path)
+	if err != nil {
+		return err
+	}
+	for user := range users {
+		if strings.EqualFold(user, username) {
+			return fmt.Errorf("user already exists")
+		}
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err == nil && info.Size() > 0 {
+		buf := make([]byte, 1)
+		if _, err := f.ReadAt(buf, info.Size()-1); err == nil && buf[0] != '\n' {
+			if _, err := f.WriteString("\n"); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = f.WriteString(username + ":" + hash + "\n")
+	return err
 }
 
 func removeAuthUser(path string, username string) (bool, error) {

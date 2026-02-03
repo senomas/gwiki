@@ -30,7 +30,7 @@ dev:
 		if [ ! -f ./tmp/main ]; then \
 			$(MAKE) dev-build; \
 		fi; \
-		WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) WIKI_LOG_LEVEL=debug WIKI_LOG_PRETTY=1 reflex -s -r 'tmp/main$$' -- sh -lc './tmp/main'; \
+		WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) WIKI_LOG_LEVEL=debug WIKI_LOG_PRETTY=1 WIKI_AUTH_SECRET=dev-secret-key reflex -s -r 'tmp/main$$' -- sh -lc './tmp/main'; \
 	else \
 		echo "reflex is not installed. Install with:"; \
 		echo "  go install github.com/cespare/reflex@latest"; \
