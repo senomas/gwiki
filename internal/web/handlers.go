@@ -6947,6 +6947,15 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		if recheckErr != nil {
 			err = recheckErr
 		}
+		if authErr := s.refreshAuthSources(r.Context()); authErr != nil {
+			slog.Warn("sync refresh auth sources", "err", authErr)
+			output += fmt.Sprintf("\nauth: refresh failed: %v", authErr)
+			if err == nil {
+				err = authErr
+			}
+		} else {
+			output += "\nauth: refreshed"
+		}
 	}
 	duration := time.Since(start).Round(time.Millisecond).String()
 	data := ViewData{

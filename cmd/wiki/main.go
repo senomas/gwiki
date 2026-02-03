@@ -116,7 +116,7 @@ func main() {
 		slog.Error("auth init", "err", err)
 		os.Exit(1)
 	}
-	startGitScheduler(cfg, idx, users)
+	startGitScheduler(cfg, idx)
 	slog.Info("listening", "addr", cfg.ListenAddr)
 	if err := http.ListenAndServe(cfg.ListenAddr, srv.Handler()); err != nil {
 		slog.Error("server error", "err", err)
@@ -169,7 +169,7 @@ type syncTarget struct {
 	Path  string
 }
 
-func startGitScheduler(cfg config.Config, idx *index.Index, users []string) {
+func startGitScheduler(cfg config.Config, idx *index.Index) {
 	if cfg.GitSchedule <= 0 {
 		slog.Info("git scheduler disabled")
 		return
@@ -182,13 +182,18 @@ func startGitScheduler(cfg config.Config, idx *index.Index, users []string) {
 		for {
 			select {
 			case <-ticker.C:
-				runScheduledSync(ctx, cfg, idx, users)
+				runScheduledSync(ctx, cfg, idx)
 			}
 		}
 	}()
 }
 
-func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, users []string) {
+func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index) {
+	users, err := loadAuthUsers(cfg)
+	if err != nil {
+		slog.Warn("sync schedule: load auth users failed", "err", err)
+		return
+	}
 	targets, err := discoverSyncTargets(cfg.RepoPath, users)
 	if err != nil {
 		slog.Warn("sync schedule: list targets failed", "err", err)
@@ -242,7 +247,48 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 			return
 		}
 		slog.Info("sync schedule recheck", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+		if err := refreshAuthSources(ctx, cfg, idx, users); err != nil {
+			slog.Warn("sync schedule auth refresh failed", "err", err)
+		}
 	}
+}
+
+func loadAuthUsers(cfg config.Config) ([]string, error) {
+	users := make([]string, 0)
+	if cfg.AuthFile != "" {
+		fileUsers, err := auth.LoadFile(cfg.AuthFile)
+		if err != nil {
+			return nil, err
+		}
+		for user := range fileUsers {
+			users = append(users, user)
+		}
+	}
+	if cfg.AuthUser != "" {
+		users = append(users, cfg.AuthUser)
+	}
+	return users, nil
+}
+
+func refreshAuthSources(ctx context.Context, cfg config.Config, idx *index.Index, users []string) error {
+	accessFile, err := auth.LoadAccessFromRepo(cfg.RepoPath)
+	if err != nil {
+		return err
+	}
+	accessRules := make(map[string][]index.AccessPathRule, len(accessFile))
+	for owner, rules := range accessFile {
+		list := make([]index.AccessPathRule, 0, len(rules))
+		for _, rule := range rules {
+			members := make([]index.AccessMember, 0, len(rule.Members))
+			for _, member := range rule.Members {
+				members = append(members, index.AccessMember{User: member.User, Access: member.Access})
+			}
+			list = append(list, index.AccessPathRule{Path: rule.Path, Members: members})
+		}
+		accessRules[owner] = list
+	}
+	_, _, err = idx.SyncAuthSources(ctx, users, accessRules)
+	return err
 }
 
 func pruneEmptyNotesDirs(repoPath string) (int, error) {
