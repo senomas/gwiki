@@ -1359,7 +1359,11 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	tagQuery := buildTagsQuery(urlTags)
 	filterQuery := queryWithout(baseURL, "d")
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
-	folders, hasRoot, err := s.idx.ListFolders(r.Context(), "")
+	ownerFolder := ""
+	if ownerName, ok := ownerHomeName(basePath); ok {
+		ownerFolder = ownerName
+	}
+	folders, hasRoot, err := s.idx.ListFolders(r.Context(), ownerFolder)
 	if err != nil {
 		return err
 	}
