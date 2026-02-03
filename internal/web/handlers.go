@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/alecthomas/chroma/v2"
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
@@ -255,6 +256,11 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 		slog.Warn("load user config", "err", err)
 	}
 	data.CompactNoteList = cfg.CompactNoteListValue()
+	data.EditCommandTrigger = cfg.EditCommandTriggerValue()
+	data.EditCommandTodo = cfg.EditCommandTodoValue()
+	data.EditCommandToday = cfg.EditCommandTodayValue()
+	data.EditCommandTime = cfg.EditCommandTimeValue()
+	data.EditCommandDateBase = cfg.EditCommandDateBaseValue()
 	if data.IsAuthenticated {
 		groups, err := s.idx.GroupsForUser(r.Context(), data.CurrentUser.Name)
 		if err != nil {
@@ -276,6 +282,22 @@ func hasRole(roles []string, role string) bool {
 		}
 	}
 	return false
+}
+
+func validEditCommandToken(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if len([]rune(value)) != 1 {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func currentUserName(ctx context.Context) string {
@@ -6652,6 +6674,30 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid list view", http.StatusBadRequest)
 		return
 	}
+	trigger := strings.TrimSpace(r.Form.Get("edit_command_trigger"))
+	todoToken := strings.TrimSpace(r.Form.Get("edit_command_todo"))
+	todayToken := strings.TrimSpace(r.Form.Get("edit_command_today"))
+	timeToken := strings.TrimSpace(r.Form.Get("edit_command_time"))
+	dateBaseToken := strings.TrimSpace(r.Form.Get("edit_command_date_base"))
+	if trigger == "" {
+		trigger = "!"
+	}
+	if todoToken == "" {
+		todoToken = "!"
+	}
+	if todayToken == "" {
+		todayToken = "d"
+	}
+	if timeToken == "" {
+		timeToken = "t"
+	}
+	if dateBaseToken == "" {
+		dateBaseToken = "d"
+	}
+	if !validEditCommandToken(trigger) || !validEditCommandToken(todoToken) || !validEditCommandToken(todayToken) || !validEditCommandToken(timeToken) || !validEditCommandToken(dateBaseToken) {
+		http.Error(w, "invalid edit command tokens", http.StatusBadRequest)
+		return
+	}
 	owner := currentUserName(r.Context())
 	if owner == "" {
 		http.Error(w, "owner required", http.StatusBadRequest)
@@ -6676,6 +6722,11 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	val := mode == "compact"
 	cfg.CompactNoteList = &val
+	cfg.EditCommandTrigger = trigger
+	cfg.EditCommandTodo = todoToken
+	cfg.EditCommandToday = todayToken
+	cfg.EditCommandTime = timeToken
+	cfg.EditCommandDateBase = dateBaseToken
 	if err := s.saveUserConfig(r.Context(), owner, cfg); err != nil {
 		http.Error(w, "failed to save settings", http.StatusInternalServerError)
 		return

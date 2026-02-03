@@ -51,7 +51,7 @@
         <input type="hidden" name="return_url" value="{{.ReturnURL}}">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
         <div class="relative">
-          <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" id="note-content" name="content">{{.RawContent}}</textarea>
+          <textarea class="min-h-[60vh] w-full rounded-xl border border-slate-800/80 bg-[#0f1216] p-4 font-mono text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" id="note-content" name="content" data-cmd-trigger="{{.EditCommandTrigger}}" data-cmd-todo="{{.EditCommandTodo}}" data-cmd-today="{{.EditCommandToday}}" data-cmd-time="{{.EditCommandTime}}" data-cmd-date-base="{{.EditCommandDateBase}}">{{.RawContent}}</textarea>
           <div id="tag-suggest" class="absolute z-10 hidden" aria-live="polite"></div>
         </div>
         {{if .OwnerOptions}}
@@ -192,6 +192,15 @@
         textarea.focus();
         textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
       }, 0);
+      var cmdTrigger = (textarea.getAttribute("data-cmd-trigger") || "!").trim() || "!";
+      var cmdTodoToken = (textarea.getAttribute("data-cmd-todo") || "!").trim() || "!";
+      var cmdTodayToken = (textarea.getAttribute("data-cmd-today") || "d").trim() || "d";
+      var cmdTimeToken = (textarea.getAttribute("data-cmd-time") || "t").trim() || "t";
+      var cmdDateBaseToken = (textarea.getAttribute("data-cmd-date-base") || "d").trim() || "d";
+      var cmdTodo = cmdTrigger + cmdTodoToken;
+      var cmdToday = cmdTrigger + cmdTodayToken;
+      var cmdDateBase = cmdTrigger + cmdDateBaseToken;
+      var cmdTime = cmdTrigger + cmdTimeToken;
       var commandState = {
         active: false,
         start: 0
@@ -221,15 +230,15 @@
           cmdStart = -1;
         }
         if (!commandState.active) {
-          var lastBang = line.lastIndexOf("!");
-          if (lastBang === -1) {
+          var lastTrigger = line.lastIndexOf(cmdTrigger);
+          if (lastTrigger === -1) {
             return;
           }
-          var bangIndex = lastBang;
-          if (lastBang > 0 && line[lastBang - 1] === "!") {
-            bangIndex = lastBang - 1;
+          var triggerIndex = lastTrigger;
+          if (cmdTodoToken === cmdTrigger && lastTrigger > 0 && line[lastTrigger - 1] === cmdTrigger) {
+            triggerIndex = lastTrigger - 1;
           }
-          cmdStart = lineStart + bangIndex;
+          cmdStart = lineStart + triggerIndex;
           commandState.active = true;
           commandState.start = cmdStart;
         }
@@ -250,14 +259,15 @@
         }
         var lineBeforeCmd = line.slice(0, cmdStart - lineStart).trim();
         var replacement = "";
-        if (cmdTrim === "!!" && lineBeforeCmd === "") {
+        if (cmdTrim === cmdTodo && lineBeforeCmd === "") {
           replacement = line.slice(0, cmdStart - lineStart) + "- [ ] ";
-        } else if (cmdTrim === "!d") {
+        } else if (cmdTrim === cmdToday) {
           var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
           var now = new Date();
           replacement = line.slice(0, cmdStart - lineStart) + now.getDate() + " " + months[now.getMonth()] + " " + now.getFullYear() + " ";
-        } else if (cmdTrim && cmdTrim.indexOf("!d") === 0) {
-          var match = cmdTrim.match(/^!d([+-]?)(\d+)$/);
+        } else if (cmdTrim && cmdTrim.indexOf(cmdDateBase) === 0) {
+          var suffix = cmdTrim.slice(cmdDateBase.length);
+          var match = suffix.match(/^([+-]?)(\d+)$/);
           if (match) {
             var sign = match[1] || "+";
             var amount = parseInt(match[2], 10);
@@ -271,7 +281,7 @@
               replacement = line.slice(0, cmdStart - lineStart) + base.getDate() + " " + months[base.getMonth()] + " " + base.getFullYear() + " ";
             }
           }
-        } else if (cmdTrim === "!t") {
+        } else if (cmdTrim === cmdTime) {
           var nowTime = new Date();
           var pad = function (value) {
             return String(value).padStart(2, "0");

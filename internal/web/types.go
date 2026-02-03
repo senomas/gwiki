@@ -102,6 +102,11 @@ type ViewData struct {
 	BrokenLinks          []BrokenLinkGroup
 	BuildVersion         string
 	CompactNoteList      bool
+	EditCommandTrigger   string
+	EditCommandTodo      string
+	EditCommandToday     string
+	EditCommandTime      string
+	EditCommandDateBase  string
 	ToastItems           []Toast
 	Groups               []string
 	SettingsUsers        []UserSummary

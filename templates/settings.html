@@ -19,6 +19,36 @@
             </select>
             <p class="text-xs text-slate-500">Compact hides long note bodies in lists.</p>
           </div>
+          <div class="space-y-3">
+            <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Edit commands</label>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="space-y-2">
+                <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">Trigger</label>
+                <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="edit_command_trigger" maxlength="1" value="{{.EditCommandTrigger}}">
+                <p class="text-xs text-slate-500">Single character prefix.</p>
+              </div>
+              <div class="space-y-2">
+                <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">Todo token</label>
+                <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="edit_command_todo" maxlength="1" value="{{.EditCommandTodo}}">
+                <p class="text-xs text-slate-500">Example: trigger + token inserts checkbox.</p>
+              </div>
+              <div class="space-y-2">
+                <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">Today token</label>
+                <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="edit_command_today" maxlength="1" value="{{.EditCommandToday}}">
+                <p class="text-xs text-slate-500">Example: trigger + token inserts today.</p>
+              </div>
+              <div class="space-y-2">
+                <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">Date offset token</label>
+                <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="edit_command_date_base" maxlength="1" value="{{.EditCommandDateBase}}">
+                <p class="text-xs text-slate-500">Example: trigger + token + 3 = today + 3 days.</p>
+              </div>
+              <div class="space-y-2">
+                <label class="block text-[10px] uppercase tracking-[0.2em] text-slate-500">Time token</label>
+                <input class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="edit_command_time" maxlength="1" value="{{.EditCommandTime}}">
+                <p class="text-xs text-slate-500">Example: trigger + token inserts current time.</p>
+              </div>
+            </div>
+          </div>
         </form>
       </details>
       <details class="js-settings-accordion rounded-2xl border border-slate-800/70 bg-[#121417]/60 p-6 text-sm text-slate-400">
