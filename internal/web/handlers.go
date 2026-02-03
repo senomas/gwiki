@@ -42,6 +42,7 @@ import (
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 
+	"gwiki/internal/auth"
 	"gwiki/internal/index"
 	"gwiki/internal/storage/fs"
 	"gwiki/internal/syncer"
@@ -5067,6 +5068,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.views.RenderPage(w, data)
 		return
 	}
+	if err := s.refreshAuthSources(r.Context()); err != nil {
+		slog.Warn("refresh auth sources", "err", err)
+		data := ViewData{
+			Title:           "Login",
+			ContentTemplate: "login",
+			ErrorMessage:    "failed to refresh auth sources",
+			ReturnURL:       returnTo,
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderPage(w, data)
+		return
+	}
 	if !s.auth.Authenticate(user, pass) {
 		data := ViewData{
 			Title:           "Login",
@@ -5099,6 +5112,61 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, returnTo, http.StatusSeeOther)
+}
+
+func (s *Server) refreshAuthSources(ctx context.Context) error {
+	if s.auth == nil {
+		return nil
+	}
+	users := make([]string, 0)
+	if s.cfg.AuthFile != "" {
+		fileUsers, err := auth.LoadFile(s.cfg.AuthFile)
+		if err != nil {
+			return err
+		}
+		for user := range fileUsers {
+			users = append(users, user)
+		}
+		slog.Debug("auth reload users from file", "count", len(users))
+	}
+	if s.cfg.AuthUser != "" {
+		users = append(users, s.cfg.AuthUser)
+	}
+	groupFile, err := auth.LoadGroupsFromRepo(s.cfg.RepoPath)
+	if err != nil {
+		return err
+	}
+	slog.Debug("auth reload groups from repo", "count", len(groupFile))
+	groupMembers := make(map[string][]index.GroupMember, len(groupFile))
+	for group, members := range groupFile {
+		list := make([]index.GroupMember, 0, len(members))
+		for _, member := range members {
+			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
+		}
+		groupMembers[group] = list
+	}
+	dbUsers, err := s.idx.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	slog.Debug("auth reload users from db", "count", len(dbUsers))
+	if err := s.auth.ReloadWithExtra(dbUsers); err != nil {
+		return err
+	}
+	stats, err := s.idx.SyncOwnersWithStats(ctx, users, groupMembers)
+	if err != nil {
+		return err
+	}
+	slog.Debug(
+		"auth reload sync owners",
+		"users_in_file", stats.UsersInFile,
+		"users_added", stats.UsersAdded,
+		"groups_added", stats.GroupsAdded,
+		"members_added", stats.MembersAdded,
+		"members_updated", stats.MembersUpdated,
+		"members_removed", stats.MembersRemoved,
+	)
+	return nil
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

@@ -66,7 +66,10 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 	if strings.TrimSpace(userName) == "" {
 		userName = "system"
 	}
-	actorID, err := i.ensureUser(ctx, userName)
+	if _, err := i.ensureUser(ctx, userName); err != nil {
+		return 0, err
+	}
+	actorID, err := i.userIDByName(ctx, userName)
 	if err != nil {
 		return 0, err
 	}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gwiki/internal/auth"
@@ -26,30 +27,17 @@ type authEntry struct {
 }
 
 type Auth struct {
+	mu     sync.RWMutex
 	users  map[string]authEntry
 	secret []byte
+	cfg    config.Config
 }
 
 func newAuth(cfg config.Config) (*Auth, error) {
-	users := make(map[string]authEntry)
-
-	if cfg.AuthFile != "" {
-		fileUsers, err := auth.LoadFile(cfg.AuthFile)
-		if err != nil {
-			return nil, err
-		}
-		for user, entry := range fileUsers {
-			users[user] = authEntry{hash: entry.Hash, roles: entry.Roles}
-		}
+	users, err := loadAuthUsers(cfg)
+	if err != nil {
+		return nil, err
 	}
-
-	if cfg.AuthUser != "" || cfg.AuthPass != "" {
-		if cfg.AuthUser == "" || cfg.AuthPass == "" {
-			return nil, errors.New("WIKI_AUTH_USER and WIKI_AUTH_PASS must be set together")
-		}
-		users[cfg.AuthUser] = authEntry{plain: cfg.AuthPass}
-	}
-
 	if len(users) == 0 {
 		return nil, nil
 	}
@@ -61,7 +49,76 @@ func newAuth(cfg config.Config) (*Auth, error) {
 	return &Auth{
 		users:  users,
 		secret: secret,
+		cfg:    cfg,
 	}, nil
+}
+
+func (a *Auth) Reload() error {
+	users, err := loadAuthUsers(a.cfg)
+	if err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return errors.New("no auth users configured")
+	}
+	secret, err := authSecret(a.cfg)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.users = users
+	a.secret = secret
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *Auth) ReloadWithExtra(extraUsers []string) error {
+	users, err := loadAuthUsers(a.cfg)
+	if err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return errors.New("no auth users configured")
+	}
+	for _, name := range extraUsers {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := users[name]; exists {
+			continue
+		}
+		users[name] = authEntry{}
+	}
+	secret, err := authSecret(a.cfg)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.users = users
+	a.secret = secret
+	a.mu.Unlock()
+	return nil
+}
+
+func loadAuthUsers(cfg config.Config) (map[string]authEntry, error) {
+	users := make(map[string]authEntry)
+	if cfg.AuthFile != "" {
+		fileUsers, err := auth.LoadFile(cfg.AuthFile)
+		if err != nil {
+			return nil, err
+		}
+		for user, entry := range fileUsers {
+			users[user] = authEntry{hash: entry.Hash, roles: entry.Roles}
+		}
+	}
+	if cfg.AuthUser != "" || cfg.AuthPass != "" {
+		if cfg.AuthUser == "" || cfg.AuthPass == "" {
+			return nil, errors.New("WIKI_AUTH_USER and WIKI_AUTH_PASS must be set together")
+		}
+		users[cfg.AuthUser] = authEntry{plain: cfg.AuthPass}
+	}
+	return users, nil
 }
 
 func (a *Auth) Middleware(next http.Handler) http.Handler {
@@ -77,8 +134,13 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 }
 
 func (a *Auth) verify(user, pass string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	entry, ok := a.users[user]
 	if !ok {
+		return false
+	}
+	if entry.hash == nil && entry.plain == "" {
 		return false
 	}
 	if entry.hash != nil {
@@ -92,6 +154,8 @@ func (a *Auth) Authenticate(user, pass string) bool {
 }
 
 func (a *Auth) rolesForUser(user string) []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	entry, ok := a.users[user]
 	if !ok || len(entry.roles) == 0 {
 		return nil
@@ -102,6 +166,8 @@ func (a *Auth) rolesForUser(user string) []string {
 }
 
 func (a *Auth) ListUsers() []UserSummary {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	if a == nil || len(a.users) == 0 {
 		return nil
 	}
@@ -118,12 +184,15 @@ func (a *Auth) ListUsers() []UserSummary {
 }
 
 func (a *Auth) CreateToken(user string) (string, error) {
+	a.mu.RLock()
+	secret := a.secret
+	a.mu.RUnlock()
 	claims := jwtClaims{
 		Sub: user,
 		Iat: time.Now().Unix(),
 		Exp: time.Now().Add(24 * time.Hour).Unix(),
 	}
-	return signJWT(claims, a.secret)
+	return signJWT(claims, secret)
 }
 
 func (a *Auth) tokenUser(r *http.Request) (string, bool) {
@@ -131,7 +200,10 @@ func (a *Auth) tokenUser(r *http.Request) (string, bool) {
 	if err != nil || cookie.Value == "" {
 		return "", false
 	}
-	claims, err := parseJWT(cookie.Value, a.secret)
+	a.mu.RLock()
+	secret := a.secret
+	a.mu.RUnlock()
+	claims, err := parseJWT(cookie.Value, secret)
 	if err != nil {
 		return "", false
 	}
