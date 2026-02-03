@@ -367,7 +367,7 @@ func LogGraphWithOptions(ctx context.Context, repoPath string, limit int, opts O
 		"GIT_CREDENTIALS_FILE="+gitCredentialsFile,
 	)
 	var output bytes.Buffer
-	_, err := runGitCommand(ctx, repoDir, env, &output, "git", "log", "--graph", "--decorate", "--all", "-n", strconv.Itoa(limit))
+	_, err := runGitCommand(ctx, repoDir, env, &output, "git", "log", "--graph", "--decorate", "--no-walk", "--all", "-n", strconv.Itoa(limit))
 	return output.String(), err
 }
 
