@@ -176,16 +176,11 @@
     <div id="user-create-modal" class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/60 opacity-0 transition">
       <div class="w-full max-w-lg rounded-2xl border border-slate-800/70 bg-[#111419] p-6 text-slate-200">
         <div class="text-lg font-semibold text-slate-100">Create user</div>
-        <p class="mt-2 text-sm text-slate-400">Creates a new user, clones the repo, and updates auth.</p>
+        <p class="mt-2 text-sm text-slate-400">Creates a new user, initializes a repo, and updates auth.</p>
         <form id="user-create-form" class="mt-4 space-y-3" action="/settings/users/create" method="post">
           <input type="hidden" name="return" value="/settings">
           <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="username" placeholder="Username" autocomplete="off" required>
           <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="password" type="password" placeholder="Password" required>
-          <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="git_repo" placeholder="Git repo URL" required>
-          <div class="grid grid-cols-2 gap-3">
-            <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="git_user" placeholder="Git user" required>
-            <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="git_token" type="password" placeholder="Git token" required>
-          </div>
           <div class="flex justify-end gap-2">
             <button type="button" id="user-create-cancel" class="rounded-lg border border-slate-700/70 bg-[#171a1f] px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-slate-500">Cancel</button>
             <button type="submit" class="rounded-lg border border-emerald-700/70 bg-[#102219] px-3 py-2 text-xs font-semibold text-emerald-200 transition hover:border-emerald-500" data-create-user-submit>

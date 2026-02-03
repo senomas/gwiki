@@ -7167,10 +7167,7 @@ func (s *Server) handleSettingsUserCreate(w http.ResponseWriter, r *http.Request
 	}
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := strings.TrimSpace(r.FormValue("password"))
-	repoURL := strings.TrimSpace(r.FormValue("git_repo"))
-	gitUser := strings.TrimSpace(r.FormValue("git_user"))
-	gitToken := strings.TrimSpace(r.FormValue("git_token"))
-	if username == "" || password == "" || repoURL == "" || gitUser == "" || gitToken == "" {
+	if username == "" || password == "" {
 		fail("All fields are required.")
 		return
 	}
@@ -7190,47 +7187,14 @@ func (s *Server) handleSettingsUserCreate(w http.ResponseWriter, r *http.Request
 		fail("Failed to check repo path.")
 		return
 	}
-
-	dataPath := strings.TrimSpace(s.cfg.DataPath)
-	if dataPath == "" && s.cfg.RepoPath != "" {
-		dataPath = filepath.Join(s.cfg.RepoPath, ".wiki")
-	}
-	if dataPath == "" {
-		fail("Data path required.")
-		return
-	}
-	if absPath, err := filepath.Abs(dataPath); err == nil {
-		dataPath = absPath
-	}
-	if err := os.MkdirAll(dataPath, 0o755); err != nil {
-		fail("Failed to create data path.")
-		return
-	}
-	gitConfigPath := filepath.Join(dataPath, username+".gitconfig")
-	gitCredPath := filepath.Join(dataPath, username+".cred")
 	cleanup := func() {
-		_ = os.Remove(gitConfigPath)
-		_ = os.Remove(gitCredPath)
 		_ = os.RemoveAll(repoPath)
 	}
-	if err := writeGitConfig(gitConfigPath, gitCredPath); err != nil {
-		cleanup()
-		fail("Failed to prepare git config.")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		fail("Failed to create repo folder.")
 		return
 	}
-	credEntry, err := gitCredentialForRepo(repoURL, gitUser, gitToken)
-	if err != nil {
-		cleanup()
-		fail("Invalid git repo URL.")
-		return
-	}
-	if err := os.WriteFile(gitCredPath, []byte(credEntry+"\n"), 0o600); err != nil {
-		cleanup()
-		fail("Failed to save credentials.")
-		return
-	}
-
-	if err := cloneRepoWithCreds(r.Context(), repoURL, repoPath, dataPath, gitConfigPath, gitCredPath); err != nil {
+	if err := initRepo(r.Context(), repoPath); err != nil {
 		cleanup()
 		fail(err.Error())
 		return
@@ -7258,48 +7222,15 @@ func (s *Server) handleSettingsUserCreate(w http.ResponseWriter, r *http.Request
 	http.Redirect(w, r, returnURL, http.StatusSeeOther)
 }
 
-func writeGitConfig(path string, credPath string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	content := fmt.Sprintf("[credential]\n\thelper = store --file=%s\n", credPath)
-	return os.WriteFile(path, []byte(content), 0o600)
-}
-
-func gitCredentialForRepo(repoURL, user, token string) (string, error) {
-	repoURL = strings.TrimSpace(repoURL)
-	if repoURL == "" {
-		return "", fmt.Errorf("git repo required")
-	}
-	if !strings.Contains(repoURL, "://") {
-		repoURL = "https://" + repoURL
-	}
-	parsed, err := url.Parse(repoURL)
-	if err != nil || parsed.Host == "" {
-		return "", fmt.Errorf("invalid git repo URL")
-	}
-	parsed.User = url.UserPassword(user, token)
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String(), nil
-}
-
-func cloneRepoWithCreds(ctx context.Context, repoURL, repoPath, dataPath, gitConfigPath, gitCredPath string) error {
-	env := append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"HOME="+dataPath,
-		"GIT_CONFIG_GLOBAL="+gitConfigPath,
-		"GIT_CREDENTIALS_FILE="+gitCredPath,
-	)
-	cmd := exec.CommandContext(ctx, "git", "clone", repoURL, repoPath)
-	cmd.Env = env
+func initRepo(ctx context.Context, repoPath string) error {
+	cmd := exec.CommandContext(ctx, "git", "init", repoPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(output))
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("git clone failed: %s", msg)
+		return fmt.Errorf("git init failed: %s", msg)
 	}
 	return nil
 }
