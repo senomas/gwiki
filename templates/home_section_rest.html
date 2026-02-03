@@ -1,0 +1,56 @@
+{{define "home_section_rest"}}
+{{if .HomeWeekNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Week ({{len .HomeWeekNotes}} notes)</summary>
+  <div class="space-y-4 pt-2">
+  {{range .HomeWeekNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+</details>
+{{end}}
+
+{{if .HomeMonthNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Month ({{len .HomeMonthNotes}} notes)</summary>
+  <div class="space-y-4 pt-2">
+  {{range .HomeMonthNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+</details>
+{{end}}
+
+{{if .HomeYearNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Year ({{len .HomeYearNotes}} notes)</summary>
+  <div class="space-y-4 pt-2">
+  {{range .HomeYearNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+</details>
+{{end}}
+
+{{if .HomeLastYearNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Last Year ({{len .HomeLastYearNotes}} notes)</summary>
+  <div class="space-y-4 pt-2">
+  {{range .HomeLastYearNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+</details>
+{{end}}
+
+{{if .HomeOtherNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Others ({{len .HomeOtherNotes}} notes)</summary>
+  <div class="space-y-4 pt-2">
+  {{range .HomeOtherNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+</details>
+{{end}}
+{{end}}

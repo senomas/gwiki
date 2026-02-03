@@ -158,6 +158,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/search", s.handleSearch)
 	s.mux.HandleFunc("/notes/new", s.handleNewNote)
 	s.mux.HandleFunc("/notes/page", s.handleHomeNotesPage)
+	s.mux.HandleFunc("/notes/section", s.handleHomeNotesSection)
 	s.mux.HandleFunc("/notes/", s.handleNotes)
 	s.mux.HandleFunc("/daily/", s.handleDaily)
 	s.mux.HandleFunc("/journal/year/", s.handleJournalYear)

@@ -4919,12 +4919,22 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	tagQuery := buildTagsQuery(urlTags)
 	filterQuery := queryWithout(baseURL, "d")
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
-	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), 0, noteTags, activeDate, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+	priorityNotes, err := s.loadHomeSectionNotes(r.Context(), "priority", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	priorityNotes, todayNotes, plannedNotes, weekNotes, monthNotes, yearNotes, lastYearNotes, otherNotes := splitHomeSections(homeNotes)
+	todayNotes, err := s.loadHomeSectionNotes(r.Context(), "today", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	plannedNotes := []NoteCard(nil)
+	weekNotes := []NoteCard(nil)
+	monthNotes := []NoteCard(nil)
+	yearNotes := []NoteCard(nil)
+	lastYearNotes := []NoteCard(nil)
+	otherNotes := []NoteCard(nil)
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), ownerName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -4947,7 +4957,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	data := ViewData{
 		Title:             title,
 		ContentTemplate:   "home",
-		HomeNotes:         homeNotes,
+		HomeNotes:         nil,
 		HomePriorityNotes: priorityNotes,
 		HomeTodayNotes:    todayNotes,
 		HomePlannedNotes:  plannedNotes,
@@ -4956,8 +4966,8 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		HomeYearNotes:     yearNotes,
 		HomeLastYearNotes: lastYearNotes,
 		HomeOtherNotes:    otherNotes,
-		HomeHasMore:       hasMore,
-		NextHomeOffset:    nextOffset,
+		HomeHasMore:       false,
+		NextHomeOffset:    0,
 		HomeOffset:        0,
 		HomeOwner:         ownerName,
 		Tags:              tags,
@@ -6297,6 +6307,110 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "home_notes", data)
+}
+
+func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) {
+	section := strings.TrimSpace(r.URL.Query().Get("name"))
+	if section == "" {
+		http.Error(w, "missing section", http.StatusBadRequest)
+		return
+	}
+	ownerName := strings.TrimSpace(r.URL.Query().Get("o"))
+	if ownerName != "" {
+		normalized, ok := ownerHomeName("/" + ownerName)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := s.idx.LookupOwnerIDs(r.Context(), normalized); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		ownerName = normalized
+	}
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	activeDate := ""
+	basePath := "/"
+	if ownerName != "" {
+		basePath = "/" + ownerName
+	}
+	baseURL := baseURLForLinks(r, basePath)
+	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
+	if !IsAuthenticated(r.Context()) {
+		activeJournal = false
+		activeTags = noteTags
+	}
+	urlTags := append([]string{}, noteTags...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+
+	data := ViewData{
+		HomeOwner:        ownerName,
+		ActiveTags:       urlTags,
+		TagQuery:         buildTagsQuery(urlTags),
+		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      queryWithout(baseURL, "d"),
+		HomeURL:          baseURL,
+		ActiveDate:       activeDate,
+		DateQuery:        buildDateQuery(activeDate),
+		SearchQuery:      activeSearch,
+		SearchQueryParam: buildSearchQuery(activeSearch),
+		RawQuery:         queryWithout(currentURLString(r), "name"),
+	}
+
+	switch section {
+	case "planned":
+		plannedNotes, err := s.loadHomeSectionNotes(r.Context(), "planned", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.HomePlannedNotes = plannedNotes
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "home_section_planned", data)
+	case "rest":
+		weekNotes, err := s.loadHomeSectionNotes(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		monthNotes, err := s.loadHomeSectionNotes(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		yearNotes, err := s.loadHomeSectionNotes(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		lastYearNotes, err := s.loadHomeSectionNotes(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		otherNotes, err := s.loadHomeSectionNotes(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.HomeWeekNotes = weekNotes
+		data.HomeMonthNotes = monthNotes
+		data.HomeYearNotes = yearNotes
+		data.HomeLastYearNotes = lastYearNotes
+		data.HomeOtherNotes = otherNotes
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "home_section_rest", data)
+	default:
+		http.Error(w, "unknown section", http.StatusBadRequest)
+	}
 }
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -8131,11 +8245,19 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 		return nil, offset, false, err
 	}
 	hasMore := false
+	cards, err := s.buildNoteCardsFromSummaries(ctx, notes)
+	if err != nil {
+		return nil, offset, false, err
+	}
+	return cards, len(notes), hasMore, nil
+}
+
+func (s *Server) buildNoteCardsFromSummaries(ctx context.Context, notes []index.NoteSummary) ([]NoteCard, error) {
 	cards := make([]NoteCard, 0, len(notes))
 	for _, note := range notes {
 		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, note.Path)
 		if err != nil {
-			return nil, offset, false, err
+			return nil, err
 		}
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
@@ -8143,7 +8265,7 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 				_ = s.idx.RemoveNoteByPath(ctx, note.Path)
 				continue
 			}
-			return nil, offset, false, err
+			return nil, err
 		}
 		normalized := normalizeLineEndings(string(content))
 		labelTime := note.MTime
@@ -8161,7 +8283,7 @@ func (s *Server) loadHomeNotes(ctx context.Context, offset int, tags []string, a
 			SectionRank: note.SectionRank,
 		})
 	}
-	return cards, len(notes), hasMore, nil
+	return cards, nil
 }
 
 func splitHomeSections(notes []NoteCard) ([]NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard, []NoteCard) {
@@ -8194,6 +8316,87 @@ func splitHomeSections(notes []NoteCard) ([]NoteCard, []NoteCard, []NoteCard, []
 		}
 	}
 	return priority, today, planned, week, month, year, lastYear, others
+}
+
+func homeSectionBounds(now time.Time) (time.Time, time.Time, time.Time, time.Time, time.Time, time.Time) {
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	endOfDay := startOfDay.Add(24 * time.Hour)
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	startOfWeek := startOfDay.AddDate(0, 0, -(weekday - 1))
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	startOfYear := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
+	startOfLastYear := time.Date(now.Year()-1, 1, 1, 0, 0, 0, 0, now.Location())
+	return startOfDay, endOfDay, startOfWeek, startOfMonth, startOfYear, startOfLastYear
+}
+
+func (s *Server) loadHomeSectionNotes(ctx context.Context, section string, tags []string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string) ([]NoteCard, error) {
+	filter := index.NoteListFilter{
+		Tags:        tags,
+		Query:       activeSearch,
+		Folder:      folder,
+		Root:        rootOnly,
+		JournalOnly: journalOnly,
+		OwnerName:   ownerName,
+		Limit:       homeSectionsMaxNotes,
+		Offset:      0,
+	}
+	priorityMin := 6
+	priorityMax := 5
+	now := time.Now()
+	startOfDay, endOfDay, startOfWeek, startOfMonth, startOfYear, startOfLastYear := homeSectionBounds(now)
+	switch section {
+	case "priority":
+		filter.PriorityMax = &priorityMax
+	case "today":
+		filter.PriorityMin = &priorityMin
+		updatedAfter := startOfDay.Unix()
+		updatedBefore := endOfDay.Unix()
+		filter.UpdatedAfter = &updatedAfter
+		filter.UpdatedBefore = &updatedBefore
+	case "planned":
+		filter.PriorityMin = &priorityMin
+		updatedAfter := endOfDay.Unix()
+		filter.UpdatedAfter = &updatedAfter
+		filter.UpdatedAsc = true
+	case "week":
+		filter.PriorityMin = &priorityMin
+		updatedAfter := startOfWeek.Unix()
+		updatedBefore := startOfDay.Unix()
+		filter.UpdatedAfter = &updatedAfter
+		filter.UpdatedBefore = &updatedBefore
+	case "month":
+		filter.PriorityMin = &priorityMin
+		updatedAfter := startOfMonth.Unix()
+		updatedBefore := startOfWeek.Unix()
+		filter.UpdatedAfter = &updatedAfter
+		filter.UpdatedBefore = &updatedBefore
+	case "year":
+		filter.PriorityMin = &priorityMin
+		updatedAfter := startOfYear.Unix()
+		updatedBefore := startOfMonth.Unix()
+		filter.UpdatedAfter = &updatedAfter
+		filter.UpdatedBefore = &updatedBefore
+	case "lastYear":
+		filter.PriorityMin = &priorityMin
+		updatedAfter := startOfLastYear.Unix()
+		updatedBefore := startOfYear.Unix()
+		filter.UpdatedAfter = &updatedAfter
+		filter.UpdatedBefore = &updatedBefore
+	case "others":
+		filter.PriorityMin = &priorityMin
+		updatedBefore := startOfLastYear.Unix()
+		filter.UpdatedBefore = &updatedBefore
+	default:
+		return nil, fmt.Errorf("unknown section %q", section)
+	}
+	notes, err := s.idx.NoteList(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	return s.buildNoteCardsFromSummaries(ctx, notes)
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {

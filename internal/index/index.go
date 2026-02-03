@@ -47,17 +47,22 @@ type NoteHashSummary struct {
 }
 
 type NoteListFilter struct {
-	Tags         []string
-	Date         string
-	Query        string
-	Folder       string
-	Root         bool
-	JournalOnly  bool
-	ExcludeUID   string
-	OwnerName    string
-	HomeSections bool
-	Limit        int
-	Offset       int
+	Tags          []string
+	Date          string
+	Query         string
+	Folder        string
+	Root          bool
+	JournalOnly   bool
+	ExcludeUID    string
+	OwnerName     string
+	HomeSections  bool
+	UpdatedAfter  *int64
+	UpdatedBefore *int64
+	PriorityMin   *int
+	PriorityMax   *int
+	UpdatedAsc    bool
+	Limit         int
+	Offset        int
 }
 
 type SearchResult struct {
@@ -1603,6 +1608,22 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		clauses = append(clauses, "(files.uid IS NULL OR files.uid != ?)")
 		args = append(args, filter.ExcludeUID)
 	}
+	if filter.PriorityMin != nil {
+		clauses = append(clauses, "files.priority >= ?")
+		args = append(args, *filter.PriorityMin)
+	}
+	if filter.PriorityMax != nil {
+		clauses = append(clauses, "files.priority <= ?")
+		args = append(args, *filter.PriorityMax)
+	}
+	if filter.UpdatedAfter != nil {
+		clauses = append(clauses, "files.updated_at >= ?")
+		args = append(args, *filter.UpdatedAfter)
+	}
+	if filter.UpdatedBefore != nil {
+		clauses = append(clauses, "files.updated_at < ?")
+		args = append(args, *filter.UpdatedBefore)
+	}
 	if strings.TrimSpace(filter.OwnerName) != "" {
 		ownerClause, ownerArgs, err := i.ownerClauseForName(ctx, filter.OwnerName, "files")
 		if err != nil {
@@ -1673,6 +1694,8 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	}
 	if filter.HomeSections {
 		sqlStr += " ORDER BY section_rank ASC, files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
+	} else if filter.UpdatedAsc {
+		sqlStr += " ORDER BY files.updated_at ASC, files.priority ASC LIMIT ? OFFSET ?"
 	} else {
 		sqlStr += " ORDER BY files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
 	}

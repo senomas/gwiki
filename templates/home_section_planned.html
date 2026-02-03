@@ -1,0 +1,12 @@
+{{define "home_section_planned"}}
+{{if .HomePlannedNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Planned ({{len .HomePlannedNotes}} notes)</summary>
+  <div class="space-y-4 pt-2">
+  {{range .HomePlannedNotes}}
+    {{template "home_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+</details>
+{{end}}
+{{end}}

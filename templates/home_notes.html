@@ -29,104 +29,17 @@
 </details>
 {{end}}
 
-{{if and (eq .HomeOffset 0) .HomePlannedNotes}}
-<details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Planned ({{len .HomePlannedNotes}} notes)</summary>
-{{end}}
-{{if .HomePlannedNotes}}
-  <div class="space-y-4 pt-2">
-  {{range .HomePlannedNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
-  </div>
-{{end}}
-{{if and (eq .HomeOffset 0) .HomePlannedNotes}}
-</details>
-{{end}}
-
-{{if and (eq .HomeOffset 0) .HomeWeekNotes}}
-<details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Week ({{len .HomeWeekNotes}} notes)</summary>
-{{end}}
-{{if .HomeWeekNotes}}
-  <div class="space-y-4 pt-2">
-  {{range .HomeWeekNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
-  </div>
-{{end}}
-{{if and (eq .HomeOffset 0) .HomeWeekNotes}}
-</details>
-{{end}}
-
-{{if and (eq .HomeOffset 0) .HomeMonthNotes}}
-<details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Month ({{len .HomeMonthNotes}} notes)</summary>
-{{end}}
-{{if .HomeMonthNotes}}
-  <div class="space-y-4 pt-2">
-  {{range .HomeMonthNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
-  </div>
-{{end}}
-{{if and (eq .HomeOffset 0) .HomeMonthNotes}}
-</details>
-{{end}}
-
-{{if and (eq .HomeOffset 0) .HomeYearNotes}}
-<details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Year ({{len .HomeYearNotes}} notes)</summary>
-{{end}}
-{{if .HomeYearNotes}}
-  <div class="space-y-4 pt-2">
-  {{range .HomeYearNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
-  </div>
-{{end}}
-{{if and (eq .HomeOffset 0) .HomeYearNotes}}
-</details>
-{{end}}
-
-{{if and (eq .HomeOffset 0) .HomeLastYearNotes}}
-<details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Last Year ({{len .HomeLastYearNotes}} notes)</summary>
-{{end}}
-{{if .HomeLastYearNotes}}
-  <div class="space-y-4 pt-2">
-  {{range .HomeLastYearNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
-  </div>
-{{end}}
-{{if and (eq .HomeOffset 0) .HomeLastYearNotes}}
-</details>
-{{end}}
-
-{{if and (eq .HomeOffset 0) .HomeOtherNotes}}
-<details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Others ({{len .HomeOtherNotes}} notes)</summary>
-{{end}}
-{{if .HomeOtherNotes}}
-  <div class="space-y-4 pt-2">
-  {{range .HomeOtherNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
-  </div>
-{{end}}
-{{if and (eq .HomeOffset 0) .HomeOtherNotes}}
-</details>
-{{end}}
-
-{{if and (eq .HomeOffset 0) (not (or .HomePriorityNotes .HomeTodayNotes .HomePlannedNotes .HomeWeekNotes .HomeMonthNotes .HomeYearNotes .HomeLastYearNotes .HomeOtherNotes))}}
-<div class="py-6 text-sm text-slate-500">No notes yet.</div>
-{{end}}
-
-{{if .HomeHasMore}}
+{{if eq .HomeOffset 0}}
 <div
-  class="h-10"
-  hx-get="/notes/page?offset={{.NextHomeOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
+  class="home-section-loader"
+  hx-get="/notes/section?name=planned{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+></div>
+<div
+  class="home-section-loader"
+  hx-get="/notes/section?name=rest{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"
