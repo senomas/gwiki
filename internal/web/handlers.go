@@ -1429,6 +1429,12 @@ func buildUserLinks(users []string, counts map[string]int) []UserLink {
 			Count: counts[user],
 		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
 	return out
 }
 

@@ -36,6 +36,7 @@ Non-goals (v1)
 6. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
    - After finishing work and committing, check `git status -sb` to confirm a clean tree.
+   - Always propose a commit message when the user asks to commit; derive it from the current git diff.
 7. **Response structure**
    - Always provide a deep-dive analysis, an implementation plan, and test cases for the requested change.
 8. **Dev server rebuild trigger**
