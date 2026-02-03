@@ -3,7 +3,10 @@ package auth
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -13,7 +16,12 @@ type AccessMember struct {
 	Access string
 }
 
-type AccessFile map[string][]AccessMember
+type AccessPathRule struct {
+	Path    string
+	Members []AccessMember
+}
+
+type AccessFile map[string][]AccessPathRule
 
 func LoadAccessFromRepo(repoPath string) (AccessFile, error) {
 	if strings.TrimSpace(repoPath) == "" {
@@ -29,28 +37,61 @@ func LoadAccessFromRepo(repoPath string) (AccessFile, error) {
 			continue
 		}
 		ownerName := entry.Name()
-		accessPath := filepath.Join(repoPath, ownerName, ".access.txt")
-		f, err := os.Open(accessPath)
-		if err != nil {
+		notesPath := filepath.Join(repoPath, ownerName, "notes")
+		if _, err := os.Stat(notesPath); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("open access file %s: %w", accessPath, err)
+			return nil, fmt.Errorf("stat notes dir %s: %w", notesPath, err)
 		}
-		members, err := parseAccessFile(f)
-		f.Close()
-		if err != nil {
-			return nil, fmt.Errorf("parse access file %s: %w", accessPath, err)
+		rules := []AccessPathRule{}
+		walkErr := filepath.WalkDir(notesPath, func(entryPath string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if d.Name() != ".access.txt" {
+				return nil
+			}
+			f, err := os.Open(entryPath)
+			if err != nil {
+				return fmt.Errorf("open access file %s: %w", entryPath, err)
+			}
+			members, err := parseAccessFile(f)
+			f.Close()
+			if err != nil {
+				return fmt.Errorf("parse access file %s: %w", entryPath, err)
+			}
+			relDir, err := filepath.Rel(notesPath, filepath.Dir(entryPath))
+			if err != nil {
+				return fmt.Errorf("resolve access path %s: %w", entryPath, err)
+			}
+			relDir = filepath.ToSlash(relDir)
+			if relDir == "." {
+				relDir = ""
+			}
+			relDir = strings.Trim(relDir, "/")
+			relDir = path.Clean(relDir)
+			if relDir == "." {
+				relDir = ""
+			}
+			rules = append(rules, AccessPathRule{Path: relDir, Members: members})
+			return nil
+		})
+		if walkErr != nil {
+			return nil, fmt.Errorf("scan access rules for %s: %w", ownerName, walkErr)
 		}
-		if len(members) == 0 {
+		if len(rules) == 0 {
 			continue
 		}
-		access[ownerName] = members
+		access[ownerName] = rules
 	}
 	return access, nil
 }
 
-func parseAccessFile(r *os.File) ([]AccessMember, error) {
+func parseAccessFile(r io.Reader) ([]AccessMember, error) {
 	members := map[string]string{}
 	scanner := bufio.NewScanner(r)
 	lineNum := 0

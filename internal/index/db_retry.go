@@ -118,6 +118,27 @@ func (i *Index) queryContext(ctx context.Context, query string, args ...any) (*s
 	}
 }
 
+func (i *Index) queryContextTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (*sql.Rows, error) {
+	slog.Debug("sql query tx", "query", query, "args", args)
+	start := time.Now()
+	for attempt := 0; ; attempt++ {
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err == nil || !isSQLiteBusy(err) {
+			return rows, err
+		}
+		if i.lockTimeout <= 0 {
+			return nil, err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if time.Since(start) >= i.lockTimeout {
+			return nil, err
+		}
+		time.Sleep(retryDelay(attempt))
+	}
+}
+
 func retryDelay(attempt int) time.Duration {
 	delay := time.Duration(attempt+1) * 40 * time.Millisecond
 	if delay > 300*time.Millisecond {

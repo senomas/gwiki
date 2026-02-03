@@ -65,14 +65,14 @@ func (s *Server) accessContextMiddleware(next http.Handler) http.Handler {
 		if IsAuthenticated(ctx) {
 			user, ok := CurrentUser(ctx)
 			if ok && strings.TrimSpace(user.Name) != "" {
-				userID, ownerIDs, err := s.idx.AccessFilterForUser(ctx, user.Name)
+				userID, err := s.idx.AccessFilterForUser(ctx, user.Name)
 				if err != nil {
 					if _, ensureErr := s.idx.EnsureUser(ctx, user.Name); ensureErr == nil {
-						userID, ownerIDs, err = s.idx.AccessFilterForUser(ctx, user.Name)
+						userID, err = s.idx.AccessFilterForUser(ctx, user.Name)
 					}
 				}
 				if err == nil && userID > 0 {
-					ctx = index.WithAccessFilter(ctx, userID, ownerIDs)
+					ctx = index.WithAccessFilter(ctx, userID)
 				}
 			}
 		} else {

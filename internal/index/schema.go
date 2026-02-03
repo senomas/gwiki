@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 28
+const schemaVersion = 29
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -12,12 +12,24 @@ CREATE TABLE IF NOT EXISTS users (
 	name TEXT UNIQUE NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS user_access (
+CREATE TABLE IF NOT EXISTS path_access_files (
 	owner_user_id INTEGER NOT NULL,
+	path TEXT NOT NULL,
+	depth INTEGER NOT NULL,
+	PRIMARY KEY(owner_user_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS path_access_files_owner_depth ON path_access_files(owner_user_id, depth DESC);
+
+CREATE TABLE IF NOT EXISTS path_access (
+	owner_user_id INTEGER NOT NULL,
+	path TEXT NOT NULL,
 	grantee_user_id INTEGER NOT NULL,
 	access TEXT NOT NULL,
-	PRIMARY KEY(owner_user_id, grantee_user_id)
+	PRIMARY KEY(owner_user_id, path, grantee_user_id)
 );
+
+CREATE INDEX IF NOT EXISTS path_access_owner_user ON path_access(owner_user_id, grantee_user_id);
 
 CREATE TABLE IF NOT EXISTS files (
 	id INTEGER PRIMARY KEY,
@@ -36,6 +48,15 @@ CREATE TABLE IF NOT EXISTS files (
 	is_journal INTEGER NOT NULL DEFAULT 0,
 	UNIQUE(user_id, path)
 );
+
+CREATE TABLE IF NOT EXISTS file_access (
+	file_id INTEGER NOT NULL,
+	grantee_user_id INTEGER NOT NULL,
+	access TEXT NOT NULL,
+	PRIMARY KEY(file_id, grantee_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS file_access_by_user ON file_access(grantee_user_id);
 
 CREATE TABLE IF NOT EXISTS file_histories (
 	id INTEGER PRIMARY KEY,

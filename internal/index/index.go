@@ -238,19 +238,8 @@ func applyAccessFilter(ctx context.Context, clauses *[]string, args *[]interface
 	if table == "" {
 		table = "files"
 	}
-	if len(filter.ownerIDs) == 0 {
-		*clauses = append(*clauses, "("+table+".user_id = ? OR "+table+".visibility = ?)")
-		*args = append(*args, filter.userID, "public")
-		return
-	}
-	placeholders := strings.Repeat("?,", len(filter.ownerIDs))
-	placeholders = strings.TrimRight(placeholders, ",")
-	*clauses = append(*clauses, "("+table+".user_id = ? OR "+table+".user_id IN ("+placeholders+") OR "+table+".visibility = ?)")
-	*args = append(*args, filter.userID)
-	for _, ownerID := range filter.ownerIDs {
-		*args = append(*args, ownerID)
-	}
-	*args = append(*args, "public")
+	*clauses = append(*clauses, "("+table+".visibility = ? OR EXISTS (SELECT 1 FROM file_access fa WHERE fa.file_id = "+table+".id AND fa.grantee_user_id = ?))")
+	*args = append(*args, "public", filter.userID)
 }
 
 func applyFolderFilter(folder string, rootOnly bool, clauses *[]string, args *[]interface{}, table string) {
@@ -415,6 +404,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 		"DELETE FROM links WHERE from_file_id=? OR to_file_id=?",
 		"DELETE FROM task_tags WHERE task_id IN (SELECT id FROM tasks WHERE file_id=?)",
 		"DELETE FROM tasks WHERE file_id=?",
+		"DELETE FROM file_access WHERE file_id=?",
 		"DELETE FROM files WHERE id=?",
 	}
 	for _, stmt := range stmts {
@@ -641,6 +631,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 28
+		case 28:
+			slog.Info("schema migration", "from", 28, "to", 29)
+			if err := i.migrate28To29(ctx); err != nil {
+				return err
+			}
+			version = 29
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -921,8 +917,36 @@ func (i *Index) migrate27To28(ctx context.Context) error {
 		"DROP TABLE IF EXISTS broken_links",
 		"DROP TABLE IF EXISTS fts",
 		"DROP TABLE IF EXISTS user_access",
-		"DROP TABLE IF EXISTS groups",
-		"DROP TABLE IF EXISTS group_members",
+		"DROP TABLE IF EXISTS path_access",
+		"DROP TABLE IF EXISTS path_access_files",
+		"DROP TABLE IF EXISTS file_access",
+	}
+	for _, stmt := range drops {
+		if _, err := i.execContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	_, err := i.execContext(ctx, schemaSQL)
+	return err
+}
+
+func (i *Index) migrate28To29(ctx context.Context) error {
+	drops := []string{
+		"DROP TABLE IF EXISTS files",
+		"DROP TABLE IF EXISTS file_histories",
+		"DROP TABLE IF EXISTS tags",
+		"DROP TABLE IF EXISTS file_tags",
+		"DROP TABLE IF EXISTS links",
+		"DROP TABLE IF EXISTS tasks",
+		"DROP TABLE IF EXISTS task_tags",
+		"DROP TABLE IF EXISTS embed_cache",
+		"DROP TABLE IF EXISTS collapsed_sections",
+		"DROP TABLE IF EXISTS broken_links",
+		"DROP TABLE IF EXISTS fts",
+		"DROP TABLE IF EXISTS user_access",
+		"DROP TABLE IF EXISTS path_access",
+		"DROP TABLE IF EXISTS path_access_files",
+		"DROP TABLE IF EXISTS file_access",
 	}
 	for _, stmt := range drops {
 		if _, err := i.execContext(ctx, stmt); err != nil {
@@ -1392,6 +1416,10 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	}
 	if taskTagCount > 0 {
 		slog.Debug("task tags indexed", "path", relPath, "count", taskTagCount)
+	}
+
+	if err := i.replaceFileAccessTx(ctx, tx, userID, existingID, relPath); err != nil {
+		return err
 	}
 
 	ownerClause, ownerArgs = ownerWhereClause(userID, "fts")
@@ -4475,6 +4503,9 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_histories WHERE file_id=?", row.id); err != nil {
 			return 0, err
 		}
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_access WHERE file_id=?", row.id); err != nil {
+			return 0, err
+		}
 		ownerClause, ownerArgs := ownerWhereClause(row.userID, "fts")
 		ownerArgs = append(ownerArgs, row.path)
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
@@ -4489,6 +4520,109 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		return 0, err
 	}
 	return len(missingRows), nil
+}
+
+type accessEntry struct {
+	userID int
+	access string
+}
+
+func (i *Index) replaceFileAccessTx(ctx context.Context, tx *sql.Tx, ownerID int, fileID int, relPath string) error {
+	boundary, ok, err := i.accessBoundaryPathTx(ctx, tx, ownerID, relPath)
+	if err != nil {
+		return err
+	}
+	entries := []accessEntry{}
+	if ok {
+		rows, err := i.queryContextTx(ctx, tx, `
+			SELECT grantee_user_id, access
+			FROM path_access
+			WHERE owner_user_id = ? AND path = ?
+		`, ownerID, boundary)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var entry accessEntry
+			if err := rows.Scan(&entry.userID, &entry.access); err != nil {
+				rows.Close()
+				return err
+			}
+			entry.access = strings.ToLower(strings.TrimSpace(entry.access))
+			if entry.access != "ro" && entry.access != "rw" {
+				entry.access = "ro"
+			}
+			entries = append(entries, entry)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+	}
+
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_access WHERE file_id = ?", fileID); err != nil {
+		return err
+	}
+	if _, err := i.execContextTx(ctx, tx, `
+		INSERT INTO file_access(file_id, grantee_user_id, access)
+		VALUES(?, ?, ?)
+	`, fileID, ownerID, "rw"); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.userID == ownerID {
+			continue
+		}
+		if _, err := i.execContextTx(ctx, tx, `
+			INSERT INTO file_access(file_id, grantee_user_id, access)
+			VALUES(?, ?, ?)
+		`, fileID, entry.userID, entry.access); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (i *Index) rebuildFileAccessAll(ctx context.Context) error {
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := i.queryContextTx(ctx, tx, `
+		SELECT id, user_id, path
+		FROM files
+	`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var (
+			fileID  int
+			ownerID int
+			relPath string
+		)
+		if err := rows.Scan(&fileID, &ownerID, &relPath); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := i.replaceFileAccessTx(ctx, tx, ownerID, fileID, relPath); err != nil {
+			rows.Close()
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func nullIfEmpty(s string) any {

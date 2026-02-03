@@ -35,7 +35,9 @@ Authentication helpers and password verification.
 
 ## Access discovery
 
-User access is discovered by scanning top-level owner folders under `WIKI_REPO_PATH` for a `.access.txt` file. Each line is `user:access` with access `ro` or `rw`. Entries grant access to all notes under that owner.
+User access is discovered by scanning `.access.txt` files under `WIKI_REPO_PATH/<owner>/notes/**`. Each line is `user:access` with access `ro` or `rw`. The closest (deepest) `.access.txt` controls access for that subtree; users not listed there have no access to that subtree.
+
+Access rules are stored in `path_access`/`path_access_files`, and `file_access` is precomputed during indexing for fast read filters (no path LIKE). Writes check the effective path rule for the specific note path.
 
 ## Quick launcher pipeline
 

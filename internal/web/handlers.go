@@ -386,7 +386,33 @@ func (s *Server) requireWriteAccessForPath(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
-	return s.requireWriteAccess(w, r, owner)
+	_, relPath, err := fs.SplitOwnerNotePath(notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return s.requireWriteAccessForRelPath(w, r, owner, relPath)
+}
+
+func (s *Server) requireWriteAccessForRelPath(w http.ResponseWriter, r *http.Request, ownerName, relPath string) bool {
+	if !s.requireAuth(w, r) {
+		return false
+	}
+	userName := currentUserName(r.Context())
+	if userName == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	canWrite, err := s.idx.CanWritePath(r.Context(), ownerName, relPath, userName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	if !canWrite {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func buildJournalIndex(dates []time.Time) map[int]map[time.Month]map[int]struct{} {
@@ -5133,13 +5159,17 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 		return err
 	}
 	slog.Debug("auth reload access from repo", "count", len(accessFile))
-	accessMembers := make(map[string][]index.AccessMember, len(accessFile))
-	for owner, members := range accessFile {
-		list := make([]index.AccessMember, 0, len(members))
-		for _, member := range members {
-			list = append(list, index.AccessMember{User: member.User, Access: member.Access})
+	accessRules := make(map[string][]index.AccessPathRule, len(accessFile))
+	for owner, rules := range accessFile {
+		list := make([]index.AccessPathRule, 0, len(rules))
+		for _, rule := range rules {
+			members := make([]index.AccessMember, 0, len(rule.Members))
+			for _, member := range rule.Members {
+				members = append(members, index.AccessMember{User: member.User, Access: member.Access})
+			}
+			list = append(list, index.AccessPathRule{Path: rule.Path, Members: members})
 		}
-		accessMembers[owner] = list
+		accessRules[owner] = list
 	}
 	dbUsers, err := s.idx.ListUsers(ctx)
 	if err != nil {
@@ -5149,7 +5179,7 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 	if err := s.auth.ReloadWithExtra(dbUsers); err != nil {
 		return err
 	}
-	ownerStats, accessStats, err := s.idx.SyncAuthSources(ctx, users, accessMembers)
+	ownerStats, accessStats, err := s.idx.SyncAuthSources(ctx, users, accessRules)
 	if err != nil {
 		return err
 	}
@@ -5162,6 +5192,7 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 	slog.Debug(
 		"auth reload sync access",
 		"owners_in_file", accessStats.OwnersInFile,
+		"paths_in_file", accessStats.PathsInFile,
 		"grants_added", accessStats.GrantsAdded,
 		"grants_updated", accessStats.GrantsUpdated,
 		"grants_removed", accessStats.GrantsRemoved,
@@ -7405,9 +7436,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "owner required", http.StatusBadRequest)
 		return
 	}
-	if !s.requireWriteAccess(w, r, ownerName) {
-		return
-	}
 	if err := s.ensureOwnerNotesDir(ownerName); err != nil {
 		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 		s.renderEditError(w, r, ViewData{
@@ -7647,6 +7675,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			ErrorMessage:     "invalid folder",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
+		return
+	}
+	checkPath := "placeholder.md"
+	if folder != "" {
+		checkPath = folder + "/placeholder.md"
+	}
+	if !s.requireWriteAccessForRelPath(w, r, ownerName, checkPath) {
 		return
 	}
 	priority := "10"

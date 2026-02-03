@@ -39,9 +39,15 @@ Defaults (trigger `!`):
 
 ## Access Sharing
 
-Share access to your notes by adding an `.access.txt` file under your owner folder:
+Share access by adding `.access.txt` files inside your `notes/` tree. The closest (deepest) `.access.txt` controls access for that subtree.
 
-`WIKI_REPO_PATH/<owner>/.access.txt`
+Example locations:
+```
+WIKI_REPO_PATH/<owner>/notes/.access.txt
+WIKI_REPO_PATH/<owner>/notes/work/.access.txt
+WIKI_REPO_PATH/<owner>/notes/work/demo/.access.txt
+WIKI_REPO_PATH/<owner>/notes/hobby/.access.txt
+```
 
 Format:
 ```
@@ -49,7 +55,9 @@ alice:rw
 bob:ro
 ```
 
-Valid access values are `rw` and `ro`. Users listed with `rw` can create and edit notes for that owner; `ro` users can only view notes.
+Rules:
+- Access values are `rw` (write) and `ro` (read).
+- The deepest `.access.txt` wins; if a user is not listed there, they have no access to that subtree.
 
 ## Settings
 

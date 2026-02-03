@@ -93,15 +93,19 @@ func main() {
 		slog.Error("load access file", "err", err)
 		os.Exit(1)
 	}
-	accessMembers := make(map[string][]index.AccessMember, len(accessFile))
-	for owner, members := range accessFile {
-		list := make([]index.AccessMember, 0, len(members))
-		for _, member := range members {
-			list = append(list, index.AccessMember{User: member.User, Access: member.Access})
+	accessRules := make(map[string][]index.AccessPathRule, len(accessFile))
+	for owner, rules := range accessFile {
+		list := make([]index.AccessPathRule, 0, len(rules))
+		for _, rule := range rules {
+			members := make([]index.AccessMember, 0, len(rule.Members))
+			for _, member := range rule.Members {
+				members = append(members, index.AccessMember{User: member.User, Access: member.Access})
+			}
+			list = append(list, index.AccessPathRule{Path: rule.Path, Members: members})
 		}
-		accessMembers[owner] = list
+		accessRules[owner] = list
 	}
-	if _, _, err := idx.SyncAuthSources(ctx, users, accessMembers); err != nil {
+	if _, _, err := idx.SyncAuthSources(ctx, users, accessRules); err != nil {
 		slog.Error("sync access", "err", err)
 		os.Exit(1)
 	}
