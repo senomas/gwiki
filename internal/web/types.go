@@ -99,6 +99,7 @@ type ViewData struct {
 	SyncError            string
 	SyncDuration         string
 	SyncPending          bool
+	SyncOwner            string
 	BrokenLinks          []BrokenLinkGroup
 	BuildVersion         string
 	CompactNoteList      bool
@@ -139,8 +140,9 @@ type QuickLauncherEntry struct {
 }
 
 type UserSummary struct {
-	Name  string
-	Roles []string
+	Name      string
+	Roles     []string
+	GitOrigin string
 }
 
 type GitRemoteCred struct {

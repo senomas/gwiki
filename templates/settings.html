@@ -105,7 +105,9 @@
                   <thead class="bg-[#0c0f12] text-[10px] uppercase tracking-[0.2em] text-slate-500">
                     <tr>
                       <th class="px-4 py-2 font-semibold">Username</th>
+                      <th class="px-4 py-2 font-semibold">Git Origin</th>
                       <th class="px-4 py-2 font-semibold">Roles</th>
+                      <th class="px-4 py-2 font-semibold">Actions</th>
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-slate-800/70 text-slate-300">
@@ -113,11 +115,28 @@
                       <tr class="js-form-target outline-none focus:outline-none focus:ring-0 focus:bg-slate-800/40" tabindex="0">
                         <td class="px-4 py-2 font-medium text-slate-100">{{.Name}}</td>
                         <td class="px-4 py-2 text-slate-400">
+                          {{if .GitOrigin}}
+                            {{.GitOrigin}}
+                          {{else}}
+                            —
+                          {{end}}
+                        </td>
+                        <td class="px-4 py-2 text-slate-400">
                           {{if .Roles}}
                             {{range $i, $role := .Roles}}{{if $i}}, {{end}}{{$role}}{{end}}
                           {{else}}
                             —
                           {{end}}
+                        </td>
+                        <td class="px-4 py-2">
+                          <div class="flex items-center gap-2">
+                            <a class="rounded-lg border border-slate-700/70 bg-[#171a1f] px-3 py-1 text-[11px] font-semibold text-slate-100 transition hover:border-slate-500" href="/sync/{{.Name}}">Sync</a>
+                            <button
+                              type="button"
+                              class="rounded-lg border border-red-700/70 bg-[#2a1212] px-3 py-1 text-[11px] font-semibold text-red-200 transition hover:border-red-500"
+                              data-delete-user="{{.Name}}"
+                            >Delete</button>
+                          </div>
                         </td>
                       </tr>
                     {{end}}
@@ -134,6 +153,21 @@
         <button class="rounded-xl border border-slate-700/70 bg-[#171a1f] px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-500" type="submit" form="settings-form">Save</button>
       </div>
     </section>
+    <div id="user-delete-modal" class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/60 opacity-0 transition">
+      <div class="w-full max-w-md rounded-2xl border border-slate-800/70 bg-[#111419] p-6 text-slate-200">
+        <div class="text-lg font-semibold text-slate-100">Delete user</div>
+        <p class="mt-2 text-sm text-slate-400">Type the username to confirm deletion.</p>
+        <form id="user-delete-form" class="mt-4 space-y-3" action="/settings/users/delete" method="post">
+          <input type="hidden" name="username" id="user-delete-username" value="">
+          <input type="hidden" name="return" value="/settings">
+          <input class="w-full rounded-lg border border-slate-700/70 bg-[#0f1216] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600" name="confirm" id="user-delete-confirm" placeholder="Type username" autocomplete="off">
+          <div class="flex justify-end gap-2">
+            <button type="button" id="user-delete-cancel" class="rounded-lg border border-slate-700/70 bg-[#171a1f] px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-slate-500">Cancel</button>
+            <button type="submit" class="rounded-lg border border-red-700/70 bg-[#2a1212] px-3 py-2 text-xs font-semibold text-red-200 transition hover:border-red-500">Delete</button>
+          </div>
+        </form>
+      </div>
+    </div>
 <script>
   (function () {
     var items = document.querySelectorAll(".js-settings-accordion");
@@ -152,6 +186,35 @@
         });
       });
     });
+    var modal = document.getElementById("user-delete-modal");
+    var usernameInput = document.getElementById("user-delete-username");
+    var confirmInput = document.getElementById("user-delete-confirm");
+    var cancelBtn = document.getElementById("user-delete-cancel");
+    if (modal && usernameInput && confirmInput && cancelBtn) {
+      document.addEventListener("click", function (event) {
+        var trigger = event.target.closest("[data-delete-user]");
+        if (!trigger) {
+          return;
+        }
+        var name = trigger.getAttribute("data-delete-user") || "";
+        usernameInput.value = name;
+        confirmInput.value = "";
+        confirmInput.setAttribute("placeholder", "Type " + name);
+        modal.classList.remove("pointer-events-none", "opacity-0");
+        modal.classList.add("opacity-100");
+        confirmInput.focus();
+      });
+      cancelBtn.addEventListener("click", function () {
+        modal.classList.add("pointer-events-none", "opacity-0");
+        modal.classList.remove("opacity-100");
+      });
+      modal.addEventListener("click", function (event) {
+        if (event.target === modal) {
+          modal.classList.add("pointer-events-none", "opacity-0");
+          modal.classList.remove("opacity-100");
+        }
+      });
+    }
     // keyboard handling is centralized in base layout
   })();
 </script>

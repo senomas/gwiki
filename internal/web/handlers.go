@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"container/list"
 	"context"
@@ -276,6 +277,30 @@ func hasRole(roles []string, role string) bool {
 		}
 	}
 	return false
+}
+
+func isAdmin(ctx context.Context) bool {
+	user, ok := CurrentUser(ctx)
+	if !ok {
+		return false
+	}
+	return hasRole(user.Roles, "admin")
+}
+
+func syncOwnerFromPath(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", false
+	}
+	path = strings.TrimSuffix(path, "/")
+	if !strings.HasPrefix(path, "/sync/") {
+		return "", false
+	}
+	owner := strings.TrimSpace(strings.TrimPrefix(path, "/sync/"))
+	if owner == "" || strings.Contains(owner, "/") {
+		return "", false
+	}
+	return owner, true
 }
 
 func validEditCommandToken(value string) bool {
@@ -6685,10 +6710,48 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	ownerName := currentUserName(r.Context())
+	if ownerName == "" {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/sync/"+ownerName, http.StatusSeeOther)
+}
+
+func (s *Server) handleSyncUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/run") {
+		s.handleSyncRun(w, r)
+		return
+	}
+	ownerName, ok := syncOwnerFromPath(r.URL.Path)
+	if !ok {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	if !isAdmin(r.Context()) && !strings.EqualFold(ownerName, currentUserName(r.Context())) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if _, err := s.idx.LookupOwnerIDs(r.Context(), ownerName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	data := ViewData{
-		Title:           "Git Sync",
+		Title:           "Git Sync: " + ownerName,
 		ContentTemplate: "sync",
 		SyncPending:     true,
+		SyncOwner:       ownerName,
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
@@ -6702,7 +6765,28 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
-	ownerRepo := s.ownerRepoPath(currentUserName(r.Context()))
+	ownerName := currentUserName(r.Context())
+	if ownerName == "" {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	if r.URL.Path != "/sync/run" {
+		requested, ok := syncOwnerFromPath(strings.TrimSuffix(r.URL.Path, "/run"))
+		if !ok {
+			http.Error(w, "owner required", http.StatusBadRequest)
+			return
+		}
+		if !isAdmin(r.Context()) && !strings.EqualFold(requested, ownerName) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		ownerName = requested
+	}
+	if ownerName == "" {
+		http.Error(w, "owner required", http.StatusBadRequest)
+		return
+	}
+	ownerRepo := s.ownerRepoPath(ownerName)
 	if ownerRepo == "" {
 		ownerRepo = s.cfg.RepoPath
 	}
@@ -6727,7 +6811,7 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = os.MkdirAll(dataPath, 0o755)
 	}
-	userName := currentUserName(r.Context())
+	userName := ownerName
 	credPath := ""
 	gitConfig := ""
 	if dataPath != "" && userName != "" {
@@ -6815,9 +6899,37 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s.attachViewData(r, &data)
 	if data.IsAdmin {
-		data.SettingsUsers = s.auth.ListUsers()
+		data.SettingsUsers = s.settingsUsersWithOrigin(r.Context())
 	}
 	s.views.RenderPage(w, data)
+}
+
+func (s *Server) settingsUsersWithOrigin(ctx context.Context) []UserSummary {
+	users := s.auth.ListUsers()
+	if len(users) == 0 {
+		return users
+	}
+	for i := range users {
+		repoPath := s.ownerRepoPath(users[i].Name)
+		if repoPath == "" {
+			repoPath = s.cfg.RepoPath
+		}
+		users[i].GitOrigin = gitOriginURL(repoPath)
+	}
+	return users
+}
+
+func gitOriginURL(repoPath string) string {
+	remotes, err := listGitRemotes(repoPath)
+	if err != nil {
+		return ""
+	}
+	for _, remote := range remotes {
+		if remote.Alias == "origin" {
+			return remote.URL
+		}
+	}
+	return ""
 }
 
 func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
@@ -6928,6 +7040,116 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		returnURL = "/settings"
 	}
 	http.Redirect(w, r, returnURL, http.StatusSeeOther)
+}
+
+func (s *Server) handleSettingsUserDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !isAdmin(r.Context()) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	userName := strings.TrimSpace(r.FormValue("username"))
+	confirm := strings.TrimSpace(r.FormValue("confirm"))
+	if userName == "" || confirm == "" {
+		http.Error(w, "username confirmation required", http.StatusBadRequest)
+		return
+	}
+	if !strings.EqualFold(userName, confirm) {
+		http.Error(w, "confirmation does not match username", http.StatusBadRequest)
+		return
+	}
+	if strings.EqualFold(userName, currentUserName(r.Context())) {
+		http.Error(w, "cannot delete current user", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(s.cfg.AuthFile) == "" {
+		http.Error(w, "auth file not configured", http.StatusBadRequest)
+		return
+	}
+	removed, err := removeAuthUser(s.cfg.AuthFile, userName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !removed {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	if s.auth != nil {
+		dbUsers, err := s.idx.ListUsers(r.Context())
+		if err == nil {
+			_ = s.auth.ReloadWithExtra(dbUsers)
+		} else {
+			_ = s.auth.Reload()
+		}
+	}
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "User deleted: " + userName,
+		Kind:            "success",
+		DurationSeconds: 4,
+		CreatedAt:       time.Now(),
+	})
+	returnURL := sanitizeReturnURL(r, r.FormValue("return"))
+	if returnURL == "" {
+		returnURL = "/settings"
+	}
+	http.Redirect(w, r, returnURL, http.StatusSeeOther)
+}
+
+func removeAuthUser(path string, username string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	removed := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			lines = append(lines, line)
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) < 2 {
+			lines = append(lines, line)
+			continue
+		}
+		user := strings.TrimSpace(parts[0])
+		if strings.EqualFold(user, username) {
+			removed = true
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return false, err
+	}
+	if !removed {
+		return false, nil
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
