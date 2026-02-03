@@ -1368,6 +1368,11 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	if err != nil {
 		return err
 	}
+	users, err := s.idx.ListUsers(r.Context())
+	if err != nil {
+		return err
+	}
+	users = filterSidebarUsers(users, currentUserName(r.Context()))
 	data.Tags = tags
 	data.TagLinks = tagLinks
 	data.TodoCount = todoCount
@@ -1389,7 +1394,23 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	data.CalendarMonth = calendar
 	applyCalendarLinks(data, baseURL)
 	data.JournalSidebar = journalSidebar
+	data.Users = users
 	return nil
+}
+
+func filterSidebarUsers(users []string, current string) []string {
+	current = strings.TrimSpace(current)
+	if current == "" || len(users) == 0 {
+		return users
+	}
+	out := make([]string, 0, len(users))
+	for _, user := range users {
+		if strings.EqualFold(user, current) {
+			continue
+		}
+		out = append(out, user)
+	}
+	return out
 }
 
 func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool, ownerName string) (int, int, error) {
