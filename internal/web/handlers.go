@@ -1406,11 +1406,25 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 func filterSidebarUsers(users []string, current string) []string {
 	current = strings.TrimSpace(current)
 	if current == "" || len(users) == 0 {
-		return users
+		return filterInternalUsers(users)
 	}
 	out := make([]string, 0, len(users))
 	for _, user := range users {
 		if strings.EqualFold(user, current) {
+			continue
+		}
+		out = append(out, user)
+	}
+	return filterInternalUsers(out)
+}
+
+func filterInternalUsers(users []string) []string {
+	if len(users) == 0 {
+		return users
+	}
+	out := make([]string, 0, len(users))
+	for _, user := range users {
+		if strings.EqualFold(user, "system") {
 			continue
 		}
 		out = append(out, user)
