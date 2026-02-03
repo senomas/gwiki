@@ -203,10 +203,34 @@
     if (!items.length) {
       return;
     }
+    function sectionKey(item) {
+      var summary = item.querySelector("summary");
+      if (!summary) {
+        return "";
+      }
+      var text = summary.textContent || "";
+      return text.trim().toLowerCase().replace(/\\s+/g, "-");
+    }
+    function setSectionParam(value) {
+      if (!value) {
+        return;
+      }
+      var url = new URL(window.location.href);
+      url.searchParams.set("s", value);
+      window.history.replaceState({}, "", url.toString());
+    }
+    function getSectionParam() {
+      var url = new URL(window.location.href);
+      return (url.searchParams.get("s") || "").trim();
+    }
     items.forEach(function (item) {
       item.addEventListener("toggle", function () {
         if (!item.open) {
           return;
+        }
+        var key = sectionKey(item);
+        if (key) {
+          setSectionParam(key);
         }
         items.forEach(function (other) {
           if (other !== item) {
@@ -215,6 +239,16 @@
         });
       });
     });
+    var activeKey = getSectionParam();
+    if (activeKey) {
+      items.forEach(function (item) {
+        if (sectionKey(item) === activeKey) {
+          item.open = true;
+        } else {
+          item.open = false;
+        }
+      });
+    }
     var modal = document.getElementById("user-delete-modal");
     var usernameInput = document.getElementById("user-delete-username");
     var confirmInput = document.getElementById("user-delete-confirm");
