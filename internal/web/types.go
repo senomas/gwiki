@@ -111,12 +111,17 @@ type ViewData struct {
 	SettingsUsers        []UserSummary
 	QuickEntries         []QuickLauncherEntry
 	GitRemoteCreds       []GitRemoteCred
-	Users                []string
+	Users                []UserLink
 }
 
 type OwnerOption struct {
 	Name  string
 	Label string
+}
+
+type UserLink struct {
+	Name  string
+	Count int
 }
 
 type QuickLauncherEntry struct {

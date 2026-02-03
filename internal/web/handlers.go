@@ -1372,7 +1372,12 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	if err != nil {
 		return err
 	}
-	users = filterSidebarUsers(users, currentUserName(r.Context()))
+	currentUser := currentUserName(r.Context())
+	users = filterSidebarUsers(users, currentUser)
+	userCounts, err := s.idx.CountSharedNotesByOwner(r.Context(), currentUser)
+	if err != nil {
+		return err
+	}
 	data.Tags = tags
 	data.TagLinks = tagLinks
 	data.TodoCount = todoCount
@@ -1394,7 +1399,7 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	data.CalendarMonth = calendar
 	applyCalendarLinks(data, baseURL)
 	data.JournalSidebar = journalSidebar
-	data.Users = users
+	data.Users = buildUserLinks(users, userCounts)
 	return nil
 }
 
@@ -1409,6 +1414,20 @@ func filterSidebarUsers(users []string, current string) []string {
 			continue
 		}
 		out = append(out, user)
+	}
+	return out
+}
+
+func buildUserLinks(users []string, counts map[string]int) []UserLink {
+	if len(users) == 0 {
+		return nil
+	}
+	out := make([]UserLink, 0, len(users))
+	for _, user := range users {
+		out = append(out, UserLink{
+			Name:  user,
+			Count: counts[user],
+		})
 	}
 	return out
 }

@@ -610,3 +610,42 @@ func (i *Index) ListUsers(ctx context.Context) ([]string, error) {
 	}
 	return users, nil
 }
+
+func (i *Index) CountSharedNotesByOwner(ctx context.Context, userName string) (map[string]int, error) {
+	userName = strings.TrimSpace(userName)
+	if userName == "" {
+		return map[string]int{}, nil
+	}
+	userID, err := i.userIDByName(ctx, userName)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := i.queryContext(ctx, `
+		SELECT owners.name, COUNT(DISTINCT files.id)
+		FROM files
+		JOIN users owners ON owners.id = files.user_id
+		LEFT JOIN file_access ON file_access.file_id = files.id AND file_access.grantee_user_id = ?
+		WHERE owners.name != ? AND (file_access.grantee_user_id IS NOT NULL OR files.visibility = 'public')
+		GROUP BY owners.name
+	`, userID, userName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := map[string]int{}
+	for rows.Next() {
+		var (
+			owner string
+			count int
+		)
+		if err := rows.Scan(&owner, &count); err != nil {
+			return nil, err
+		}
+		counts[owner] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
