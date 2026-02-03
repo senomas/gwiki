@@ -199,6 +199,11 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 	}
 	anySuccess := false
 	for _, target := range targets {
+		if removed, err := pruneEmptyNotesDirs(target.Path); err != nil {
+			slog.Warn("sync schedule prune notes", "owner", target.Owner, "err", err)
+		} else if removed > 0 {
+			slog.Debug("sync schedule prune notes", "owner", target.Owner, "removed", removed)
+		}
 		unlock, err := syncer.Acquire(10 * time.Second)
 		if err != nil {
 			slog.Warn("sync schedule: busy", "owner", target.Owner, "err", err)
@@ -238,6 +243,56 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 		}
 		slog.Info("sync schedule recheck", "scanned", scanned, "updated", updated, "cleaned", cleaned)
 	}
+}
+
+func pruneEmptyNotesDirs(repoPath string) (int, error) {
+	notesRoot := filepath.Join(repoPath, "notes")
+	if info, err := os.Stat(notesRoot); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	} else if !info.IsDir() {
+		return 0, nil
+	}
+	var dirs []string
+	err := filepath.WalkDir(notesRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			dirs = append(dirs, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for i := len(dirs) - 1; i >= 0; i-- {
+		dir := dirs[i]
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return removed, err
+		}
+		if len(entries) > 0 {
+			continue
+		}
+		if err := os.Remove(dir); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return removed, err
+		}
+		removed++
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	if entries, err := os.ReadDir(notesRoot); err == nil && len(entries) == 0 {
+		_ = os.Remove(notesRoot)
+	}
+	return removed, nil
 }
 
 func syncGitHistoryOnStartup(ctx context.Context, cfg config.Config, idx *index.Index, users []string) {
