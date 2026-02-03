@@ -32,8 +32,8 @@ type CalendarDay struct {
 }
 
 func buildCalendarMonth(now time.Time, updates []index.UpdateDaySummary, baseURL string, activeDate string) CalendarMonth {
-	now = now.UTC()
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	now = now.In(time.Local)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	monthEnd := monthStart.AddDate(0, 1, -1)
 	current := time.Now().In(now.Location())
 	currentMonthKey := current.Format("2006-01")
