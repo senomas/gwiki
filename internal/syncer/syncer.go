@@ -130,11 +130,36 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 		}
 	}
 	hasOrigin := gitHasOriginRemote(ctx, repoDir, env, writer)
+	hasCommits := gitHasCommits(ctx, repoDir, env, writer)
+	remoteMain := ""
 	if hasOrigin {
-		writeLine("auto-sync: fetch %s", mainBranch)
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", mainBranch)
+		remoteMain = resolveRemoteMainBranch(ctx, repoDir, env, writer)
 	}
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
+	effectiveMain := resolveLocalMainBranch(ctx, repoDir, env, writer)
+	if effectiveMain == "" {
+		if remoteMain != "" {
+			effectiveMain = remoteMain
+		} else {
+			effectiveMain = mainBranch
+		}
+	}
+	if hasOrigin {
+		if hasCommits {
+			if remoteMain != "" {
+				writeLine("auto-sync: fetch %s", remoteMain)
+				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", remoteMain)
+			} else {
+				writeLine("auto-sync: remote HEAD missing; skip fetch %s", effectiveMain)
+			}
+		} else {
+			writeLine("auto-sync: no commits yet; skip fetch %s", effectiveMain)
+		}
+	}
+	if hasCommits {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", effectiveMain)
+	} else {
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", "-b", effectiveMain)
+	}
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "notes/")
 
 	hasChanges, err := gitHasStagedChanges(ctx, repoDir, env, writer)
@@ -142,17 +167,30 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 		return output.String(), err
 	}
 	if !hasChanges {
-		if hasOrigin {
+		if !hasCommits {
+			writeLine("auto-sync: no commits yet")
+		} else if hasOrigin {
+			if !remoteBranchExists(ctx, repoDir, env, writer, effectiveMain) {
+				writeLine("auto-sync: push %s", effectiveMain)
+				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "-u", "origin", effectiveMain)
+				_ = trimLogFile(logFile, 1000)
+				writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
+				return output.String(), nil
+			}
+		}
+		if hasOrigin && remoteMain != "" {
 			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
 			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
-			if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
+			if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", remoteMain); err != nil {
 				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
 				writeLine("auto-sync: rebase failed")
 				_ = trimLogFile(logFile, 1000)
 				return output.String(), nil
 			}
-			writeLine("auto-sync: push %s", mainBranch)
-			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", mainBranch)
+			writeLine("auto-sync: push %s", remoteMain)
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", remoteMain)
+		} else if hasOrigin && remoteMain == "" {
+			writeLine("auto-sync: remote HEAD missing; skip rebase")
 		} else {
 			writeLine("auto-sync: no remote origin")
 		}
@@ -163,18 +201,41 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 
 	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "commit", "-m", commitMessage)
 	if hasOrigin {
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
+		if hasCommits && remoteMain != "" {
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
+		}
 
-		if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", mainBranch); err != nil {
-			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
-			writeLine("auto-sync: rebase failed")
+		if hasCommits && remoteMain != "" {
+			if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", remoteMain); err != nil {
+				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
+				writeLine("auto-sync: rebase failed")
+				_ = trimLogFile(logFile, 1000)
+				return output.String(), nil
+			}
+		}
+
+		if !hasCommits {
+			writeLine("auto-sync: push %s", effectiveMain)
+			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "-u", "origin", effectiveMain)
 			_ = trimLogFile(logFile, 1000)
+			writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
 			return output.String(), nil
 		}
 
-		writeLine("auto-sync: push %s", mainBranch)
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", mainBranch)
+		if remoteMain != "" {
+			if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", remoteMain); err != nil {
+				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
+				writeLine("auto-sync: rebase failed")
+				_ = trimLogFile(logFile, 1000)
+				return output.String(), nil
+			}
+		} else {
+			writeLine("auto-sync: remote HEAD missing; skip rebase")
+		}
+
+		writeLine("auto-sync: push %s", effectiveMain)
+		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", effectiveMain)
 	} else {
 		writeLine("auto-sync: no remote origin")
 	}
@@ -435,6 +496,139 @@ func gitHasOriginRemote(ctx context.Context, dir string, env []string, writer io
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+		_, _ = fmt.Fprintln(writer)
+		return false
+	}
+	_, _ = fmt.Fprintln(writer, "-> ok")
+	_, _ = fmt.Fprintln(writer)
+	return true
+}
+
+func gitHasCommits(ctx context.Context, dir string, env []string, writer io.Writer) bool {
+	writeCommand(writer, "git", "rev-parse", "--verify", "HEAD")
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_, _ = writer.Write(output)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintln(writer, "-> no commits")
+		_, _ = fmt.Fprintln(writer)
+		return false
+	}
+	_, _ = fmt.Fprintln(writer, "-> ok")
+	_, _ = fmt.Fprintln(writer)
+	return true
+}
+
+func resolveRemoteMainBranch(ctx context.Context, dir string, env []string, writer io.Writer) string {
+	writeCommand(writer, "git", "ls-remote", "--symref", "origin", "HEAD")
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--symref", "origin", "HEAD")
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_, _ = writer.Write(output)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+		_, _ = fmt.Fprintln(writer)
+		return ""
+	}
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ref:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		ref := strings.TrimSpace(fields[1])
+		if strings.HasPrefix(ref, "refs/heads/") {
+			branch := strings.TrimPrefix(ref, "refs/heads/")
+			if branch != "" {
+				_, _ = fmt.Fprintf(writer, "-> ok (%s)\n\n", branch)
+				return branch
+			}
+		}
+	}
+	_, _ = fmt.Fprintln(writer, "-> ok (no HEAD)")
+	_, _ = fmt.Fprintln(writer)
+	return ""
+}
+
+func resolveLocalMainBranch(ctx context.Context, dir string, env []string, writer io.Writer) string {
+	if gitLocalBranchExists(ctx, dir, env, writer, "master") {
+		return "master"
+	}
+	if gitLocalBranchExists(ctx, dir, env, writer, "main") {
+		return "main"
+	}
+	return gitCurrentBranch(ctx, dir, env, writer)
+}
+
+func gitLocalBranchExists(ctx context.Context, dir string, env []string, writer io.Writer, branch string) bool {
+	writeCommand(writer, "git", "show-ref", "--verify", "refs/heads/"+branch)
+	cmd := exec.CommandContext(ctx, "git", "show-ref", "--verify", "refs/heads/"+branch)
+	cmd.Dir = dir
+	cmd.Env = env
+	if err := cmd.Run(); err != nil {
+		_, _ = fmt.Fprintln(writer, "-> missing")
+		_, _ = fmt.Fprintln(writer)
+		return false
+	}
+	_, _ = fmt.Fprintln(writer, "-> ok")
+	_, _ = fmt.Fprintln(writer)
+	return true
+}
+
+func gitCurrentBranch(ctx context.Context, dir string, env []string, writer io.Writer) string {
+	writeCommand(writer, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_, _ = writer.Write(output)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+		_, _ = fmt.Fprintln(writer)
+		return ""
+	}
+	branch := strings.TrimSpace(string(output))
+	if branch == "HEAD" || branch == "" {
+		_, _ = fmt.Fprintln(writer, "-> detached")
+		_, _ = fmt.Fprintln(writer)
+		return ""
+	}
+	_, _ = fmt.Fprintf(writer, "-> ok (%s)\n\n", branch)
+	return branch
+}
+
+func remoteBranchExists(ctx context.Context, dir string, env []string, writer io.Writer, branch string) bool {
+	if strings.TrimSpace(branch) == "" {
+		return false
+	}
+	writeCommand(writer, "git", "ls-remote", "--heads", "origin", branch)
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "origin", branch)
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_, _ = writer.Write(output)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+		_, _ = fmt.Fprintln(writer)
+		return false
+	}
+	if strings.TrimSpace(string(output)) == "" {
+		_, _ = fmt.Fprintln(writer, "-> missing")
 		_, _ = fmt.Fprintln(writer)
 		return false
 	}
