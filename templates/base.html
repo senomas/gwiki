@@ -877,7 +877,7 @@
   </style>
 </head>
 <body class="min-h-screen bg-[#0b0d0f] text-slate-100" data-note-list-mode="{{if .CompactNoteList}}compact{{else}}full{{end}}">
-{{if or (eq .ContentTemplate "settings") (eq .ContentTemplate "login") (eq .ContentTemplate "edit")}}
+{{if or (eq .ContentTemplate "settings") (eq .ContentTemplate "login") (eq .ContentTemplate "change_password") (eq .ContentTemplate "change_password_ok") (eq .ContentTemplate "edit")}}
   {{template "layout_plain" .}}
 {{else}}
   {{template "layout_sidebar" .}}
@@ -2297,7 +2297,7 @@
         }
       }
       function shouldReloadOnRestore(pathname) {
-        if (pathname === "/login" || pathname === "/settings") {
+        if (pathname === "/login" || pathname === "/settings" || pathname === "/password/change") {
           return false;
         }
         if (pathname.startsWith("/notes/") && pathname.endsWith("/edit")) {

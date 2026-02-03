@@ -4,23 +4,25 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	RepoPath          string
-	DataPath          string
-	ListenAddr        string
-	AuthUser          string
-	AuthPass          string
-	AuthFile          string
-	GitDebounce       time.Duration
-	GitPushDebounce   time.Duration
-	GitSchedule       time.Duration
-	NoteLockTimeout   time.Duration
-	UpdatedHistoryMax int
-	DBLockTimeout     time.Duration
-	DBBusyTimeout     time.Duration
+	RepoPath             string
+	DataPath             string
+	ListenAddr           string
+	AuthUser             string
+	AuthPass             string
+	AuthFile             string
+	GitDebounce          time.Duration
+	GitPushDebounce      time.Duration
+	GitSchedule          time.Duration
+	NoteLockTimeout      time.Duration
+	UpdatedHistoryMax    int
+	DBLockTimeout        time.Duration
+	DBBusyTimeout        time.Duration
+	PasswordExpiryMonths int
 }
 
 func Load() Config {
@@ -47,6 +49,7 @@ func Load() Config {
 	cfg.UpdatedHistoryMax = parseIntOr("WIKI_UPDATED_HISTORY_MAX", 100)
 	cfg.DBLockTimeout = time.Duration(parseIntOr("WIKI_DB_LOCK_TIMEOUT_MS", 5000)) * time.Millisecond
 	cfg.DBBusyTimeout = time.Duration(parseIntOr("WIKI_DB_BUSY_TIMEOUT_MS", 10000)) * time.Millisecond
+	cfg.PasswordExpiryMonths = parseExpiryMonthsOr("WIKI_PASSWORD_EXPIRY", 6)
 	return cfg
 }
 
@@ -71,6 +74,23 @@ func parseIntOr(key string, fallback int) int {
 		if i, err := strconv.Atoi(v); err == nil && i > 0 {
 			return i
 		}
+	}
+	return fallback
+}
+
+func parseExpiryMonthsOr(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if strings.HasSuffix(strings.ToLower(raw), "mo") {
+		raw = strings.TrimSpace(raw[:len(raw)-2])
+	}
+	if raw == "" {
+		return fallback
+	}
+	if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+		return v
 	}
 	return fallback
 }

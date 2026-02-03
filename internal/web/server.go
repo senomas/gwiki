@@ -140,6 +140,7 @@ func (r *statusRecorder) Flush() {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/login", s.handleLogin)
+	s.mux.HandleFunc("/password/change", s.handlePasswordChange)
 	s.mux.HandleFunc("/logout", s.handleLogout)
 	s.mux.HandleFunc("/events", s.handleEvents)
 	s.mux.HandleFunc("/toast", s.handleToastList)

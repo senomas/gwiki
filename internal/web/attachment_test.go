@@ -255,7 +255,7 @@ func TestAttachmentAndAssetAccessControl(t *testing.T) {
 		t.Fatalf("hash password: %v", err)
 	}
 	authFile := filepath.Join(dataDir, "auth.txt")
-	if err := os.WriteFile(authFile, []byte("alice:"+authHash+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(authFile, []byte("alice:"+authHash+":2099-01-01\n"), 0o600); err != nil {
 		t.Fatalf("write auth file: %v", err)
 	}
 

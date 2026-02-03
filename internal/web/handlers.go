@@ -5202,6 +5202,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.views.RenderPage(w, data)
 		return
 	}
+	if s.auth.IsExpired(user, time.Now()) {
+		returnTo = "/password/change"
+	}
 	token, err := s.auth.CreateToken(user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -5223,6 +5226,112 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, returnTo, http.StatusSeeOther)
+}
+
+func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	userName := currentUserName(r.Context())
+	if userName == "" {
+		http.Error(w, "user required", http.StatusBadRequest)
+		return
+	}
+	if r.Method == http.MethodGet {
+		returnTo := sanitizeReturnURL(r, r.URL.Query().Get("return_to"))
+		data := ViewData{
+			Title:           "Change Password",
+			ContentTemplate: "change_password",
+			ReturnURL:       returnTo,
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderPage(w, data)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	currentPass := r.FormValue("current_password")
+	newPass := r.FormValue("new_password")
+	confirmPass := r.FormValue("confirm_password")
+	returnTo := sanitizeReturnURL(r, r.FormValue("return_to"))
+	fail := func(message string) {
+		s.addToast(r, Toast{
+			ID:              uuid.NewString(),
+			Message:         message,
+			Kind:            "error",
+			DurationSeconds: 6,
+			CreatedAt:       time.Now(),
+		})
+		if isHTMX(r) {
+			w.Header().Set("HX-Retarget", "#toast-stack")
+			w.Header().Set("HX-Reswap", "outerHTML")
+			toasts := s.toasts.List(toastKey(r))
+			data := ViewData{
+				ContentTemplate: "toast",
+				ToastItems:      toasts,
+			}
+			s.attachViewData(r, &data)
+			s.views.RenderTemplate(w, "toast", data)
+			return
+		}
+		http.Redirect(w, r, "/password/change", http.StatusSeeOther)
+	}
+	if currentPass == "" || newPass == "" {
+		fail("Current and new password required.")
+		return
+	}
+	if newPass != confirmPass {
+		fail("Password confirmation does not match.")
+		return
+	}
+	if currentPass == newPass {
+		fail("New password must differ from current password.")
+		return
+	}
+	if !s.auth.Authenticate(userName, currentPass) {
+		fail("Current password is incorrect.")
+		return
+	}
+	if strings.TrimSpace(s.cfg.AuthFile) == "" {
+		fail("Auth file not configured.")
+		return
+	}
+	hash, err := auth.HashPassword(newPass)
+	if err != nil {
+		fail("Failed to hash password.")
+		return
+	}
+	months := s.cfg.PasswordExpiryMonths
+	if months <= 0 {
+		months = 6
+	}
+	expiry := time.Now().In(time.Local).AddDate(0, months, 0).Format("2006-01-02")
+	if err := updateAuthUserPassword(s.cfg.AuthFile, userName, hash, expiry); err != nil {
+		fail("Failed to update password.")
+		return
+	}
+	if s.auth != nil {
+		if err := s.auth.Reload(); err != nil {
+			slog.Warn("reload auth", "err", err)
+		}
+	}
+	data := ViewData{
+		Title:           "Password Updated",
+		ContentTemplate: "change_password_ok",
+		ReturnURL:       returnTo,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
 }
 
 func (s *Server) refreshAuthSources(ctx context.Context) error {
@@ -7199,7 +7308,7 @@ func (s *Server) handleSettingsUserCreate(w http.ResponseWriter, r *http.Request
 		fail(err.Error())
 		return
 	}
-	if err := addAuthUser(s.cfg.AuthFile, username, password); err != nil {
+	if err := addAuthUser(s.cfg.AuthFile, username, password, "1900-01-01"); err != nil {
 		cleanup()
 		fail(err.Error())
 		return
@@ -7235,7 +7344,7 @@ func initRepo(ctx context.Context, repoPath string) error {
 	return nil
 }
 
-func addAuthUser(path string, username string, password string) error {
+func addAuthUser(path string, username string, password string, expiry string) error {
 	users, err := auth.LoadFile(path)
 	if err != nil {
 		return err
@@ -7263,8 +7372,61 @@ func addAuthUser(path string, username string, password string) error {
 			}
 		}
 	}
-	_, err = f.WriteString(username + ":" + hash + "\n")
+	_, err = f.WriteString(username + ":" + hash + ":" + expiry + "\n")
 	return err
+}
+
+func updateAuthUserPassword(path string, username string, hash string, expiry string) error {
+	if _, err := time.Parse("2006-01-02", expiry); err != nil {
+		return fmt.Errorf("invalid password expiry %q", expiry)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	updated := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			lines = append(lines, line)
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 4)
+		if len(parts) < 3 {
+			return fmt.Errorf("invalid auth entry for %q", username)
+		}
+		user := strings.TrimSpace(parts[0])
+		if strings.EqualFold(user, username) {
+			roleRaw := ""
+			if len(parts) >= 4 {
+				roleRaw = strings.TrimSpace(parts[3])
+			}
+			updatedLine := user + ":" + hash + ":" + expiry
+			if roleRaw != "" {
+				updatedLine += ":" + roleRaw
+			}
+			lines = append(lines, updatedLine)
+			updated = true
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if !updated {
+		return fmt.Errorf("user not found")
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func removeAuthUser(path string, username string) (bool, error) {

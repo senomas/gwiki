@@ -31,7 +31,7 @@ func TestLoadFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	content := "# comment\n\nalice:" + hash + ":admin, staff\n"
+	content := "# comment\n\nalice:" + hash + ":1900-01-01:admin, staff\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write auth file: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestLoadFileDuplicateUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	content := "alice:" + hash1 + "\nalice:" + hash2 + "\n"
+	content := "alice:" + hash1 + ":1900-01-01\nalice:" + hash2 + ":1900-01-01\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write auth file: %v", err)
 	}

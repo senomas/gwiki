@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -31,8 +32,9 @@ type Argon2idHash struct {
 }
 
 type UserEntry struct {
-	Hash  *Argon2idHash
-	Roles []string
+	Hash   *Argon2idHash
+	Roles  []string
+	Expiry time.Time
 }
 
 func HashPassword(password string) (string, error) {
@@ -135,14 +137,18 @@ func LoadFile(path string) (map[string]UserEntry, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) < 2 {
-			return nil, fmt.Errorf("invalid auth line %d: expected user:hash", lineNum)
+		parts := strings.SplitN(line, ":", 4)
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("invalid auth line %d: expected user:hash:expiry", lineNum)
 		}
 		user := strings.TrimSpace(parts[0])
 		hash := strings.TrimSpace(parts[1])
+		expiryRaw := strings.TrimSpace(parts[2])
 		if user == "" || hash == "" {
 			return nil, fmt.Errorf("invalid auth line %d: empty user or hash", lineNum)
+		}
+		if expiryRaw == "" {
+			return nil, fmt.Errorf("invalid auth line %d: empty password expiry", lineNum)
 		}
 		if _, exists := users[user]; exists {
 			return nil, fmt.Errorf("duplicate user %q in auth file", user)
@@ -154,8 +160,12 @@ func LoadFile(path string) (map[string]UserEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid auth line %d: %w", lineNum, err)
 		}
+		expiry, err := time.ParseInLocation("2006-01-02", expiryRaw, time.Local)
+		if err != nil {
+			return nil, fmt.Errorf("invalid auth line %d: invalid password expiry %q", lineNum, expiryRaw)
+		}
 		roles := parseRoles(parts)
-		users[user] = UserEntry{Hash: parsed, Roles: roles}
+		users[user] = UserEntry{Hash: parsed, Roles: roles, Expiry: expiry}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read auth file: %w", err)
@@ -165,10 +175,10 @@ func LoadFile(path string) (map[string]UserEntry, error) {
 }
 
 func parseRoles(parts []string) []string {
-	if len(parts) < 3 {
+	if len(parts) < 4 {
 		return nil
 	}
-	raw := strings.TrimSpace(parts[2])
+	raw := strings.TrimSpace(parts[3])
 	if raw == "" {
 		return nil
 	}

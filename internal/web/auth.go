@@ -21,9 +21,10 @@ import (
 )
 
 type authEntry struct {
-	plain string
-	hash  *auth.Argon2idHash
-	roles []string
+	plain  string
+	hash   *auth.Argon2idHash
+	roles  []string
+	expiry time.Time
 }
 
 type Auth struct {
@@ -109,7 +110,7 @@ func loadAuthUsers(cfg config.Config) (map[string]authEntry, error) {
 			return nil, err
 		}
 		for user, entry := range fileUsers {
-			users[user] = authEntry{hash: entry.Hash, roles: entry.Roles}
+			users[user] = authEntry{hash: entry.Hash, roles: entry.Roles, expiry: entry.Expiry}
 		}
 	}
 	if cfg.AuthUser != "" || cfg.AuthPass != "" {
@@ -124,6 +125,15 @@ func loadAuthUsers(cfg config.Config) (map[string]authEntry, error) {
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, ok := a.tokenUser(r); ok {
+			if a.isExpired(user, time.Now()) && !allowExpiredPath(r) {
+				if isHTMXRequest(r) {
+					w.Header().Set("HX-Redirect", "/password/change")
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				http.Redirect(w, r, "/password/change", http.StatusSeeOther)
+				return
+			}
 			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true, Roles: a.rolesForUser(user)})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -151,6 +161,26 @@ func (a *Auth) verify(user, pass string) bool {
 
 func (a *Auth) Authenticate(user, pass string) bool {
 	return a.verify(user, pass)
+}
+
+func (a *Auth) IsExpired(user string, now time.Time) bool {
+	return a.isExpired(user, now)
+}
+
+func (a *Auth) isExpired(user string, now time.Time) bool {
+	a.mu.RLock()
+	entry, ok := a.users[user]
+	a.mu.RUnlock()
+	if !ok || entry.expiry.IsZero() {
+		return false
+	}
+	loc := time.Local
+	if !now.IsZero() {
+		loc = now.Location()
+	}
+	today := time.Date(now.In(loc).Year(), now.In(loc).Month(), now.In(loc).Day(), 0, 0, 0, 0, loc)
+	expiry := time.Date(entry.expiry.In(loc).Year(), entry.expiry.In(loc).Month(), entry.expiry.In(loc).Day(), 0, 0, 0, 0, loc)
+	return expiry.Before(today)
 }
 
 func (a *Auth) rolesForUser(user string) []string {
@@ -181,6 +211,21 @@ func (a *Auth) ListUsers() []UserSummary {
 		return strings.ToLower(users[i].Name) < strings.ToLower(users[j].Name)
 	})
 	return users
+}
+
+func allowExpiredPath(r *http.Request) bool {
+	path := r.URL.Path
+	if path == "/password/change" || path == "/logout" {
+		return true
+	}
+	if strings.HasPrefix(path, "/static/") || path == "/toast" {
+		return true
+	}
+	return false
+}
+
+func isHTMXRequest(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("HX-Request"), "true")
 }
 
 func (a *Auth) CreateToken(user string) (string, error) {
