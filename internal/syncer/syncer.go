@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -367,8 +366,16 @@ func LogGraphWithOptions(ctx context.Context, repoPath string, limit int, opts O
 		"GIT_CREDENTIALS_FILE="+gitCredentialsFile,
 	)
 	var output bytes.Buffer
-	_, err := runGitCommand(ctx, repoDir, env, &output, "git", "log", "--graph", "--decorate", "--no-walk", "--all", "-n", strconv.Itoa(limit))
-	return output.String(), err
+	tips, err := logCommitTips(ctx, repoDir, env, &output, limit)
+	if err != nil {
+		return output.String(), err
+	}
+	if len(tips) > 0 {
+		for _, line := range tips {
+			_, _ = fmt.Fprintln(&output, line)
+		}
+	}
+	return output.String(), nil
 }
 
 func resolveOptions(repoPath string, opts Options) Options {
@@ -433,6 +440,57 @@ func resolveOptions(repoPath string, opts Options) Options {
 		opts.EmailDomain = "gwiki.org"
 	}
 	return opts
+}
+
+func logCommitTips(ctx context.Context, dir string, env []string, writer io.Writer, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	writeCommand(writer, "git", "log", "--decorate", "--all")
+	cmd := exec.CommandContext(ctx, "git", "log", "--decorate", "--all")
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if len(output) > 0 {
+			_, _ = writer.Write(output)
+		}
+		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+		_, _ = fmt.Fprintln(writer)
+		return nil, err
+	}
+	lines := strings.Split(string(output), "\n")
+	tips := make([]string, 0, limit)
+	block := make([]string, 0, 6)
+	hasDecoration := false
+	flush := func() {
+		if len(block) == 0 {
+			return
+		}
+		if hasDecoration && len(tips) < limit {
+			tips = append(tips, block...)
+		}
+		block = block[:0]
+		hasDecoration = false
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "commit ") {
+			flush()
+			block = append(block, line)
+			hasDecoration = strings.Contains(line, " (")
+			continue
+		}
+		if len(block) > 0 {
+			block = append(block, line)
+		}
+		if len(tips) >= limit {
+			break
+		}
+	}
+	flush()
+	_, _ = fmt.Fprintln(writer, "-> ok")
+	_, _ = fmt.Fprintln(writer)
+	return tips, nil
 }
 
 func gitConfigLocalDefined(ctx context.Context, dir string, env []string, writer io.Writer, key string) (bool, error) {
