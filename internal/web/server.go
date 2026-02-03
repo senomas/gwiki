@@ -72,7 +72,7 @@ func (s *Server) accessContextMiddleware(next http.Handler) http.Handler {
 					}
 				}
 				if err == nil && userID > 0 {
-					ctx = index.WithAccessFilter(ctx, userID, nil, ownerIDs)
+					ctx = index.WithAccessFilter(ctx, userID, ownerIDs)
 				}
 			}
 		} else {

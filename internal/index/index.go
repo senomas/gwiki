@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -22,6 +23,7 @@ import (
 type Index struct {
 	db          *sql.DB
 	lockTimeout time.Duration
+	syncMu      sync.Mutex
 }
 
 type OpenOptions struct {
@@ -123,7 +125,6 @@ type BrokenLink struct {
 type fileRecord struct {
 	ID        int
 	UserID    int
-	GroupID   sql.NullInt64
 	Path      string
 	Hash      string
 	MTimeUnix int64
@@ -287,15 +288,11 @@ func ownerJoins(table string) string {
 	if table == "" {
 		table = "files"
 	}
-	return fmt.Sprintf(
-		"LEFT JOIN users u ON %s.user_id = u.id LEFT JOIN groups g ON %s.group_id = g.id",
-		table,
-		table,
-	)
+	return fmt.Sprintf("LEFT JOIN users u ON %s.user_id = u.id", table)
 }
 
 func ownerNameExpr() string {
-	return "COALESCE(g.name, u.name)"
+	return "u.name"
 }
 
 func (i *Index) ownerClauseForName(ctx context.Context, ownerName string, table string) (string, []any, error) {
@@ -306,16 +303,16 @@ func (i *Index) ownerClauseForName(ctx context.Context, ownerName string, table 
 	if table == "" {
 		table = "files"
 	}
-	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	userID, err := i.LookupOwnerIDs(ctx, ownerName)
 	if err != nil {
 		return "", nil, err
 	}
-	clause, args := ownerWhereClause(userID, groupID, table)
+	clause, args := ownerWhereClause(userID, table)
 	return clause, args, nil
 }
 
 func ftsJoinClause() string {
-	return "JOIN files ON files.path = fts.path AND ((files.group_id IS NULL AND fts.group_id IS NULL AND files.user_id = fts.user_id) OR (files.group_id = fts.group_id)) " + ownerJoins("files")
+	return "JOIN files ON files.path = fts.path AND files.user_id = fts.user_id " + ownerJoins("files")
 }
 
 func slugify(input string) string {
@@ -365,6 +362,8 @@ func OpenWithOptions(path string, opts OpenOptions) (*Index, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	return &Index{db: db, lockTimeout: 5 * time.Second}, nil
 }
 
@@ -387,7 +386,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	userID, groupID, err := i.ResolveOwnerIDs(ctx, ownerName)
+	userID, err := i.ResolveOwnerIDs(ctx, ownerName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -401,7 +400,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 	defer tx.Rollback()
 
 	var id int
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	ownerArgs = append(ownerArgs, relPath)
 	err = i.queryRowContextTx(ctx, tx, "SELECT id FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -430,7 +429,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 			}
 		}
 	}
-	ownerClause, ownerArgs = ownerWhereClause(userID, groupID, "fts")
+	ownerClause, ownerArgs = ownerWhereClause(userID, "fts")
 	ownerArgs = append(ownerArgs, relPath)
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
@@ -439,10 +438,10 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 }
 
 func (i *Index) Init(ctx context.Context, repoPath string) error {
-	return i.InitWithOwners(ctx, repoPath, nil, nil)
+	return i.InitWithOwners(ctx, repoPath, nil)
 }
 
-func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []string, groups map[string][]GroupMember) error {
+func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []string) error {
 	if _, err := i.execContext(ctx, schemaSQL); err != nil {
 		return err
 	}
@@ -463,12 +462,12 @@ func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []str
 		if err := i.setSchemaVersion(ctx, schemaVersion); err != nil {
 			return err
 		}
-		if err := i.SyncOwners(ctx, users, groups); err != nil {
+		if err := i.SyncOwners(ctx, users); err != nil {
 			return err
 		}
 		return i.RebuildFromFS(ctx, repoPath)
 	}
-	if err := i.SyncOwners(ctx, users, groups); err != nil {
+	if err := i.SyncOwners(ctx, users); err != nil {
 		return err
 	}
 	if err := i.ensureColumn(ctx, "file_tags", "is_exclusive", "INTEGER NOT NULL DEFAULT 0"); err != nil {
@@ -636,6 +635,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 27
+		case 27:
+			slog.Info("schema migration", "from", 27, "to", 28)
+			if err := i.migrate27To28(ctx); err != nil {
+				return err
+			}
+			version = 28
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -859,16 +864,12 @@ func (i *Index) migrate23To24(ctx context.Context) error {
 	if _, err := i.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS task_tags (
 			user_id INTEGER NOT NULL,
-			group_id INTEGER,
 			task_id INTEGER NOT NULL,
 			tag_id INTEGER NOT NULL
 		)`); err != nil {
 		return err
 	}
-	if _, err := i.execContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS task_tags_user ON task_tags(user_id, task_id, tag_id) WHERE group_id IS NULL"); err != nil {
-		return err
-	}
-	if _, err := i.execContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS task_tags_group ON task_tags(group_id, task_id, tag_id) WHERE group_id IS NOT NULL"); err != nil {
+	if _, err := i.execContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS task_tags_user ON task_tags(user_id, task_id, tag_id)"); err != nil {
 		return err
 	}
 	return nil
@@ -885,7 +886,6 @@ func (i *Index) migrate25To26(ctx context.Context) error {
 	_, err := i.execContext(ctx, `
 		CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 			user_id UNINDEXED,
-			group_id UNINDEXED,
 			path,
 			title,
 			body,
@@ -904,6 +904,32 @@ func (i *Index) migrate26To27(ctx context.Context) error {
 			PRIMARY KEY(owner_user_id, grantee_user_id)
 		)
 	`)
+	return err
+}
+
+func (i *Index) migrate27To28(ctx context.Context) error {
+	drops := []string{
+		"DROP TABLE IF EXISTS files",
+		"DROP TABLE IF EXISTS file_histories",
+		"DROP TABLE IF EXISTS tags",
+		"DROP TABLE IF EXISTS file_tags",
+		"DROP TABLE IF EXISTS links",
+		"DROP TABLE IF EXISTS tasks",
+		"DROP TABLE IF EXISTS task_tags",
+		"DROP TABLE IF EXISTS embed_cache",
+		"DROP TABLE IF EXISTS collapsed_sections",
+		"DROP TABLE IF EXISTS broken_links",
+		"DROP TABLE IF EXISTS fts",
+		"DROP TABLE IF EXISTS user_access",
+		"DROP TABLE IF EXISTS groups",
+		"DROP TABLE IF EXISTS group_members",
+	}
+	for _, stmt := range drops {
+		if _, err := i.execContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	_, err := i.execContext(ctx, schemaSQL)
 	return err
 }
 
@@ -1162,7 +1188,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if err != nil {
 		return err
 	}
-	userID, groupID, err := i.ResolveOwnerIDs(ctx, ownerName)
+	userID, err := i.ResolveOwnerIDs(ctx, ownerName)
 	if err != nil {
 		return err
 	}
@@ -1191,7 +1217,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 
 	var existingID int
 	var createdAt int64
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	ownerArgs = append(ownerArgs, relPath)
 	err = i.queryRowContextTx(ctx, tx, "SELECT id, created_at FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1202,9 +1228,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 		etagTime := time.Now().UnixNano()
 		_, err = i.execContextTx(ctx, tx, `
-			INSERT INTO files(user_id, group_id, path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, etag_time, priority, is_journal)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, userID, nullIfInvalidInt64(groupID), relPath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, etagTime, meta.Priority, isJournal)
+			INSERT INTO files(user_id, path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, etag_time, priority, is_journal)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, userID, relPath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, etagTime, meta.Priority, isJournal)
 		if err != nil {
 			return err
 		}
@@ -1240,7 +1266,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		return err
 	}
 	if uid != "" {
-		ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "collapsed_sections")
+		ownerClause, ownerArgs := ownerWhereClause(userID, "collapsed_sections")
 		ownerArgs = append(ownerArgs, uid)
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM collapsed_sections WHERE "+ownerClause+" AND note_id=?", ownerArgs...); err != nil {
 			return err
@@ -1250,9 +1276,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 				continue
 			}
 			if _, err := i.execContextTx(ctx, tx, `
-				INSERT INTO collapsed_sections(user_id, group_id, note_id, line_no)
-				VALUES(?, ?, ?, ?)
-			`, userID, nullIfInvalidInt64(groupID), uid, lineNo); err != nil {
+				INSERT INTO collapsed_sections(user_id, note_id, line_no)
+				VALUES(?, ?, ?)
+			`, userID, uid, lineNo); err != nil {
 				return err
 			}
 		}
@@ -1273,15 +1299,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if name == "" {
 			continue
 		}
-		_, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO tags(user_id, group_id, name) VALUES(?, ?, ?)", userID, nullIfInvalidInt64(groupID), name)
+		_, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO tags(user_id, name) VALUES(?, ?)", userID, name)
 		if err != nil {
 			return err
 		}
 		var tagID int
-		if err := i.queryRowContextTx(ctx, tx, "SELECT id FROM tags WHERE group_id IS ? AND user_id=? AND name=?", nullIfInvalidInt64(groupID), userID, name).Scan(&tagID); err != nil {
+		if err := i.queryRowContextTx(ctx, tx, "SELECT id FROM tags WHERE user_id=? AND name=?", userID, name).Scan(&tagID); err != nil {
 			return err
 		}
-		if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO file_tags(user_id, group_id, file_id, tag_id, is_exclusive) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, tagID, boolToInt(isExclusive)); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO file_tags(user_id, file_id, tag_id, is_exclusive) VALUES(?, ?, ?, ?)", userID, existingID, tagID, boolToInt(isExclusive)); err != nil {
 			return err
 		}
 	}
@@ -1290,15 +1316,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		if link.Ref == "" {
 			continue
 		}
-		toFileID, err := i.resolveLinkTargetID(ctx, tx, userID, groupID, link.Ref)
+		toFileID, err := i.resolveLinkTargetID(ctx, tx, userID, link.Ref)
 		if err != nil {
 			return err
 		}
-		if _, err := i.execContextTx(ctx, tx, "INSERT INTO links(user_id, group_id, from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, nullIfZero(toFileID), link.Kind, link.LineNo, link.Line); err != nil {
+		if _, err := i.execContextTx(ctx, tx, "INSERT INTO links(user_id, from_file_id, to_ref, to_file_id, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, existingID, link.Ref, nullIfZero(toFileID), link.Kind, link.LineNo, link.Line); err != nil {
 			return err
 		}
 		if link.Kind == "wikilink" && toFileID == 0 {
-			if _, err := i.execContextTx(ctx, tx, "INSERT INTO broken_links(user_id, group_id, from_file_id, to_ref, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
+			if _, err := i.execContextTx(ctx, tx, "INSERT INTO broken_links(user_id, from_file_id, to_ref, kind, line_no, line) VALUES(?, ?, ?, ?, ?, ?)", userID, existingID, link.Ref, link.Kind, link.LineNo, link.Line); err != nil {
 				return err
 			}
 		}
@@ -1322,10 +1348,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			due = defaultDue
 		}
 		res, err := i.execContextTx(ctx, tx, `
-			INSERT INTO tasks(user_id, group_id, file_id, line_no, text, hash, checked, due_date, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO tasks(user_id, file_id, line_no, text, hash, checked, due_date, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 			userID,
-			nullIfInvalidInt64(groupID),
 			existingID,
 			task.LineNo,
 			task.Text,
@@ -1351,15 +1376,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			}
 			tagID, ok := taskTagIDs[name]
 			if !ok {
-				if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO tags(user_id, group_id, name) VALUES(?, ?, ?)", userID, nullIfInvalidInt64(groupID), name); err != nil {
+				if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO tags(user_id, name) VALUES(?, ?)", userID, name); err != nil {
 					return err
 				}
-				if err := i.queryRowContextTx(ctx, tx, "SELECT id FROM tags WHERE group_id IS ? AND user_id=? AND name=?", nullIfInvalidInt64(groupID), userID, name).Scan(&tagID); err != nil {
+				if err := i.queryRowContextTx(ctx, tx, "SELECT id FROM tags WHERE user_id=? AND name=?", userID, name).Scan(&tagID); err != nil {
 					return err
 				}
 				taskTagIDs[name] = tagID
 			}
-			if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO task_tags(user_id, group_id, task_id, tag_id) VALUES(?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), taskID, tagID); err != nil {
+			if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO task_tags(user_id, task_id, tag_id) VALUES(?, ?, ?)", userID, taskID, tagID); err != nil {
 				return err
 			}
 			taskTagCount++
@@ -1369,13 +1394,13 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		slog.Debug("task tags indexed", "path", relPath, "count", taskTagCount)
 	}
 
-	ownerClause, ownerArgs = ownerWhereClause(userID, groupID, "fts")
+	ownerClause, ownerArgs = ownerWhereClause(userID, "fts")
 	ownerArgs = append(ownerArgs, relPath)
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
 	}
 	body := StripFrontmatter(string(content))
-	if _, err := i.execContextTx(ctx, tx, "INSERT INTO fts(user_id, group_id, path, title, body) VALUES(?, ?, ?, ?, ?)", userID, nullIfInvalidInt64(groupID), relPath, meta.Title, body); err != nil {
+	if _, err := i.execContextTx(ctx, tx, "INSERT INTO fts(user_id, path, title, body) VALUES(?, ?, ?, ?)", userID, relPath, meta.Title, body); err != nil {
 		return err
 	}
 
@@ -1388,11 +1413,11 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 	if err != nil {
 		return err
 	}
-	userID, groupID, err := i.ResolveOwnerIDs(ctx, ownerName)
+	userID, err := i.ResolveOwnerIDs(ctx, ownerName)
 	if err != nil {
 		return err
 	}
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	ownerArgs = append(ownerArgs, relPath)
 	err = i.queryRowContext(ctx, "SELECT id, hash, mtime_unix, size FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).
 		Scan(&rec.ID, &rec.Hash, &rec.MTimeUnix, &rec.Size)
@@ -3528,7 +3553,7 @@ func (i *Index) NoteSummaryByPath(ctx context.Context, notePath string) (NoteSum
 	if err != nil {
 		return NoteSummary{}, err
 	}
-	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	userID, err := i.LookupOwnerIDs(ctx, ownerName)
 	if err != nil {
 		return NoteSummary{}, err
 	}
@@ -3536,7 +3561,7 @@ func (i *Index) NoteSummaryByPath(ctx context.Context, notePath string) (NoteSum
 	var mtimeUnix int64
 	clauses := []string{}
 	args := []interface{}{}
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	clauses = append(clauses, ownerClause, "files.path = ?")
 	args = append(args, ownerArgs...)
 	args = append(args, relPath)
@@ -3558,13 +3583,13 @@ func (i *Index) NoteHashByPath(ctx context.Context, notePath string) (NoteHashSu
 	if err != nil {
 		return NoteHashSummary{}, err
 	}
-	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	userID, err := i.LookupOwnerIDs(ctx, ownerName)
 	if err != nil {
 		return NoteHashSummary{}, err
 	}
 	clauses := []string{}
 	args := []interface{}{}
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	clauses = append(clauses, ownerClause, "files.path = ?")
 	args = append(args, ownerArgs...)
 	args = append(args, relPath)
@@ -4384,7 +4409,7 @@ func backlinkCandidates(notePath string, title string, uid string) []string {
 
 func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, error) {
 	query := fmt.Sprintf(`
-		SELECT files.id, files.user_id, files.group_id, files.path, files.hash, files.mtime_unix, files.size, %s
+		SELECT files.id, files.user_id, files.path, files.hash, files.mtime_unix, files.size, %s
 		FROM files
 		%s
 	`, ownerNameExpr(), ownerJoins("files"))
@@ -4399,7 +4424,7 @@ func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, err
 		var relPath string
 		var ownerName string
 		var rec fileRecord
-		if err := rows.Scan(&rec.ID, &rec.UserID, &rec.GroupID, &relPath, &rec.Hash, &rec.MTimeUnix, &rec.Size, &ownerName); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.UserID, &relPath, &rec.Hash, &rec.MTimeUnix, &rec.Size, &ownerName); err != nil {
 			return nil, err
 		}
 		rec.Path = relPath
@@ -4410,19 +4435,17 @@ func (i *Index) loadFileRecords(ctx context.Context) (map[string]fileRecord, err
 
 func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fileRecord, seen map[string]bool) (int, error) {
 	type missing struct {
-		id      int
-		userID  int
-		groupID sql.NullInt64
-		path    string
+		id     int
+		userID int
+		path   string
 	}
 	var missingRows []missing
 	for path, rec := range records {
 		if !seen[path] {
 			missingRows = append(missingRows, missing{
-				id:      rec.ID,
-				userID:  rec.UserID,
-				groupID: rec.GroupID,
-				path:    rec.Path,
+				id:     rec.ID,
+				userID: rec.UserID,
+				path:   rec.Path,
 			})
 		}
 	}
@@ -4452,7 +4475,7 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_histories WHERE file_id=?", row.id); err != nil {
 			return 0, err
 		}
-		ownerClause, ownerArgs := ownerWhereClause(row.userID, row.groupID, "fts")
+		ownerClause, ownerArgs := ownerWhereClause(row.userID, "fts")
 		ownerArgs = append(ownerArgs, row.path)
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 			return 0, err
@@ -4482,19 +4505,12 @@ func nullIfZero(value int) any {
 	return value
 }
 
-func nullIfInvalidInt64(value sql.NullInt64) any {
-	if !value.Valid {
-		return nil
-	}
-	return value.Int64
-}
-
 func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	ownerName, relPath, err := splitOwnerPath(notePath)
 	if err != nil {
 		return false, nil
 	}
-	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	userID, err := i.LookupOwnerIDs(ctx, ownerName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -4504,7 +4520,7 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	var id int
 	clauses := make([]string, 0, 3)
 	args := make([]interface{}, 0, 4)
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	clauses = append(clauses, ownerClause, "files.path = ?")
 	args = append(args, ownerArgs...)
 	args = append(args, relPath)
@@ -4521,12 +4537,12 @@ func (i *Index) NoteExists(ctx context.Context, notePath string) (bool, error) {
 	return true, nil
 }
 
-func (i *Index) resolveLinkTargetID(ctx context.Context, tx *sql.Tx, userID int, groupID sql.NullInt64, ref string) (int, error) {
+func (i *Index) resolveLinkTargetID(ctx context.Context, tx *sql.Tx, userID int, ref string) (int, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return 0, nil
 	}
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	var id int
 	err := i.queryRowContextTx(ctx, tx, "SELECT id FROM files WHERE "+ownerClause+" AND uid=? LIMIT 1", append(ownerArgs, ref)...).Scan(&id)
 	if err == nil {
@@ -4568,14 +4584,14 @@ func (i *Index) FileIDByPath(ctx context.Context, notePath string) (int, error) 
 	if err != nil {
 		return 0, err
 	}
-	userID, groupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	userID, err := i.LookupOwnerIDs(ctx, ownerName)
 	if err != nil {
 		return 0, err
 	}
 	var id int
 	clauses := make([]string, 0, 3)
 	args := make([]interface{}, 0, 4)
-	ownerClause, ownerArgs := ownerWhereClause(userID, groupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
 	clauses = append(clauses, ownerClause, "files.path = ?")
 	args = append(args, ownerArgs...)
 	args = append(args, relPath)

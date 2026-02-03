@@ -262,7 +262,7 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	data.EditCommandToday = cfg.EditCommandTodayValue()
 	data.EditCommandTime = cfg.EditCommandTimeValue()
 	data.EditCommandDateBase = cfg.EditCommandDateBaseValue()
-	// groups are deprecated in favor of user access files
+	// access is now driven by per-owner access files
 }
 
 func hasRole(roles []string, role string) bool {
@@ -4677,7 +4677,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		if _, _, err := s.idx.LookupOwnerIDs(r.Context(), ownerName); err != nil {
+		if _, err := s.idx.LookupOwnerIDs(r.Context(), ownerName); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.NotFound(w, r)
 				return
@@ -5133,11 +5133,11 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 		return err
 	}
 	slog.Debug("auth reload access from repo", "count", len(accessFile))
-	accessMembers := make(map[string][]index.GroupMember, len(accessFile))
+	accessMembers := make(map[string][]index.AccessMember, len(accessFile))
 	for owner, members := range accessFile {
-		list := make([]index.GroupMember, 0, len(members))
+		list := make([]index.AccessMember, 0, len(members))
 		for _, member := range members {
-			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
+			list = append(list, index.AccessMember{User: member.User, Access: member.Access})
 		}
 		accessMembers[owner] = list
 	}
@@ -5149,20 +5149,16 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 	if err := s.auth.ReloadWithExtra(dbUsers); err != nil {
 		return err
 	}
-	stats, err := s.idx.SyncOwnersWithStats(ctx, users, nil)
+	ownerStats, accessStats, err := s.idx.SyncAuthSources(ctx, users, accessMembers)
 	if err != nil {
 		return err
 	}
 	slog.Debug(
 		"auth reload sync owners",
-		"users_in_file", stats.UsersInFile,
-		"users_added", stats.UsersAdded,
-		"users_updated", stats.UsersUpdated,
+		"users_in_file", ownerStats.UsersInFile,
+		"users_added", ownerStats.UsersAdded,
+		"users_updated", ownerStats.UsersUpdated,
 	)
-	accessStats, err := s.idx.SyncUserAccessWithStats(ctx, accessMembers)
-	if err != nil {
-		return err
-	}
 	slog.Debug(
 		"auth reload sync access",
 		"owners_in_file", accessStats.OwnersInFile,
@@ -6012,7 +6008,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		if _, _, err := s.idx.LookupOwnerIDs(r.Context(), normalized); err != nil {
+		if _, err := s.idx.LookupOwnerIDs(r.Context(), normalized); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.NotFound(w, r)
 				return
@@ -10557,7 +10553,7 @@ func (s *Server) isOwnerName(ctx context.Context, name string) (bool, error) {
 	if strings.TrimSpace(name) == "" {
 		return false, nil
 	}
-	_, _, err := s.idx.LookupOwnerIDs(ctx, name)
+	_, err := s.idx.LookupOwnerIDs(ctx, name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

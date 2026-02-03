@@ -6,32 +6,49 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
-type GroupMember struct {
+type AccessMember struct {
 	User   string
 	Access string
 }
 
 type OwnerSyncStats struct {
-	UsersInFile    int
-	UsersAdded     int
-	UsersUpdated   int
+	UsersInFile  int
+	UsersAdded   int
+	UsersUpdated int
 }
 
 type AccessSyncStats struct {
-	OwnersInFile    int
-	GrantsAdded     int
-	GrantsUpdated   int
-	GrantsRemoved   int
+	OwnersInFile  int
+	GrantsAdded   int
+	GrantsUpdated int
+	GrantsRemoved int
 }
 
-func (i *Index) SyncOwners(ctx context.Context, users []string, groups map[string][]GroupMember) error {
-	_, err := i.SyncOwnersWithStats(ctx, users, groups)
+func (i *Index) SyncOwners(ctx context.Context, users []string) error {
+	_, err := i.SyncOwnersWithStats(ctx, users)
 	return err
 }
 
-func (i *Index) SyncOwnersWithStats(ctx context.Context, users []string, groups map[string][]GroupMember) (OwnerSyncStats, error) {
+func (i *Index) SyncAuthSources(ctx context.Context, users []string, access map[string][]AccessMember) (OwnerSyncStats, AccessSyncStats, error) {
+	i.syncMu.Lock()
+	defer i.syncMu.Unlock()
+
+	ownerStats, err := i.SyncOwnersWithStats(ctx, users)
+	if err != nil {
+		return ownerStats, AccessSyncStats{}, err
+	}
+
+	accessStats, err := i.syncUserAccessWithRetry(ctx, access, 1, 200*time.Millisecond)
+	if err != nil {
+		return ownerStats, AccessSyncStats{}, err
+	}
+	return ownerStats, accessStats, nil
+}
+
+func (i *Index) SyncOwnersWithStats(ctx context.Context, users []string) (OwnerSyncStats, error) {
 	userSet := map[string]struct{}{}
 	for _, name := range users {
 		name = strings.TrimSpace(name)
@@ -116,6 +133,25 @@ func (i *Index) ensureUser(ctx context.Context, name string) (bool, error) {
 	return changes > 0 && userID > 0, nil
 }
 
+func (i *Index) ensureUserTx(ctx context.Context, tx *sql.Tx, name string) (bool, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, fmt.Errorf("empty user name")
+	}
+	if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO users(name) VALUES(?)", name); err != nil {
+		return false, err
+	}
+	userID, err := i.userIDByNameTx(ctx, tx, name)
+	if err != nil {
+		return false, err
+	}
+	var changes int64
+	if err := i.queryRowContextTx(ctx, tx, "SELECT changes()").Scan(&changes); err != nil {
+		return false, err
+	}
+	return changes > 0 && userID > 0, nil
+}
+
 func (i *Index) EnsureUser(ctx context.Context, name string) (int, error) {
 	_, err := i.ensureUser(ctx, name)
 	if err != nil {
@@ -124,26 +160,7 @@ func (i *Index) EnsureUser(ctx context.Context, name string) (int, error) {
 	return i.userIDByName(ctx, name)
 }
 
-func (i *Index) ensureGroup(ctx context.Context, name string) (bool, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return false, fmt.Errorf("empty group name")
-	}
-	if _, err := i.execContext(ctx, "INSERT OR IGNORE INTO groups(name) VALUES(?)", name); err != nil {
-		return false, err
-	}
-	groupID, err := i.groupIDByName(ctx, name)
-	if err != nil {
-		return false, err
-	}
-	var changes int64
-	if err := i.queryRowContext(ctx, "SELECT changes()").Scan(&changes); err != nil {
-		return false, err
-	}
-	return changes > 0 && groupID > 0, nil
-}
-
-func (i *Index) SyncUserAccessWithStats(ctx context.Context, access map[string][]GroupMember) (AccessSyncStats, error) {
+func (i *Index) SyncUserAccessWithStats(ctx context.Context, access map[string][]AccessMember) (AccessSyncStats, error) {
 	stats := AccessSyncStats{OwnersInFile: len(access)}
 	existing := map[string]string{}
 	rows, err := i.queryContext(ctx, `
@@ -223,7 +240,7 @@ func (i *Index) SyncUserAccessWithStats(ctx context.Context, access map[string][
 		if ownerName == "" {
 			continue
 		}
-		if _, err := i.ensureUser(ctx, ownerName); err != nil {
+		if _, err := i.ensureUserTx(ctx, tx, ownerName); err != nil {
 			return stats, err
 		}
 		ownerID, err := i.userIDByNameTx(ctx, tx, ownerName)
@@ -239,7 +256,7 @@ func (i *Index) SyncUserAccessWithStats(ctx context.Context, access map[string][
 			if accessLevel != "ro" && accessLevel != "rw" {
 				accessLevel = "ro"
 			}
-			if _, err := i.ensureUser(ctx, user); err != nil {
+			if _, err := i.ensureUserTx(ctx, tx, user); err != nil {
 				return stats, err
 			}
 			userID, err := i.userIDByNameTx(ctx, tx, user)
@@ -255,7 +272,25 @@ func (i *Index) SyncUserAccessWithStats(ctx context.Context, access map[string][
 		}
 	}
 
-	return stats, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+func (i *Index) syncUserAccessWithRetry(ctx context.Context, access map[string][]AccessMember, retries int, backoff time.Duration) (AccessSyncStats, error) {
+	stats, err := i.SyncUserAccessWithStats(ctx, access)
+	if err == nil || retries <= 0 || !isSQLiteBusy(err) {
+		return stats, err
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return stats, ctx.Err()
+	case <-timer.C:
+	}
+	return i.SyncUserAccessWithStats(ctx, access)
 }
 
 func (i *Index) WritableOwnersForUser(ctx context.Context, userName string) ([]string, error) {
@@ -340,10 +375,6 @@ func (i *Index) userIDByName(ctx context.Context, name string) (int, error) {
 	return i.userIDByNameTx(ctx, nil, name)
 }
 
-func (i *Index) groupIDByName(ctx context.Context, name string) (int, error) {
-	return i.groupIDByNameTx(ctx, nil, name)
-}
-
 func (i *Index) userIDByNameTx(ctx context.Context, tx *sql.Tx, name string) (int, error) {
 	var id int
 	if tx != nil {
@@ -354,44 +385,34 @@ func (i *Index) userIDByNameTx(ctx context.Context, tx *sql.Tx, name string) (in
 	return id, err
 }
 
-func (i *Index) groupIDByNameTx(ctx context.Context, tx *sql.Tx, name string) (int, error) {
-	var id int
-	if tx != nil {
-		err := i.queryRowContextTx(ctx, tx, "SELECT id FROM groups WHERE name=?", name).Scan(&id)
-		return id, err
-	}
-	err := i.queryRowContext(ctx, "SELECT id FROM groups WHERE name=?", name).Scan(&id)
-	return id, err
-}
-
-func (i *Index) ResolveOwnerIDs(ctx context.Context, ownerName string) (int, sql.NullInt64, error) {
+func (i *Index) ResolveOwnerIDs(ctx context.Context, ownerName string) (int, error) {
 	ownerName = strings.TrimSpace(ownerName)
 	if ownerName == "" {
-		return 0, sql.NullInt64{}, fmt.Errorf("empty owner name")
+		return 0, fmt.Errorf("empty owner name")
 	}
 	if _, err := i.ensureUser(ctx, ownerName); err != nil {
-		return 0, sql.NullInt64{}, err
+		return 0, err
 	}
 	userID, err := i.userIDByName(ctx, ownerName)
 	if err != nil {
-		return 0, sql.NullInt64{}, err
+		return 0, err
 	}
-	return userID, sql.NullInt64{}, nil
+	return userID, nil
 }
 
-func (i *Index) LookupOwnerIDs(ctx context.Context, ownerName string) (int, sql.NullInt64, error) {
+func (i *Index) LookupOwnerIDs(ctx context.Context, ownerName string) (int, error) {
 	ownerName = strings.TrimSpace(ownerName)
 	if ownerName == "" {
-		return 0, sql.NullInt64{}, fmt.Errorf("empty owner name")
+		return 0, fmt.Errorf("empty owner name")
 	}
 	userID, err := i.userIDByName(ctx, ownerName)
 	if err == nil {
-		return userID, sql.NullInt64{}, nil
+		return userID, nil
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, sql.NullInt64{}, err
+		return 0, err
 	}
-	return 0, sql.NullInt64{}, sql.ErrNoRows
+	return 0, sql.ErrNoRows
 }
 
 func (i *Index) AccessFilterForUser(ctx context.Context, userName string) (int, []int, error) {
@@ -426,7 +447,6 @@ func (i *Index) AccessFilterForUser(ctx context.Context, userName string) (int, 
 	}
 	return userID, ownerIDs, nil
 }
-
 
 func (i *Index) actorUserID(ctx context.Context) (int, error) {
 	if filter, ok := accessFilterFromContext(ctx); ok && filter.userID > 0 {

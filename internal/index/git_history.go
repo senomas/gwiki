@@ -73,11 +73,11 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 	if err != nil {
 		return 0, err
 	}
-	ownerUserID, ownerGroupID, err := i.LookupOwnerIDs(ctx, ownerName)
+	ownerUserID, err := i.LookupOwnerIDs(ctx, ownerName)
 	if err != nil {
 		return 0, err
 	}
-	ownerClause, ownerArgs := ownerWhereClause(ownerUserID, ownerGroupID, "files")
+	ownerClause, ownerArgs := ownerWhereClause(ownerUserID, "files")
 
 	args := []string{"log"}
 	if lastSync > 0 {

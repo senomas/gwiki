@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 27
+const schemaVersion = 28
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -10,18 +10,6 @@ CREATE TABLE IF NOT EXISTS schema_version (
 CREATE TABLE IF NOT EXISTS users (
 	id INTEGER PRIMARY KEY,
 	name TEXT UNIQUE NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS groups (
-	id INTEGER PRIMARY KEY,
-	name TEXT UNIQUE NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS group_members (
-	group_id INTEGER NOT NULL,
-	user_id INTEGER NOT NULL,
-	access TEXT NOT NULL,
-	PRIMARY KEY(group_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS user_access (
@@ -34,7 +22,6 @@ CREATE TABLE IF NOT EXISTS user_access (
 CREATE TABLE IF NOT EXISTS files (
 	id INTEGER PRIMARY KEY,
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	path TEXT NOT NULL,
 	title TEXT,
 	uid TEXT,
@@ -47,8 +34,7 @@ CREATE TABLE IF NOT EXISTS files (
 	etag_time INTEGER NOT NULL DEFAULT 0,
 	priority INTEGER NOT NULL DEFAULT 10,
 	is_journal INTEGER NOT NULL DEFAULT 0,
-	UNIQUE(user_id, path),
-	UNIQUE(group_id, path)
+	UNIQUE(user_id, path)
 );
 
 CREATE TABLE IF NOT EXISTS file_histories (
@@ -69,15 +55,12 @@ CREATE TABLE IF NOT EXISTS git_sync_state (
 CREATE TABLE IF NOT EXISTS tags (
 	id INTEGER PRIMARY KEY,
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	name TEXT NOT NULL,
-	UNIQUE(user_id, name),
-	UNIQUE(group_id, name)
+	UNIQUE(user_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS file_tags (
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	file_id INTEGER NOT NULL,
 	tag_id INTEGER NOT NULL,
 	is_exclusive INTEGER NOT NULL DEFAULT 0,
@@ -87,7 +70,6 @@ CREATE TABLE IF NOT EXISTS file_tags (
 CREATE TABLE IF NOT EXISTS links (
 	id INTEGER PRIMARY KEY,
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	from_file_id INTEGER NOT NULL,
 	to_ref TEXT NOT NULL,
 	to_file_id INTEGER,
@@ -99,7 +81,6 @@ CREATE TABLE IF NOT EXISTS links (
 CREATE TABLE IF NOT EXISTS tasks (
 	id INTEGER PRIMARY KEY,
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	file_id INTEGER NOT NULL,
 	line_no INTEGER NOT NULL,
 	text TEXT NOT NULL,
@@ -114,45 +95,36 @@ CREATE INDEX IF NOT EXISTS tasks_by_file_due ON tasks(file_id, due_date);
 
 CREATE TABLE IF NOT EXISTS task_tags (
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	task_id INTEGER NOT NULL,
 	tag_id INTEGER NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS task_tags_user ON task_tags(user_id, task_id, tag_id) WHERE group_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS task_tags_group ON task_tags(group_id, task_id, tag_id) WHERE group_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS task_tags_user ON task_tags(user_id, task_id, tag_id);
 
 CREATE TABLE IF NOT EXISTS embed_cache (
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	url TEXT NOT NULL,
 	kind TEXT NOT NULL,
 	embed_url TEXT,
 	status TEXT NOT NULL,
 	error_msg TEXT,
 	updated_at INTEGER NOT NULL,
-	expires_at INTEGER NOT NULL
+	expires_at INTEGER NOT NULL,
+	PRIMARY KEY(user_id, url, kind)
 );
 
 CREATE TABLE IF NOT EXISTS collapsed_sections (
 	id INTEGER PRIMARY KEY,
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	note_id TEXT NOT NULL,
 	line_no INTEGER NOT NULL
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS embed_cache_user ON embed_cache(user_id, url, kind) WHERE group_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS embed_cache_group ON embed_cache(group_id, url, kind) WHERE group_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS collapsed_sections_user ON collapsed_sections(user_id, note_id, line_no) WHERE group_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS collapsed_sections_group ON collapsed_sections(group_id, note_id, line_no) WHERE group_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS collapsed_sections_user ON collapsed_sections(user_id, note_id, line_no);
 CREATE INDEX IF NOT EXISTS collapsed_sections_by_note ON collapsed_sections(note_id);
 
 CREATE TABLE IF NOT EXISTS broken_links (
 	id INTEGER PRIMARY KEY,
 	user_id INTEGER NOT NULL,
-	group_id INTEGER,
 	from_file_id INTEGER NOT NULL,
 	to_ref TEXT NOT NULL,
 	kind TEXT NOT NULL,
@@ -164,7 +136,6 @@ CREATE INDEX IF NOT EXISTS broken_links_by_file ON broken_links(from_file_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 	user_id UNINDEXED,
-	group_id UNINDEXED,
 	path,
 	title,
 	body,

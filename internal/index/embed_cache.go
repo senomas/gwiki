@@ -33,7 +33,7 @@ func (i *Index) GetEmbedCache(ctx context.Context, url, kind string) (EmbedCache
 	row := i.queryRowContext(ctx, `
 		SELECT url, kind, embed_url, status, error_msg, updated_at, expires_at
 		FROM embed_cache
-		WHERE url = ? AND kind = ? AND user_id = ? AND group_id IS NULL
+		WHERE url = ? AND kind = ? AND user_id = ?
 		LIMIT 1`,
 		url,
 		kind,
@@ -50,7 +50,7 @@ func (i *Index) GetEmbedCache(ctx context.Context, url, kind string) (EmbedCache
 	entry.ExpiresAt = time.Unix(expiresUnix, 0)
 
 	if time.Now().After(entry.ExpiresAt) {
-		_, _ = i.execContext(ctx, "DELETE FROM embed_cache WHERE url = ? AND kind = ? AND user_id = ? AND group_id IS NULL", url, kind, userID)
+		_, _ = i.execContext(ctx, "DELETE FROM embed_cache WHERE url = ? AND kind = ? AND user_id = ?", url, kind, userID)
 		return EmbedCacheEntry{}, false, nil
 	}
 	return entry, true, nil
@@ -62,9 +62,9 @@ func (i *Index) UpsertEmbedCache(ctx context.Context, entry EmbedCacheEntry) err
 		return err
 	}
 	_, err = i.execContext(ctx, `
-		INSERT INTO embed_cache(user_id, group_id, url, kind, embed_url, status, error_msg, updated_at, expires_at)
-		VALUES(?, NULL, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(user_id, url, kind) WHERE group_id IS NULL DO UPDATE SET
+		INSERT INTO embed_cache(user_id, url, kind, embed_url, status, error_msg, updated_at, expires_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, url, kind) DO UPDATE SET
 			embed_url = excluded.embed_url,
 			status = excluded.status,
 			error_msg = excluded.error_msg,

@@ -108,7 +108,6 @@ type ViewData struct {
 	EditCommandTime      string
 	EditCommandDateBase  string
 	ToastItems           []Toast
-	Groups               []string
 	SettingsUsers        []UserSummary
 	QuickEntries         []QuickLauncherEntry
 	GitRemoteCreds       []GitRemoteCred

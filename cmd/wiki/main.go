@@ -82,11 +82,9 @@ func main() {
 	if cfg.AuthUser != "" {
 		users = append(users, cfg.AuthUser)
 	}
-	groupMembers := map[string][]index.GroupMember{}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := idx.InitWithOwners(ctx, cfg.RepoPath, users, groupMembers); err != nil {
+	if err := idx.InitWithOwners(ctx, cfg.RepoPath, users); err != nil {
 		slog.Error("init index", "err", err)
 		os.Exit(1)
 	}
@@ -95,15 +93,15 @@ func main() {
 		slog.Error("load access file", "err", err)
 		os.Exit(1)
 	}
-	accessMembers := make(map[string][]index.GroupMember, len(accessFile))
+	accessMembers := make(map[string][]index.AccessMember, len(accessFile))
 	for owner, members := range accessFile {
-		list := make([]index.GroupMember, 0, len(members))
+		list := make([]index.AccessMember, 0, len(members))
 		for _, member := range members {
-			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
+			list = append(list, index.AccessMember{User: member.User, Access: member.Access})
 		}
 		accessMembers[owner] = list
 	}
-	if _, err := idx.SyncUserAccessWithStats(ctx, accessMembers); err != nil {
+	if _, _, err := idx.SyncAuthSources(ctx, users, accessMembers); err != nil {
 		slog.Error("sync access", "err", err)
 		os.Exit(1)
 	}

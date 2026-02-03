@@ -1,7 +1,6 @@
 package index
 
 import (
-	"database/sql"
 	"fmt"
 	"path"
 	"strings"
@@ -43,12 +42,9 @@ func joinOwnerPath(owner, rel string) string {
 	return owner + "/" + rel
 }
 
-func ownerWhereClause(userID int, groupID sql.NullInt64, table string) (string, []any) {
+func ownerWhereClause(userID int, table string) (string, []any) {
 	if table == "" {
 		table = "files"
 	}
-	if groupID.Valid {
-		return table + ".group_id = ?", []any{groupID.Int64}
-	}
-	return table + ".group_id IS NULL AND " + table + ".user_id = ?", []any{userID}
+	return table + ".user_id = ?", []any{userID}
 }
