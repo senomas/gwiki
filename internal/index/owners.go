@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 )
 
@@ -17,10 +16,14 @@ type GroupMember struct {
 type OwnerSyncStats struct {
 	UsersInFile    int
 	UsersAdded     int
-	GroupsAdded    int
-	MembersAdded   int
-	MembersUpdated int
-	MembersRemoved int
+	UsersUpdated   int
+}
+
+type AccessSyncStats struct {
+	OwnersInFile    int
+	GrantsAdded     int
+	GrantsUpdated   int
+	GrantsRemoved   int
 }
 
 func (i *Index) SyncOwners(ctx context.Context, users []string, groups map[string][]GroupMember) error {
@@ -37,21 +40,6 @@ func (i *Index) SyncOwnersWithStats(ctx context.Context, users []string, groups 
 		}
 		userSet[name] = struct{}{}
 	}
-	for groupName, members := range groups {
-		groupName = strings.TrimSpace(groupName)
-		if groupName == "" {
-			continue
-		}
-		if _, exists := userSet[groupName]; exists {
-			return OwnerSyncStats{}, fmt.Errorf("group name %q conflicts with user name", groupName)
-		}
-		for _, member := range members {
-			if strings.TrimSpace(member.User) == "" {
-				continue
-			}
-			userSet[member.User] = struct{}{}
-		}
-	}
 	userSet["system"] = struct{}{}
 
 	stats := OwnerSyncStats{
@@ -67,124 +55,8 @@ func (i *Index) SyncOwnersWithStats(ctx context.Context, users []string, groups 
 			stats.UsersAdded++
 		}
 	}
-	for name := range groups {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		created, err := i.ensureGroup(ctx, name)
-		if err != nil {
-			return stats, err
-		}
-		if created {
-			stats.GroupsAdded++
-		}
-	}
 
-	existingMembers := map[string]string{}
-	rows, err := i.queryContext(ctx, `
-		SELECT groups.name, users.name, group_members.access
-		FROM group_members
-		JOIN groups ON groups.id = group_members.group_id
-		JOIN users ON users.id = group_members.user_id
-	`)
-	if err != nil {
-		return stats, err
-	}
-	for rows.Next() {
-		var groupName, userName, access string
-		if err := rows.Scan(&groupName, &userName, &access); err != nil {
-			rows.Close()
-			return stats, err
-		}
-		key := strings.ToLower(strings.TrimSpace(groupName)) + "|" + strings.ToLower(strings.TrimSpace(userName))
-		if key == "|" {
-			continue
-		}
-		existingMembers[key] = strings.ToLower(strings.TrimSpace(access))
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return stats, err
-	}
-	rows.Close()
-
-	desiredMembers := map[string]string{}
-	for groupName, members := range groups {
-		groupName = strings.TrimSpace(groupName)
-		if groupName == "" {
-			continue
-		}
-		for _, member := range members {
-			user := strings.TrimSpace(member.User)
-			if user == "" {
-				continue
-			}
-			access := strings.ToLower(strings.TrimSpace(member.Access))
-			if access != "ro" && access != "rw" {
-				access = "ro"
-			}
-			key := strings.ToLower(groupName) + "|" + strings.ToLower(user)
-			desiredMembers[key] = access
-		}
-	}
-	for key, access := range desiredMembers {
-		prev, ok := existingMembers[key]
-		if !ok {
-			stats.MembersAdded++
-			continue
-		}
-		if prev != access {
-			stats.MembersUpdated++
-		}
-	}
-	for key := range existingMembers {
-		if _, ok := desiredMembers[key]; !ok {
-			stats.MembersRemoved++
-		}
-	}
-
-	tx, err := i.db.BeginTx(ctx, nil)
-	if err != nil {
-		return stats, err
-	}
-	defer tx.Rollback()
-
-	if _, err := i.execContextTx(ctx, tx, "DELETE FROM group_members"); err != nil {
-		return stats, err
-	}
-	for groupName, members := range groups {
-		groupName = strings.TrimSpace(groupName)
-		if groupName == "" {
-			continue
-		}
-		groupID, err := i.groupIDByNameTx(ctx, tx, groupName)
-		if err != nil {
-			return stats, err
-		}
-		for _, member := range members {
-			user := strings.TrimSpace(member.User)
-			if user == "" {
-				continue
-			}
-			access := strings.ToLower(strings.TrimSpace(member.Access))
-			if access != "ro" && access != "rw" {
-				access = "ro"
-			}
-			userID, err := i.userIDByNameTx(ctx, tx, user)
-			if err != nil {
-				return stats, err
-			}
-			if _, err := i.execContextTx(ctx, tx, `
-				INSERT INTO group_members(group_id, user_id, access)
-				VALUES(?, ?, ?)
-			`, groupID, userID, access); err != nil {
-				return stats, err
-			}
-		}
-	}
-
-	return stats, tx.Commit()
+	return stats, nil
 }
 
 func (i *Index) CanWriteOwner(ctx context.Context, ownerName, userName string) (bool, error) {
@@ -196,14 +68,14 @@ func (i *Index) CanWriteOwner(ctx context.Context, ownerName, userName string) (
 	if ownerName == userName {
 		return true, nil
 	}
-	groupID, err := i.groupIDByName(ctx, ownerName)
+	userID, err := i.userIDByName(ctx, userName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	userID, err := i.userIDByName(ctx, userName)
+	ownerID, err := i.userIDByName(ctx, ownerName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -213,9 +85,9 @@ func (i *Index) CanWriteOwner(ctx context.Context, ownerName, userName string) (
 	var access string
 	err = i.queryRowContext(ctx, `
 		SELECT access
-		FROM group_members
-		WHERE group_id=? AND user_id=?
-	`, groupID, userID).Scan(&access)
+		FROM user_access
+		WHERE owner_user_id=? AND grantee_user_id=?
+	`, ownerID, userID).Scan(&access)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -271,6 +143,199 @@ func (i *Index) ensureGroup(ctx context.Context, name string) (bool, error) {
 	return changes > 0 && groupID > 0, nil
 }
 
+func (i *Index) SyncUserAccessWithStats(ctx context.Context, access map[string][]GroupMember) (AccessSyncStats, error) {
+	stats := AccessSyncStats{OwnersInFile: len(access)}
+	existing := map[string]string{}
+	rows, err := i.queryContext(ctx, `
+		SELECT owners.name, grantees.name, user_access.access
+		FROM user_access
+		JOIN users owners ON owners.id = user_access.owner_user_id
+		JOIN users grantees ON grantees.id = user_access.grantee_user_id
+	`)
+	if err != nil {
+		return stats, err
+	}
+	for rows.Next() {
+		var ownerName, granteeName, accessLevel string
+		if err := rows.Scan(&ownerName, &granteeName, &accessLevel); err != nil {
+			rows.Close()
+			return stats, err
+		}
+		key := strings.ToLower(strings.TrimSpace(ownerName)) + "|" + strings.ToLower(strings.TrimSpace(granteeName))
+		if key == "|" {
+			continue
+		}
+		existing[key] = strings.ToLower(strings.TrimSpace(accessLevel))
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return stats, err
+	}
+	rows.Close()
+
+	desired := map[string]string{}
+	for ownerName, members := range access {
+		ownerName = strings.TrimSpace(ownerName)
+		if ownerName == "" {
+			continue
+		}
+		for _, member := range members {
+			user := strings.TrimSpace(member.User)
+			if user == "" {
+				continue
+			}
+			level := strings.ToLower(strings.TrimSpace(member.Access))
+			if level != "ro" && level != "rw" {
+				level = "ro"
+			}
+			key := strings.ToLower(ownerName) + "|" + strings.ToLower(user)
+			desired[key] = level
+		}
+	}
+
+	for key, level := range desired {
+		prev, ok := existing[key]
+		if !ok {
+			stats.GrantsAdded++
+			continue
+		}
+		if prev != level {
+			stats.GrantsUpdated++
+		}
+	}
+	for key := range existing {
+		if _, ok := desired[key]; !ok {
+			stats.GrantsRemoved++
+		}
+	}
+
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return stats, err
+	}
+	defer tx.Rollback()
+
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM user_access"); err != nil {
+		return stats, err
+	}
+	for ownerName, members := range access {
+		ownerName = strings.TrimSpace(ownerName)
+		if ownerName == "" {
+			continue
+		}
+		if _, err := i.ensureUser(ctx, ownerName); err != nil {
+			return stats, err
+		}
+		ownerID, err := i.userIDByNameTx(ctx, tx, ownerName)
+		if err != nil {
+			return stats, err
+		}
+		for _, member := range members {
+			user := strings.TrimSpace(member.User)
+			if user == "" {
+				continue
+			}
+			accessLevel := strings.ToLower(strings.TrimSpace(member.Access))
+			if accessLevel != "ro" && accessLevel != "rw" {
+				accessLevel = "ro"
+			}
+			if _, err := i.ensureUser(ctx, user); err != nil {
+				return stats, err
+			}
+			userID, err := i.userIDByNameTx(ctx, tx, user)
+			if err != nil {
+				return stats, err
+			}
+			if _, err := i.execContextTx(ctx, tx, `
+				INSERT INTO user_access(owner_user_id, grantee_user_id, access)
+				VALUES(?, ?, ?)
+			`, ownerID, userID, accessLevel); err != nil {
+				return stats, err
+			}
+		}
+	}
+
+	return stats, tx.Commit()
+}
+
+func (i *Index) WritableOwnersForUser(ctx context.Context, userName string) ([]string, error) {
+	userName = strings.TrimSpace(userName)
+	if userName == "" {
+		return nil, fmt.Errorf("empty user name")
+	}
+	userID, err := i.userIDByName(ctx, userName)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := i.queryContext(ctx, `
+		SELECT owners.name
+		FROM user_access
+		JOIN users owners ON owners.id = user_access.owner_user_id
+		WHERE user_access.grantee_user_id = ? AND lower(user_access.access) = 'rw'
+		ORDER BY owners.name
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var owners []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		owners = append(owners, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return owners, nil
+}
+
+func (i *Index) AccessibleOwnersForUser(ctx context.Context, userName string) ([]string, error) {
+	userName = strings.TrimSpace(userName)
+	if userName == "" {
+		return nil, fmt.Errorf("empty user name")
+	}
+	userID, err := i.userIDByName(ctx, userName)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := i.queryContext(ctx, `
+		SELECT owners.name
+		FROM user_access
+		JOIN users owners ON owners.id = user_access.owner_user_id
+		WHERE user_access.grantee_user_id = ?
+		ORDER BY owners.name
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var owners []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		owners = append(owners, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return owners, nil
+}
+
 func (i *Index) userIDByName(ctx context.Context, name string) (int, error) {
 	return i.userIDByNameTx(ctx, nil, name)
 }
@@ -304,17 +369,6 @@ func (i *Index) ResolveOwnerIDs(ctx context.Context, ownerName string) (int, sql
 	if ownerName == "" {
 		return 0, sql.NullInt64{}, fmt.Errorf("empty owner name")
 	}
-	groupID, err := i.groupIDByName(ctx, ownerName)
-	if err == nil {
-		userID, err := i.actorUserID(ctx)
-		if err != nil {
-			return 0, sql.NullInt64{}, err
-		}
-		return userID, sql.NullInt64{Int64: int64(groupID), Valid: true}, nil
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, sql.NullInt64{}, err
-	}
 	if _, err := i.ensureUser(ctx, ownerName); err != nil {
 		return 0, sql.NullInt64{}, err
 	}
@@ -330,26 +384,12 @@ func (i *Index) LookupOwnerIDs(ctx context.Context, ownerName string) (int, sql.
 	if ownerName == "" {
 		return 0, sql.NullInt64{}, fmt.Errorf("empty owner name")
 	}
-	groupID, groupErr := i.groupIDByName(ctx, ownerName)
-	userID, userErr := i.userIDByName(ctx, ownerName)
-	if groupErr == nil && userErr == nil {
-		slog.Debug("owner name is both user and group; preferring user", "owner", ownerName)
+	userID, err := i.userIDByName(ctx, ownerName)
+	if err == nil {
 		return userID, sql.NullInt64{}, nil
 	}
-	if groupErr == nil {
-		return 0, sql.NullInt64{Int64: int64(groupID), Valid: true}, nil
-	}
-	if userErr == nil {
-		return userID, sql.NullInt64{}, nil
-	}
-	if errors.Is(groupErr, sql.ErrNoRows) && errors.Is(userErr, sql.ErrNoRows) {
-		return 0, sql.NullInt64{}, sql.ErrNoRows
-	}
-	if groupErr != nil && !errors.Is(groupErr, sql.ErrNoRows) {
-		return 0, sql.NullInt64{}, groupErr
-	}
-	if userErr != nil && !errors.Is(userErr, sql.ErrNoRows) {
-		return 0, sql.NullInt64{}, userErr
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, sql.NullInt64{}, err
 	}
 	return 0, sql.NullInt64{}, sql.ErrNoRows
 }
@@ -364,106 +404,29 @@ func (i *Index) AccessFilterForUser(ctx context.Context, userName string) (int, 
 		return 0, nil, err
 	}
 	rows, err := i.queryContext(ctx, `
-		SELECT group_members.group_id
-		FROM group_members
-		WHERE group_members.user_id = ?
+		SELECT owner_user_id
+		FROM user_access
+		WHERE grantee_user_id = ?
 	`, userID)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer rows.Close()
 
-	var groupIDs []int
+	var ownerIDs []int
 	for rows.Next() {
-		var groupID int
-		if err := rows.Scan(&groupID); err != nil {
+		var ownerID int
+		if err := rows.Scan(&ownerID); err != nil {
 			return 0, nil, err
 		}
-		groupIDs = append(groupIDs, groupID)
+		ownerIDs = append(ownerIDs, ownerID)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, nil, err
 	}
-	return userID, groupIDs, nil
+	return userID, ownerIDs, nil
 }
 
-func (i *Index) WritableGroupsForUser(ctx context.Context, userName string) ([]string, error) {
-	userName = strings.TrimSpace(userName)
-	if userName == "" {
-		return nil, fmt.Errorf("empty user name")
-	}
-	userID, err := i.userIDByName(ctx, userName)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := i.queryContext(ctx, `
-		SELECT groups.name
-		FROM group_members
-		JOIN groups ON groups.id = group_members.group_id
-		WHERE group_members.user_id = ? AND lower(group_members.access) = 'rw'
-		ORDER BY groups.name
-	`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var groups []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		groups = append(groups, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return groups, nil
-}
-
-func (i *Index) GroupsForUser(ctx context.Context, userName string) ([]string, error) {
-	userName = strings.TrimSpace(userName)
-	if userName == "" {
-		return nil, fmt.Errorf("empty user name")
-	}
-	userID, err := i.userIDByName(ctx, userName)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := i.queryContext(ctx, `
-		SELECT groups.name
-		FROM group_members
-		JOIN groups ON groups.id = group_members.group_id
-		WHERE group_members.user_id = ?
-		ORDER BY groups.name
-	`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var groups []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		groups = append(groups, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return groups, nil
-}
 
 func (i *Index) actorUserID(ctx context.Context) (int, error) {
 	if filter, ok := accessFilterFromContext(ctx); ok && filter.userID > 0 {

@@ -16,6 +16,7 @@ type visibilityFilter struct {
 type accessFilter struct {
 	userID   int
 	groupIDs []int
+	ownerIDs []int
 }
 
 func WithPublicVisibility(ctx context.Context) context.Context {
@@ -25,11 +26,11 @@ func WithPublicVisibility(ctx context.Context) context.Context {
 	return context.WithValue(ctx, visibilityFilterKey, visibilityFilter{publicOnly: true})
 }
 
-func WithAccessFilter(ctx context.Context, userID int, groupIDs []int) context.Context {
+func WithAccessFilter(ctx context.Context, userID int, groupIDs []int, ownerIDs []int) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	filter := accessFilter{userID: userID, groupIDs: groupIDs}
+	filter := accessFilter{userID: userID, groupIDs: groupIDs, ownerIDs: ownerIDs}
 	return context.WithValue(ctx, accessFilterKey, filter)
 }
 

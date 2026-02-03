@@ -237,17 +237,17 @@ func applyAccessFilter(ctx context.Context, clauses *[]string, args *[]interface
 	if table == "" {
 		table = "files"
 	}
-	if len(filter.groupIDs) == 0 {
+	if len(filter.ownerIDs) == 0 {
 		*clauses = append(*clauses, "("+table+".user_id = ? OR "+table+".visibility = ?)")
 		*args = append(*args, filter.userID, "public")
 		return
 	}
-	placeholders := strings.Repeat("?,", len(filter.groupIDs))
+	placeholders := strings.Repeat("?,", len(filter.ownerIDs))
 	placeholders = strings.TrimRight(placeholders, ",")
-	*clauses = append(*clauses, "("+table+".user_id = ? OR "+table+".group_id IN ("+placeholders+") OR "+table+".visibility = ?)")
+	*clauses = append(*clauses, "("+table+".user_id = ? OR "+table+".user_id IN ("+placeholders+") OR "+table+".visibility = ?)")
 	*args = append(*args, filter.userID)
-	for _, groupID := range filter.groupIDs {
-		*args = append(*args, groupID)
+	for _, ownerID := range filter.ownerIDs {
+		*args = append(*args, ownerID)
 	}
 	*args = append(*args, "public")
 }
@@ -630,6 +630,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 26
+		case 26:
+			slog.Info("schema migration", "from", 26, "to", 27)
+			if err := i.migrate26To27(ctx); err != nil {
+				return err
+			}
+			version = 27
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -884,6 +890,18 @@ func (i *Index) migrate25To26(ctx context.Context) error {
 			title,
 			body,
 			tokenize='trigram'
+		)
+	`)
+	return err
+}
+
+func (i *Index) migrate26To27(ctx context.Context) error {
+	_, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS user_access (
+			owner_user_id INTEGER NOT NULL,
+			grantee_user_id INTEGER NOT NULL,
+			access TEXT NOT NULL,
+			PRIMARY KEY(owner_user_id, grantee_user_id)
 		)
 	`)
 	return err

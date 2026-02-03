@@ -82,21 +82,7 @@ func main() {
 	if cfg.AuthUser != "" {
 		users = append(users, cfg.AuthUser)
 	}
-	groupFile, err := auth.LoadGroupsFromRepo(cfg.RepoPath)
-	if err != nil {
-		slog.Error("load group file", "err", err)
-		os.Exit(1)
-	}
-	groupMembers := make(map[string][]index.GroupMember, len(groupFile))
-	groupNames := make([]string, 0, len(groupFile))
-	for group, members := range groupFile {
-		groupNames = append(groupNames, group)
-		list := make([]index.GroupMember, 0, len(members))
-		for _, member := range members {
-			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
-		}
-		groupMembers[group] = list
-	}
+	groupMembers := map[string][]index.GroupMember{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -104,14 +90,31 @@ func main() {
 		slog.Error("init index", "err", err)
 		os.Exit(1)
 	}
-	syncGitHistoryOnStartup(ctx, cfg, idx, users, groupNames)
+	accessFile, err := auth.LoadAccessFromRepo(cfg.RepoPath)
+	if err != nil {
+		slog.Error("load access file", "err", err)
+		os.Exit(1)
+	}
+	accessMembers := make(map[string][]index.GroupMember, len(accessFile))
+	for owner, members := range accessFile {
+		list := make([]index.GroupMember, 0, len(members))
+		for _, member := range members {
+			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
+		}
+		accessMembers[owner] = list
+	}
+	if _, err := idx.SyncUserAccessWithStats(ctx, accessMembers); err != nil {
+		slog.Error("sync access", "err", err)
+		os.Exit(1)
+	}
+	syncGitHistoryOnStartup(ctx, cfg, idx, users)
 
 	srv, err := web.NewServer(cfg, idx)
 	if err != nil {
 		slog.Error("auth init", "err", err)
 		os.Exit(1)
 	}
-	startGitScheduler(cfg, idx, users, groupNames)
+	startGitScheduler(cfg, idx, users)
 	slog.Info("listening", "addr", cfg.ListenAddr)
 	if err := http.ListenAndServe(cfg.ListenAddr, srv.Handler()); err != nil {
 		slog.Error("server error", "err", err)
@@ -164,7 +167,7 @@ type syncTarget struct {
 	Path  string
 }
 
-func startGitScheduler(cfg config.Config, idx *index.Index, users []string, groups []string) {
+func startGitScheduler(cfg config.Config, idx *index.Index, users []string) {
 	if cfg.GitSchedule <= 0 {
 		slog.Info("git scheduler disabled")
 		return
@@ -177,14 +180,14 @@ func startGitScheduler(cfg config.Config, idx *index.Index, users []string, grou
 		for {
 			select {
 			case <-ticker.C:
-				runScheduledSync(ctx, cfg, idx, users, groups)
+				runScheduledSync(ctx, cfg, idx, users)
 			}
 		}
 	}()
 }
 
-func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, users []string, groups []string) {
-	targets, err := discoverSyncTargets(cfg.RepoPath, users, groups)
+func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, users []string) {
+	targets, err := discoverSyncTargets(cfg.RepoPath, users)
 	if err != nil {
 		slog.Warn("sync schedule: list targets failed", "err", err)
 		return
@@ -235,8 +238,8 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index, 
 	}
 }
 
-func syncGitHistoryOnStartup(ctx context.Context, cfg config.Config, idx *index.Index, users []string, groups []string) {
-	targets, err := discoverSyncTargets(cfg.RepoPath, users, groups)
+func syncGitHistoryOnStartup(ctx context.Context, cfg config.Config, idx *index.Index, users []string) {
+	targets, err := discoverSyncTargets(cfg.RepoPath, users)
 	if err != nil {
 		slog.Warn("git history startup: list targets failed", "err", err)
 		return
@@ -253,7 +256,7 @@ func syncGitHistoryOnStartup(ctx context.Context, cfg config.Config, idx *index.
 	}
 }
 
-func discoverSyncTargets(repoPath string, users []string, groups []string) ([]syncTarget, error) {
+func discoverSyncTargets(repoPath string, users []string) ([]syncTarget, error) {
 	owners := make(map[string]struct{})
 	for _, user := range users {
 		user = strings.TrimSpace(user)
@@ -261,13 +264,6 @@ func discoverSyncTargets(repoPath string, users []string, groups []string) ([]sy
 			continue
 		}
 		owners[user] = struct{}{}
-	}
-	for _, group := range groups {
-		group = strings.TrimSpace(group)
-		if group == "" {
-			continue
-		}
-		owners[group] = struct{}{}
 	}
 	if len(owners) == 0 {
 		return nil, nil

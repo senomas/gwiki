@@ -37,18 +37,19 @@ Defaults (trigger `!`):
 - `!dN` → today plus N days (alias of `!d+N`)
 - `!t` → current time (`HH:mm:ss`)
 
-## Groups
+## Access Sharing
 
-Create a group by adding a `.member.txt` file in a top-level folder under `WIKI_REPO_PATH`. The folder name becomes the group name.
+Share access to your notes by adding an `.access.txt` file under your owner folder:
 
-`.member.txt` format:
+`WIKI_REPO_PATH/<owner>/.access.txt`
+
+Format:
 ```
 alice:rw
-bob:rw
-charlie:ro
+bob:ro
 ```
 
-Valid access values are `rw` and `ro`. Users listed with `rw` can create and edit notes in that group; `ro` users can only view notes.
+Valid access values are `rw` and `ro`. Users listed with `rw` can create and edit notes for that owner; `ro` users can only view notes.
 
 ## Settings
 
@@ -71,7 +72,7 @@ Synchronization settings live here too. If the repo has git remotes, you can set
 - Token credentials apply to HTTPS remotes; SSH remotes use your local SSH keys.
 - Sync runs one at a time; if another sync is active, the UI shows a "sync already in progress" message after a short wait.
 - Run a manual sync from the launcher (Sync) or by visiting `/sync`.
-- The server runs a built-in scheduler (`WIKI_GIT_SCHEDULE`, default `10m`) for all users and groups with repos. Set it to `0` to disable.
+- The server runs a built-in scheduler (`WIKI_GIT_SCHEDULE`, default `10m`) for all user repos. Set it to `0` to disable.
 
 ## Markdown Basics
 

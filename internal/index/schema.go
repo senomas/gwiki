@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 26
+const schemaVersion = 27
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -22,6 +22,13 @@ CREATE TABLE IF NOT EXISTS group_members (
 	user_id INTEGER NOT NULL,
 	access TEXT NOT NULL,
 	PRIMARY KEY(group_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_access (
+	owner_user_id INTEGER NOT NULL,
+	grantee_user_id INTEGER NOT NULL,
+	access TEXT NOT NULL,
+	PRIMARY KEY(owner_user_id, grantee_user_id)
 );
 
 CREATE TABLE IF NOT EXISTS files (

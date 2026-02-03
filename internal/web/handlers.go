@@ -262,14 +262,7 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	data.EditCommandToday = cfg.EditCommandTodayValue()
 	data.EditCommandTime = cfg.EditCommandTimeValue()
 	data.EditCommandDateBase = cfg.EditCommandDateBaseValue()
-	if data.IsAuthenticated {
-		groups, err := s.idx.GroupsForUser(r.Context(), data.CurrentUser.Name)
-		if err != nil {
-			slog.Warn("load groups", "err", err)
-		} else {
-			data.Groups = groups
-		}
-	}
+	// groups are deprecated in favor of user access files
 }
 
 func hasRole(roles []string, role string) bool {
@@ -314,12 +307,15 @@ func (s *Server) ownerOptionsForUser(ctx context.Context) ([]OwnerOption, string
 		return nil, "", nil
 	}
 	options := []OwnerOption{{Name: userName, Label: "Personal"}}
-	groups, err := s.idx.WritableGroupsForUser(ctx, userName)
+	owners, err := s.idx.WritableOwnersForUser(ctx, userName)
 	if err != nil {
 		return nil, "", err
 	}
-	for _, group := range groups {
-		options = append(options, OwnerOption{Name: group, Label: group})
+	for _, owner := range owners {
+		if owner == userName {
+			continue
+		}
+		options = append(options, OwnerOption{Name: owner, Label: owner})
 	}
 	return options, userName, nil
 }
@@ -5132,18 +5128,18 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 	if s.cfg.AuthUser != "" {
 		users = append(users, s.cfg.AuthUser)
 	}
-	groupFile, err := auth.LoadGroupsFromRepo(s.cfg.RepoPath)
+	accessFile, err := auth.LoadAccessFromRepo(s.cfg.RepoPath)
 	if err != nil {
 		return err
 	}
-	slog.Debug("auth reload groups from repo", "count", len(groupFile))
-	groupMembers := make(map[string][]index.GroupMember, len(groupFile))
-	for group, members := range groupFile {
+	slog.Debug("auth reload access from repo", "count", len(accessFile))
+	accessMembers := make(map[string][]index.GroupMember, len(accessFile))
+	for owner, members := range accessFile {
 		list := make([]index.GroupMember, 0, len(members))
 		for _, member := range members {
 			list = append(list, index.GroupMember{User: member.User, Access: member.Access})
 		}
-		groupMembers[group] = list
+		accessMembers[owner] = list
 	}
 	dbUsers, err := s.idx.ListUsers(ctx)
 	if err != nil {
@@ -5153,7 +5149,7 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 	if err := s.auth.ReloadWithExtra(dbUsers); err != nil {
 		return err
 	}
-	stats, err := s.idx.SyncOwnersWithStats(ctx, users, groupMembers)
+	stats, err := s.idx.SyncOwnersWithStats(ctx, users, nil)
 	if err != nil {
 		return err
 	}
@@ -5161,10 +5157,18 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 		"auth reload sync owners",
 		"users_in_file", stats.UsersInFile,
 		"users_added", stats.UsersAdded,
-		"groups_added", stats.GroupsAdded,
-		"members_added", stats.MembersAdded,
-		"members_updated", stats.MembersUpdated,
-		"members_removed", stats.MembersRemoved,
+		"users_updated", stats.UsersUpdated,
+	)
+	accessStats, err := s.idx.SyncUserAccessWithStats(ctx, accessMembers)
+	if err != nil {
+		return err
+	}
+	slog.Debug(
+		"auth reload sync access",
+		"owners_in_file", accessStats.OwnersInFile,
+		"grants_added", accessStats.GrantsAdded,
+		"grants_updated", accessStats.GrantsUpdated,
+		"grants_removed", accessStats.GrantsRemoved,
 	)
 	return nil
 }
@@ -9257,8 +9261,8 @@ func (s *Server) ensureVideoThumbnail(ctx context.Context, noteID, relPath strin
 			return "", false
 		}
 		candidates := []string{userName}
-		if groups, err := s.idx.GroupsForUser(ctx, userName); err == nil {
-			candidates = append(candidates, groups...)
+		if owners, err := s.idx.AccessibleOwnersForUser(ctx, userName); err == nil {
+			candidates = append(candidates, owners...)
 		}
 		for _, candidate := range candidates {
 			path := filepath.Join(s.noteAttachmentsDir(candidate, noteID), filepath.FromSlash(relPath))

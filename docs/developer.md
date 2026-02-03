@@ -33,9 +33,9 @@ Authentication helpers and password verification.
 - `Verify`: helper for verify
 - `LoadFile`: loads file
 
-## Group membership discovery
+## Access discovery
 
-Groups are discovered by scanning top-level folders under `WIKI_REPO_PATH` for a `.member.txt` file. The folder name becomes the group name; each line is `user:access` with access `ro` or `rw`.
+User access is discovered by scanning top-level owner folders under `WIKI_REPO_PATH` for a `.access.txt` file. Each line is `user:access` with access `ro` or `rw`. Entries grant access to all notes under that owner.
 
 ## Quick launcher pipeline
 
@@ -122,7 +122,7 @@ Key pieces:
 
 Sync runs through `internal/syncer` and is guarded by a process-wide lock so only one sync happens at a time (the caller waits up to ~10s). Each user can have their own git credentials file stored at `WIKI_DATA_PATH/<username>.cred` (same format as `.git-credentials`). Sync uses `GIT_CONFIG_GLOBAL` pointing at `WIKI_DATA_PATH/<username>.gitconfig`, and writes `credential.helper` to store credentials in that per-user `.cred` file.
 
-The web server schedules background syncs using a ticker (configured by `WIKI_GIT_SCHEDULE`, default `10m`). It builds an owner list from users in the auth file plus group names, and syncs `WIKI_REPO_PATH/<owner>` when that folder has a `.git` directory. Each owner uses `<owner>.cred` and `<owner>.gitconfig` in `WIKI_DATA_PATH`. Scheduler logging emits every git command at info level and errors at error level.
+The web server schedules background syncs using a ticker (configured by `WIKI_GIT_SCHEDULE`, default `10m`). It builds an owner list from users in the auth file, and syncs `WIKI_REPO_PATH/<owner>` when that folder has a `.git` directory. Each owner uses `<owner>.cred` and `<owner>.gitconfig` in `WIKI_DATA_PATH`. Scheduler logging emits every git command at info level and errors at error level.
 
 ## `internal/auth/auth_test.go`
 Auth unit tests.
