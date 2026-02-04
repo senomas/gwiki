@@ -23,8 +23,9 @@ type signalState struct {
 }
 
 type signalGroupEntry struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string `json:"id"`
+	InternalID string `json:"internal_id"`
+	Name       string `json:"name"`
 }
 
 type signalEnvelope struct {
@@ -43,6 +44,9 @@ type signalEnvelope struct {
 				Description string `json:"description"`
 			} `json:"previews"`
 		} `json:"dataMessage"`
+		TypingMessage struct {
+			GroupID string `json:"groupId"`
+		} `json:"typingMessage"`
 	} `json:"envelope"`
 }
 
@@ -94,13 +98,14 @@ func (s *Server) StartSignalPoller() {
 }
 
 type signalPoller struct {
-	cfg       config.Config
-	server    *Server
-	client    *http.Client
-	state     signalState
-	stateMu   *sync.Mutex
-	statePath string
-	groupID   string
+	cfg             config.Config
+	server          *Server
+	client          *http.Client
+	state           signalState
+	stateMu         *sync.Mutex
+	statePath       string
+	groupID         string
+	groupInternalID string
 }
 
 func (p *signalPoller) tick() {
@@ -110,37 +115,44 @@ func (p *signalPoller) tick() {
 	groupID := p.groupID
 	if groupID == "" {
 		var err error
-		groupID, err = p.resolveGroupID(ctx)
+		groupID, p.groupInternalID, err = p.resolveGroupID(ctx)
 		if err != nil {
 			slog.Warn("signal resolve group", "err", err)
 			return
 		}
 		p.groupID = groupID
 	}
+	slog.Debug("signal poll tick", "group_id", groupID, "group_internal_id", p.groupInternalID, "owner", p.cfg.SignalOwner)
 	messages, err := p.receiveMessages(ctx)
 	if err != nil {
 		slog.Warn("signal receive", "err", err)
 		return
 	}
 	if len(messages) == 0 {
+		slog.Debug("signal receive empty")
 		return
 	}
 	p.stateMu.Lock()
 	lastTS := p.state.Groups[groupID]
 	p.stateMu.Unlock()
 
+	slog.Debug("signal receive batch", "count", len(messages), "last_ts", lastTS)
 	maxTS := lastTS
 	for _, msg := range messages {
-		if msg.GroupID != groupID {
+		if msg.GroupID != groupID && (p.groupInternalID == "" || msg.GroupID != p.groupInternalID) {
+			slog.Debug("signal skip message", "reason", "group_mismatch", "msg_group", msg.GroupID)
 			continue
 		}
-		if msg.Text == "" {
+		if msg.Text == "" && len(msg.Previews) == 0 {
+			slog.Debug("signal skip message", "reason", "empty_text")
 			continue
 		}
 		if msg.TSMillis <= lastTS {
+			slog.Debug("signal skip message", "reason", "old_timestamp", "ts", msg.TSMillis)
 			continue
 		}
 		notePath := p.notePathForTimestamp(msg.TSMillis)
+		slog.Debug("signal append", "note_path", notePath, "sender", msg.Sender, "ts", msg.TSMillis, "previews", len(msg.Previews))
 		if err := p.appendMessage(ctx, notePath, msg); err != nil {
 			slog.Warn("signal append message failed", "err", err)
 			continue
@@ -150,6 +162,7 @@ func (p *signalPoller) tick() {
 		}
 	}
 	if maxTS > lastTS {
+		slog.Debug("signal update state", "group_id", groupID, "last_ts", maxTS)
 		p.stateMu.Lock()
 		p.state.Groups[groupID] = maxTS
 		p.stateMu.Unlock()
@@ -159,36 +172,36 @@ func (p *signalPoller) tick() {
 	}
 }
 
-func (p *signalPoller) resolveGroupID(ctx context.Context) (string, error) {
+func (p *signalPoller) resolveGroupID(ctx context.Context) (string, string, error) {
 	groupName := strings.TrimSpace(p.cfg.SignalGroup)
 	if groupName == "" {
 		groupName = "gwiki"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/v1/groups/%s", strings.TrimRight(p.cfg.SignalURL, "/"), p.cfg.SignalNumber), nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	resp, err := p.doRequest(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", fmt.Errorf("group list failed: %s", strings.TrimSpace(string(body)))
+		return "", "", fmt.Errorf("group list failed: %s", strings.TrimSpace(string(body)))
 	}
 	var groups []signalGroupEntry
 	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, g := range groups {
 		if strings.EqualFold(strings.TrimSpace(g.Name), groupName) {
 			if g.ID != "" {
-				return g.ID, nil
+				return g.ID, g.InternalID, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("group %q not found", groupName)
+	return "", "", fmt.Errorf("group %q not found", groupName)
 }
 
 func (p *signalPoller) receiveMessages(ctx context.Context) ([]signalMessage, error) {
@@ -287,6 +300,9 @@ func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
 			GroupID:  strings.TrimSpace(env.Envelope.Data.GroupInfo.GroupID),
 			Group:    strings.TrimSpace(env.Envelope.Data.GroupInfo.Name),
 			Previews: previews,
+		}
+		if msg.GroupID == "" {
+			msg.GroupID = strings.TrimSpace(env.Envelope.TypingMessage.GroupID)
 		}
 		ts := env.Envelope.Timestamp
 		if ts > 0 {
