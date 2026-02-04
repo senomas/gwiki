@@ -440,6 +440,45 @@ func (s *Server) requireWriteAccessForRelPath(w http.ResponseWriter, r *http.Req
 	return true
 }
 
+type apiError struct {
+	status  int
+	message string
+}
+
+func (e *apiError) Error() string {
+	return e.message
+}
+
+func (s *Server) apiWriteAccessForRelPath(ctx context.Context, ownerName, relPath string) *apiError {
+	userName := currentUserName(ctx)
+	if userName == "" {
+		return &apiError{status: http.StatusUnauthorized, message: "unauthorized"}
+	}
+	canWrite, err := s.idx.CanWritePath(ctx, ownerName, relPath, userName)
+	if err != nil {
+		return &apiError{status: http.StatusInternalServerError, message: err.Error()}
+	}
+	if !canWrite {
+		return &apiError{status: http.StatusForbidden, message: "forbidden"}
+	}
+	return nil
+}
+
+func (s *Server) apiWriteAccessForOwner(ctx context.Context, ownerName string) *apiError {
+	userName := currentUserName(ctx)
+	if userName == "" {
+		return &apiError{status: http.StatusUnauthorized, message: "unauthorized"}
+	}
+	canWrite, err := s.idx.CanWriteOwner(ctx, ownerName, userName)
+	if err != nil {
+		return &apiError{status: http.StatusInternalServerError, message: err.Error()}
+	}
+	if !canWrite {
+		return &apiError{status: http.StatusForbidden, message: "forbidden"}
+	}
+	return nil
+}
+
 func buildJournalIndex(dates []time.Time) map[int]map[time.Month]map[int]struct{} {
 	index := map[int]map[time.Month]map[int]struct{}{}
 	for _, dt := range dates {
@@ -11024,6 +11063,302 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 	http.Redirect(w, r, targetURL, http.StatusSeeOther)
+}
+
+type apiNoteSaveRequest struct {
+	Path           string `json:"path"`
+	Content        string `json:"content"`
+	Frontmatter    string `json:"frontmatter"`
+	Visibility     string `json:"visibility"`
+	Folder         string `json:"folder"`
+	Priority       int    `json:"priority"`
+	Owner          string `json:"owner"`
+	RenameDecision string `json:"rename_decision"`
+}
+
+type apiNoteSaveResponse struct {
+	Path       string `json:"path"`
+	TargetPath string `json:"target_path"`
+	Created    bool   `json:"created"`
+	Moved      bool   `json:"moved"`
+	Message    string `json:"message"`
+}
+
+func (s *Server) handleAPINotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !IsAuthenticated(r.Context()) {
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 10<<20))
+	decoder.DisallowUnknownFields()
+	var payload apiNoteSaveRequest
+	if err := decoder.Decode(&payload); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if strings.TrimSpace(payload.Path) == "" {
+		writeAPIError(w, http.StatusBadRequest, "path required")
+		return
+	}
+	noteRef := strings.TrimPrefix(strings.TrimSpace(payload.Path), "/")
+	notePath, err := s.resolveNotePath(r.Context(), noteRef)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if notePath == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	ownerName, relPath, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if apiErr := s.apiWriteAccessForRelPath(r.Context(), ownerName, relPath); apiErr != nil {
+		writeAPIError(w, apiErr.status, apiErr.message)
+		return
+	}
+
+	targetOwner := strings.TrimSpace(payload.Owner)
+	if targetOwner == "" {
+		targetOwner = ownerName
+	}
+	if targetOwner != ownerName {
+		if apiErr := s.apiWriteAccessForOwner(r.Context(), targetOwner); apiErr != nil {
+			writeAPIError(w, apiErr.status, apiErr.message)
+			return
+		}
+	}
+	if err := s.ensureOwnerNotesDir(targetOwner); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	content := normalizeLineEndings(payload.Content)
+	if content == "" {
+		writeAPIError(w, http.StatusBadRequest, "content required")
+		return
+	}
+	frontmatter := normalizeLineEndings(payload.Frontmatter)
+	visibility := strings.TrimSpace(payload.Visibility)
+	folderInput := payload.Folder
+	priorityInput := payload.Priority
+	priority := ""
+	if priorityInput < 0 {
+		writeAPIError(w, http.StatusBadRequest, "invalid priority")
+		return
+	}
+	if priorityInput > 0 {
+		priority = strconv.Itoa(priorityInput)
+	}
+
+	derivedTitle := index.DeriveTitleFromBody(content)
+	if derivedTitle == "" {
+		derivedTitle = time.Now().Format("2006-01-02 15-04")
+	}
+	preserveUpdated := isJournalNotePath(notePath)
+	folder, err := normalizeFolderPath(folderInput)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid folder")
+		return
+	}
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	existingContent, err := os.ReadFile(fullPath)
+	created := false
+	if err != nil {
+		if os.IsNotExist(err) {
+			created = true
+		} else {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	existingContentNormalized := ""
+	existingFrontmatter := ""
+	oldTitle := ""
+	if err == nil {
+		existingContentNormalized = normalizeLineEndings(string(existingContent))
+		existingFrontmatter = index.FrontmatterBlock(existingContentNormalized)
+		oldTitle = index.DeriveTitleFromBody(existingContentNormalized)
+	}
+	hadFrontmatter := frontmatter != "" || existingFrontmatter != ""
+	if frontmatter == "" {
+		frontmatter = existingFrontmatter
+	}
+	mergedContent := content
+	if frontmatter != "" {
+		mergedContent = frontmatter + "\n" + content
+	}
+	mergedContent = normalizeLineEndings(mergedContent)
+	if !hadFrontmatter {
+		if preserveUpdated {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		} else {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		}
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	} else {
+		mergedContent = updated
+	}
+	if updated, err := index.SetPriority(mergedContent, priority); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	} else {
+		mergedContent = updated
+	}
+	if updated, err := index.SetFolder(mergedContent, folder); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	} else {
+		mergedContent = updated
+	}
+	mergedContent = sanitizeTaskDoneTokens(mergedContent)
+	titleChanged := oldTitle != "" && oldTitle != derivedTitle
+	if preserveUpdated && titleChanged {
+		writeAPIError(w, http.StatusConflict, "journal note title cannot change")
+		return
+	}
+	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))
+	if folder != "" {
+		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
+	}
+	desiredPath := filepath.ToSlash(filepath.Join(targetOwner, desiredRel))
+	pathChanged := filepath.ToSlash(notePath) != desiredPath
+	decision := payload.RenameDecision
+	autoMove := !preserveUpdated && pathChanged
+
+	if err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
+		writeAPIJSON(w, http.StatusOK, apiNoteSaveResponse{
+			Path:       notePath,
+			TargetPath: notePath,
+			Created:    created,
+			Moved:      false,
+			Message:    "No changes to save.",
+		})
+		return
+	}
+
+	if hadFrontmatter {
+		if preserveUpdated {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		} else {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+		}
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	unlock := s.locker.Lock(notePath)
+	defer unlock()
+
+	targetPath := notePath
+	targetFullPath := fullPath
+	moveConfirmed := (decision != "cancel") && (autoMove || (!preserveUpdated && titleChanged))
+	if !preserveUpdated && (titleChanged || pathChanged) && moveConfirmed {
+		targetPath = desiredPath
+		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if targetPath != notePath {
+			if _, err := os.Stat(targetFullPath); err == nil {
+				writeAPIError(w, http.StatusConflict, "note already exists")
+				return
+			}
+			if err != nil && !os.IsNotExist(err) {
+				writeAPIError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeLock, err := s.acquireNoteWriteLock()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer writeLock.Release()
+	metaAttrs := index.FrontmatterAttributes(mergedContent)
+	commitPaths := []string{fullPath}
+	if metaAttrs.ID != "" {
+		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
+	}
+	if err := commitRepoIfDirty(r.Context(), s.ownerRepoPath(ownerName), "auto: backup before edit", commitPaths...); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if targetPath != notePath && metaAttrs.ID != "" && targetOwner != ownerName {
+		oldAttach := s.noteAttachmentsDir(ownerName, metaAttrs.ID)
+		newAttach := s.noteAttachmentsDir(targetOwner, metaAttrs.ID)
+		if _, err := os.Stat(oldAttach); err == nil {
+			if _, err := os.Stat(newAttach); err == nil {
+				writeAPIError(w, http.StatusConflict, "attachments already exist for new owner")
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(newAttach), 0o755); err != nil {
+				writeAPIError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if err := os.Rename(oldAttach, newAttach); err != nil {
+				writeAPIError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
+	if targetPath != notePath {
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		_ = s.idx.RemoveNoteByPath(r.Context(), notePath)
+	}
+	info, err := os.Stat(targetFullPath)
+	if err == nil {
+		_ = s.idx.IndexNote(r.Context(), targetPath, []byte(mergedContent), info.ModTime(), info.Size())
+	}
+	s.commitOwnerRepoAsync(targetOwner, "save "+targetPath)
+	if targetOwner != ownerName {
+		s.commitOwnerRepoAsync(ownerName, "move "+notePath)
+	}
+
+	message := "Note updated."
+	if created {
+		message = "Note created."
+	}
+	writeAPIJSON(w, http.StatusOK, apiNoteSaveResponse{
+		Path:       notePath,
+		TargetPath: targetPath,
+		Created:    created,
+		Moved:      targetPath != notePath,
+		Message:    message,
+	})
 }
 
 func sanitizeTaskDoneTokens(content string) string {

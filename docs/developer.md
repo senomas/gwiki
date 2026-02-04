@@ -33,6 +33,49 @@ Authentication helpers and password verification.
 - `Verify`: helper for verify
 - `LoadFile`: loads file
 
+## API keys and notes endpoint
+
+API keys are loaded from `WIKI_DATA_PATH/api-keys.txt` on startup. Each line is:
+
+```
+alias:key:expiry
+```
+
+- `alias` becomes the API user name.
+- `key` is the secret used in `X-API-Key` or `Authorization: Bearer ...`.
+- `expiry` is `YYYY-MM-DD` (invalid format stops startup).
+
+### `POST /api/notes`
+
+Creates or updates a note (same behavior as `POST /notes/{path}/save`).
+
+JSON body:
+
+```
+{
+  "path": "owner/folder/note.md",
+  "content": "# Title\nBody",
+  "frontmatter": "---\n---",
+  "visibility": "public",
+  "folder": "folder",
+  "priority": 5,
+  "owner": "owner",
+  "rename_decision": "cancel"
+}
+```
+
+Example curl:
+
+```
+curl -sS -X POST http://localhost:8080/api/notes \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: YOUR_KEY' \
+  -d '{
+    "path": "seno/notes/api-demo.md",
+    "content": "# API Demo\nSaved via API"
+  }'
+```
+
 ## Access discovery
 
 User access is discovered by scanning `.access.txt` files under `WIKI_REPO_PATH/<owner>/notes/**`. Each line is `user:access` with access `ro` or `rw`. The closest (deepest) `.access.txt` controls access for that subtree; users not listed there have no access to that subtree.

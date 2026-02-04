@@ -124,6 +124,10 @@ func loadAuthUsers(cfg config.Config) (map[string]authEntry, error) {
 
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, ok := CurrentUser(r.Context()); ok && user.Authenticated {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if user, ok := a.tokenUser(r); ok {
 			if a.isExpired(user, time.Now()) && !allowExpiredPath(r) {
 				if isHTMXRequest(r) {
