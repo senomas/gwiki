@@ -1,3 +1,6 @@
+-include .env
+export
+
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
 
