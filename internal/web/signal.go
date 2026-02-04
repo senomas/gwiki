@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"gwiki/internal/config"
+	"gwiki/internal/index"
 	"gwiki/internal/storage/fs"
 )
 
@@ -42,6 +43,11 @@ type signalEnvelope struct {
 				URL         string `json:"url"`
 				Title       string `json:"title"`
 				Description string `json:"description"`
+				Image       struct {
+					ContentType string `json:"contentType"`
+					Filename    string `json:"filename"`
+					ID          string `json:"id"`
+				} `json:"image"`
 			} `json:"previews"`
 		} `json:"dataMessage"`
 		TypingMessage struct {
@@ -63,6 +69,9 @@ type signalPreview struct {
 	URL         string
 	Title       string
 	Description string
+	ImageID     string
+	ContentType string
+	Filename    string
 }
 
 func (s *Server) StartSignalPoller() {
@@ -292,6 +301,9 @@ func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
 				URL:         url,
 				Title:       title,
 				Description: desc,
+				ImageID:     strings.TrimSpace(preview.Image.ID),
+				ContentType: strings.TrimSpace(preview.Image.ContentType),
+				Filename:    strings.TrimSpace(preview.Image.Filename),
 			})
 		}
 		msg := signalMessage{
@@ -330,25 +342,34 @@ func (p *signalPoller) notePathForTimestamp(tsMillis int64) string {
 
 func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg signalMessage) error {
 	content := ""
-	if fullPath, err := fs.NoteFilePath(p.cfg.RepoPath, notePath); err == nil {
+	fullPath, err := fs.NoteFilePath(p.cfg.RepoPath, notePath)
+	if err == nil {
 		if raw, err := os.ReadFile(fullPath); err == nil {
 			content = normalizeLineEndings(string(raw))
 		}
 	}
-	lines := buildSignalNoteLines(msg)
+	frontmatter, body, noteID, err := ensureSignalFrontmatter(content, time.Now(), historyUser(ctx))
+	if err != nil {
+		return err
+	}
+	lines, err := p.buildSignalNoteLines(ctx, msg, noteID)
+	if err != nil {
+		return err
+	}
 	if len(lines) == 0 {
 		return nil
 	}
-	if content != "" && !strings.HasSuffix(content, "\n") {
-		content += "\n"
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
 	}
-	content += strings.Join(lines, "\n") + "\n"
+	body += strings.Join(lines, "\n") + "\n"
 
 	noteCtx := WithUser(ctx, User{Name: p.cfg.SignalOwner, Authenticated: true})
 	_, apiErr := p.server.saveNoteCommon(noteCtx, saveNoteInput{
 		NotePath:    notePath,
 		TargetOwner: p.cfg.SignalOwner,
-		Content:     content,
+		Content:     body,
+		Frontmatter: frontmatter,
 	})
 	if apiErr != nil {
 		return fmt.Errorf(apiErr.message)
@@ -356,7 +377,27 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 	return nil
 }
 
-func buildSignalNoteLines(msg signalMessage) []string {
+func ensureSignalFrontmatter(content string, now time.Time, user string) (string, string, string, error) {
+	normalized := normalizeLineEndings(content)
+	if index.HasFrontmatter(normalized) {
+		fm := index.FrontmatterBlock(normalized)
+		body := strings.TrimPrefix(normalized, fm)
+		body = strings.TrimPrefix(body, "\n")
+		meta := index.FrontmatterAttributes(normalized)
+		return fm, body, meta.ID, nil
+	}
+	updated, err := index.EnsureFrontmatterWithTitleAndUser(normalized, now, 0, "", user)
+	if err != nil {
+		return "", "", "", err
+	}
+	fm := index.FrontmatterBlock(updated)
+	body := strings.TrimPrefix(updated, fm)
+	body = strings.TrimPrefix(body, "\n")
+	meta := index.FrontmatterAttributes(updated)
+	return fm, body, meta.ID, nil
+}
+
+func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessage, noteID string) ([]string, error) {
 	lines := []string{}
 	if len(msg.Previews) > 0 {
 		for idx, preview := range msg.Previews {
@@ -368,11 +409,20 @@ func buildSignalNoteLines(msg signalMessage) []string {
 			if preview.Description != "" {
 				lines = append(lines, "", "  "+preview.Description)
 			}
+			if preview.ImageID != "" && noteID != "" {
+				attachmentName, ok, err := p.ensureSignalPreviewImage(ctx, noteID, preview)
+				if err != nil {
+					slog.Warn("signal preview image", "err", err)
+				}
+				if ok {
+					lines = append(lines, "", "  ![](/attachments/"+noteID+"/"+attachmentName+")")
+				}
+			}
 			if idx < len(msg.Previews)-1 {
 				lines = append(lines, "")
 			}
 		}
-		return lines
+		return lines, nil
 	}
 	text := strings.TrimSpace(msg.Text)
 	text = strings.ReplaceAll(text, "\n", " ")
@@ -380,9 +430,84 @@ func buildSignalNoteLines(msg signalMessage) []string {
 	text = strings.ReplaceAll(text, "\t", " ")
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return nil
+		return nil, nil
 	}
-	return []string{fmt.Sprintf("- [ ] %s", text)}
+	return []string{fmt.Sprintf("- [ ] %s", text)}, nil
+}
+
+func (p *signalPoller) ensureSignalPreviewImage(ctx context.Context, noteID string, preview signalPreview) (string, bool, error) {
+	attachmentID := strings.TrimSpace(preview.ImageID)
+	if attachmentID == "" {
+		return "", false, nil
+	}
+	name := sanitizeAttachmentName(preview.Filename)
+	if name == "" {
+		name = sanitizeAttachmentName(attachmentID)
+	}
+	if name == "" {
+		return "", false, nil
+	}
+	if ext := extensionFromContentType(preview.ContentType); ext != "" && !strings.HasSuffix(strings.ToLower(name), ext) {
+		name += ext
+	}
+	attachmentsDir := p.server.noteAttachmentsDir(p.cfg.SignalOwner, noteID)
+	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
+		return "", false, err
+	}
+	targetPath := filepath.Join(attachmentsDir, name)
+	if _, err := os.Stat(targetPath); err == nil {
+		return name, true, nil
+	}
+	url := fmt.Sprintf("%s/v1/attachments/%s", strings.TrimRight(p.cfg.SignalURL, "/"), attachmentID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", false, err
+	}
+	resp, err := p.doRequest(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", false, fmt.Errorf("attachment fetch failed: %s", strings.TrimSpace(string(body)))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", false, err
+	}
+	if err := os.WriteFile(targetPath, data, 0o644); err != nil {
+		return "", false, err
+	}
+	return name, true, nil
+}
+
+func sanitizeAttachmentName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, " ", "-")
+	name = strings.ReplaceAll(name, "\\", "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	return name
+}
+
+func extensionFromContentType(contentType string) string {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	switch contentType {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ""
+	}
 }
 
 func (p *signalPoller) loadState() error {
