@@ -37,6 +37,11 @@ type signalEnvelope struct {
 				GroupID string `json:"groupId"`
 				Name    string `json:"name"`
 			} `json:"groupInfo"`
+			Previews []struct {
+				URL         string `json:"url"`
+				Title       string `json:"title"`
+				Description string `json:"description"`
+			} `json:"previews"`
 		} `json:"dataMessage"`
 	} `json:"envelope"`
 }
@@ -47,6 +52,13 @@ type signalMessage struct {
 	GroupID  string
 	Group    string
 	TSMillis int64
+	Previews []signalPreview
+}
+
+type signalPreview struct {
+	URL         string
+	Title       string
+	Description string
 }
 
 func (s *Server) StartSignalPoller() {
@@ -240,17 +252,32 @@ func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
 	}
 	var env signalEnvelope
 	if err := json.Unmarshal(raw, &env); err == nil {
+		previews := make([]signalPreview, 0, len(env.Envelope.Data.Previews))
+		for _, preview := range env.Envelope.Data.Previews {
+			url := strings.TrimSpace(preview.URL)
+			title := strings.TrimSpace(preview.Title)
+			desc := strings.TrimSpace(preview.Description)
+			if url == "" {
+				continue
+			}
+			previews = append(previews, signalPreview{
+				URL:         url,
+				Title:       title,
+				Description: desc,
+			})
+		}
 		msg := signalMessage{
-			Sender:  strings.TrimSpace(env.Envelope.Source),
-			Text:    strings.TrimSpace(env.Envelope.Data.Message),
-			GroupID: strings.TrimSpace(env.Envelope.Data.GroupInfo.GroupID),
-			Group:   strings.TrimSpace(env.Envelope.Data.GroupInfo.Name),
+			Sender:   strings.TrimSpace(env.Envelope.Source),
+			Text:     strings.TrimSpace(env.Envelope.Data.Message),
+			GroupID:  strings.TrimSpace(env.Envelope.Data.GroupInfo.GroupID),
+			Group:    strings.TrimSpace(env.Envelope.Data.GroupInfo.Name),
+			Previews: previews,
 		}
 		ts := env.Envelope.Timestamp
 		if ts > 0 {
 			msg.TSMillis = normalizeSignalTimestamp(ts)
 		}
-		if msg.Text != "" || msg.GroupID != "" {
+		if msg.Text != "" || msg.GroupID != "" || len(msg.Previews) > 0 {
 			return msg, true
 		}
 	}
@@ -277,23 +304,14 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 			content = normalizeLineEndings(string(raw))
 		}
 	}
-	sender := strings.TrimSpace(msg.Sender)
-	if sender == "" {
-		sender = "unknown"
-	}
-	text := strings.TrimSpace(msg.Text)
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = strings.ReplaceAll(text, "\r", " ")
-	text = strings.ReplaceAll(text, "\t", " ")
-	text = strings.TrimSpace(text)
-	if text == "" {
+	lines := buildSignalNoteLines(msg)
+	if len(lines) == 0 {
 		return nil
 	}
-	line := fmt.Sprintf("- [ ] %s %s #inbox #signal", sender, text)
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	content += line + "\n"
+	content += strings.Join(lines, "\n") + "\n"
 
 	noteCtx := WithUser(ctx, User{Name: p.cfg.SignalOwner, Authenticated: true})
 	_, apiErr := p.server.saveNoteCommon(noteCtx, saveNoteInput{
@@ -305,6 +323,35 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 		return fmt.Errorf(apiErr.message)
 	}
 	return nil
+}
+
+func buildSignalNoteLines(msg signalMessage) []string {
+	lines := []string{}
+	if len(msg.Previews) > 0 {
+		for idx, preview := range msg.Previews {
+			title := preview.Title
+			if title == "" {
+				title = preview.URL
+			}
+			lines = append(lines, fmt.Sprintf("- [ ] [%s](%s)", title, preview.URL))
+			if preview.Description != "" {
+				lines = append(lines, "", "  "+preview.Description)
+			}
+			if idx < len(msg.Previews)-1 {
+				lines = append(lines, "")
+			}
+		}
+		return lines
+	}
+	text := strings.TrimSpace(msg.Text)
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.ReplaceAll(text, "\t", " ")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	return []string{fmt.Sprintf("- [ ] %s", text)}
 }
 
 func (p *signalPoller) loadState() error {
