@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -148,7 +149,7 @@ func (p *signalPoller) resolveGroupID(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := p.client.Do(req)
+	resp, err := p.doRequest(req)
 	if err != nil {
 		return "", err
 	}
@@ -177,7 +178,7 @@ func (p *signalPoller) receiveMessages(ctx context.Context) ([]signalMessage, er
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.client.Do(req)
+	resp, err := p.doRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +199,29 @@ func (p *signalPoller) receiveMessages(ctx context.Context) ([]signalMessage, er
 		}
 	}
 	return out, nil
+}
+
+func (p *signalPoller) doRequest(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	resp, err := p.client.Do(req)
+	duration := time.Since(start)
+	if err != nil {
+		slog.Debug("signal http error", "method", req.Method, "url", req.URL.String(), "duration", duration.String(), "err", err)
+		return nil, err
+	}
+	bodyPreview := ""
+	if resp.Body != nil {
+		const maxPreview = 2048
+		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxPreview))
+		if readErr == nil {
+			bodyPreview = strings.TrimSpace(string(bodyBytes))
+			rest, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(append(bodyBytes, rest...)))
+		}
+	}
+	slog.Debug("signal http", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode, "duration", duration.String(), "body", bodyPreview)
+	return resp, nil
 }
 
 func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
