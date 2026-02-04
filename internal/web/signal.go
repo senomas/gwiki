@@ -83,7 +83,7 @@ func (s *Server) StartSignalPoller() {
 		slog.Warn("signal state load failed", "err", err)
 	}
 	ticker := time.NewTicker(interval)
-	slog.Info("signal poller enabled", "interval", interval.String())
+	slog.Info("signal poller enabled", "interval", interval.String(), "http_timeout", signalHTTPTimeout(cfg).String())
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -222,10 +222,19 @@ func (p *signalPoller) receiveMessages(ctx context.Context) ([]signalMessage, er
 
 func (p *signalPoller) doRequest(req *http.Request) (*http.Response, error) {
 	start := time.Now()
+	deadline, hasDeadline := req.Context().Deadline()
 	resp, err := p.client.Do(req)
 	duration := time.Since(start)
+	deadlineInfo := "none"
+	if hasDeadline {
+		deadlineInfo = deadline.Format(time.RFC3339Nano)
+	}
+	timeoutInfo := "none"
+	if p.client != nil {
+		timeoutInfo = p.client.Timeout.String()
+	}
 	if err != nil {
-		slog.Debug("signal http error", "method", req.Method, "url", req.URL.String(), "duration", duration.String(), "err", err)
+		slog.Debug("signal http error", "method", req.Method, "url", req.URL.String(), "duration", duration.String(), "timeout", timeoutInfo, "deadline", deadlineInfo, "err", err)
 		return nil, err
 	}
 	bodyPreview := ""
@@ -239,7 +248,7 @@ func (p *signalPoller) doRequest(req *http.Request) (*http.Response, error) {
 			resp.Body = io.NopCloser(bytes.NewReader(append(bodyBytes, rest...)))
 		}
 	}
-	slog.Debug("signal http", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode, "duration", duration.String(), "body", bodyPreview)
+	slog.Debug("signal http", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode, "duration", duration.String(), "timeout", timeoutInfo, "deadline", deadlineInfo, "body", bodyPreview)
 	return resp, nil
 }
 
@@ -398,5 +407,5 @@ func signalHTTPTimeout(cfg config.Config) time.Duration {
 	if cfg.SignalHTTPTimeout > 0 {
 		return cfg.SignalHTTPTimeout
 	}
-	return 120 * time.Millisecond
+	return 60 * time.Second
 }

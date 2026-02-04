@@ -56,7 +56,7 @@ func Load() Config {
 	cfg.GitPushDebounce = parseDurationOr("WIKI_GIT_PUSH_DEBOUNCE", 10*time.Minute)
 	cfg.GitSchedule = parseDurationOr("WIKI_GIT_SCHEDULE", 10*time.Minute)
 	cfg.SignalPoll = parseDurationOr("WIKI_SIGNAL_POLL", 30*time.Second)
-	cfg.SignalHTTPTimeout = parseDurationOr("WIKI_SIGNAL_HTTP_TIMEOUT", 120*time.Millisecond)
+	cfg.SignalHTTPTimeout = parseDurationOr("WIKI_SIGNAL_HTTP_TIMEOUT", 60*time.Second)
 	cfg.NoteLockTimeout = parseDurationOr("WIKI_NOTE_LOCK_TIMEOUT", 5*time.Second)
 	cfg.UpdatedHistoryMax = parseIntOr("WIKI_UPDATED_HISTORY_MAX", 100)
 	cfg.DBLockTimeout = time.Duration(parseIntOr("WIKI_DB_LOCK_TIMEOUT_MS", 5000)) * time.Millisecond
