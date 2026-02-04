@@ -7410,6 +7410,7 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
+	s.commitOwnerRepoAsync(owner, "update config")
 	s.addToast(r, Toast{
 		ID:              uuid.NewString(),
 		Message:         "Settings saved.",
