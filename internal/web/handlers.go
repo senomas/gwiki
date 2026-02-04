@@ -2803,6 +2803,9 @@ func paragraphHasOnlyLink(para *ast.Paragraph, source []byte, rawURL string) boo
 			if linkCount > 1 {
 				return false
 			}
+			if label, ok := linkLabelText(node, source); ok && strings.TrimSpace(label) != "" {
+				return false
+			}
 			linkURL := strings.TrimSpace(string(node.Destination))
 			if rawURL != "" && !textMatchesURL(linkURL, rawURL) {
 				return false
@@ -2970,6 +2973,9 @@ func blockOnlyURL(block ast.Node, source []byte) (string, bool) {
 		case *extensionast.TaskCheckBox:
 			continue
 		case *ast.Link:
+			if label, ok := linkLabelText(node, source); ok && strings.TrimSpace(label) != "" {
+				return "", false
+			}
 			if hasLink || hasURLText {
 				return "", false
 			}
@@ -3058,6 +3064,9 @@ func blockSingleLinkWithText(block ast.Node, source []byte) (string, bool, bool,
 			continue
 		case *ast.Link:
 			if foundLink {
+				return "", false, false, nil, false
+			}
+			if label, ok := linkLabelText(node, source); ok && strings.TrimSpace(label) != "" {
 				return "", false, false, nil, false
 			}
 			foundLink = true
