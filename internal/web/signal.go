@@ -335,9 +335,10 @@ func normalizeSignalTimestamp(ts int64) int64 {
 }
 
 func (p *signalPoller) notePathForTimestamp(tsMillis int64) string {
-	when := time.Unix(0, tsMillis*int64(time.Millisecond))
-	date := when.In(time.Local).Format("2006-01-02")
-	return filepath.ToSlash(filepath.Join(p.cfg.SignalOwner, "inbox", "signal-"+date+".md"))
+	now := time.Now()
+	month := now.Format("2006-01")
+	day := now.Format("02")
+	return filepath.ToSlash(filepath.Join(p.cfg.SignalOwner, month, day+".md"))
 }
 
 func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg signalMessage) error {
@@ -359,10 +360,18 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 	if len(lines) == 0 {
 		return nil
 	}
-	if body != "" && !strings.HasSuffix(body, "\n") {
-		body += "\n"
+	entry := strings.Join(lines, "\n")
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return nil
 	}
-	body += strings.Join(lines, "\n") + "\n"
+	journalEntry := "## " + time.Now().Format("15:04") + "\n\n" + entry + "\n"
+	if body == "" {
+		journalDate := time.Now().Format("2 Jan 2006")
+		body = "# " + journalDate + "\n\n" + journalEntry
+	} else {
+		body = strings.TrimRight(body, "\n") + "\n\n" + journalEntry
+	}
 
 	noteCtx := WithUser(ctx, User{Name: p.cfg.SignalOwner, Authenticated: true})
 	_, apiErr := p.server.saveNoteCommon(noteCtx, saveNoteInput{
@@ -399,13 +408,14 @@ func ensureSignalFrontmatter(content string, now time.Time, user string) (string
 
 func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessage, noteID string) ([]string, error) {
 	lines := []string{}
+	suffixTags := " #inbox #signal"
 	if len(msg.Previews) > 0 {
 		for idx, preview := range msg.Previews {
 			title := preview.Title
 			if title == "" {
 				title = preview.URL
 			}
-			lines = append(lines, fmt.Sprintf("- [ ] [%s](%s)", title, preview.URL))
+			lines = append(lines, fmt.Sprintf("- [ ] [%s](%s)%s", title, preview.URL, suffixTags))
 			if preview.Description != "" {
 				lines = append(lines, "", "  "+preview.Description)
 			}
@@ -432,7 +442,7 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 	if text == "" {
 		return nil, nil
 	}
-	return []string{fmt.Sprintf("- [ ] %s", text)}, nil
+	return []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}, nil
 }
 
 func (p *signalPoller) ensureSignalPreviewImage(ctx context.Context, noteID string, preview signalPreview) (string, bool, error) {
