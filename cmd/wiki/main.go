@@ -116,6 +116,7 @@ func main() {
 		slog.Error("auth init", "err", err)
 		os.Exit(1)
 	}
+	srv.StartSignalPoller()
 	startGitScheduler(cfg, idx)
 	slog.Info("listening", "addr", cfg.ListenAddr)
 	if err := http.ListenAndServe(cfg.ListenAddr, srv.Handler()); err != nil {

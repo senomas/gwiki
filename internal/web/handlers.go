@@ -10553,7 +10553,6 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if !s.requireWriteAccessForPath(w, r, notePath) {
 		return
 	}
-	ctx := r.Context()
 	ownerName, _, err := s.ownerFromNotePath(notePath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -10615,27 +10614,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 
-	derivedTitle := index.DeriveTitleFromBody(content)
-	if derivedTitle == "" {
-		derivedTitle = time.Now().Format("2006-01-02 15-04")
-	}
-	preserveUpdated := isJournalNotePath(notePath)
-	folder, err := normalizeFolderPath(folderInput)
-	if err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         notePath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     "invalid folder",
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusBadRequest)
-		return
-	}
-	priority := ""
+	priorityValue := 0
 	if priorityInput != "" {
 		val, err := strconv.Atoi(priorityInput)
 		if err != nil || val <= 0 {
@@ -10643,7 +10622,6 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				Title:            "Edit note",
 				ContentTemplate:  "edit",
 				NotePath:         notePath,
-				NoteTitle:        derivedTitle,
 				RawContent:       content,
 				FrontmatterBlock: frontmatter,
 				ErrorMessage:     "invalid priority",
@@ -10652,160 +10630,39 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			}, http.StatusBadRequest)
 			return
 		}
-		priority = strconv.Itoa(val)
+		priorityValue = val
 	}
 
-	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
-	if err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:           "Edit note",
-			ContentTemplate: "edit",
-			NotePath:        notePath,
-			NoteTitle:       derivedTitle,
-			RawContent:      content,
-			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + notePath + "/edit",
-			ReturnURL:       returnURL,
-		}, http.StatusBadRequest)
-		return
-	}
-	existingContent, err := os.ReadFile(fullPath)
-	if err != nil && !os.IsNotExist(err) {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         notePath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusInternalServerError)
-		return
-	}
-	existingContentNormalized := ""
-	existingFrontmatter := ""
-	oldTitle := ""
-	if err == nil {
-		existingContentNormalized = normalizeLineEndings(string(existingContent))
-		existingFrontmatter = index.FrontmatterBlock(existingContentNormalized)
-		oldTitle = index.DeriveTitleFromBody(existingContentNormalized)
-	}
-	hadFrontmatter := frontmatter != "" || existingFrontmatter != ""
-	if frontmatter == "" {
-		frontmatter = existingFrontmatter
-	}
-	mergedContent := content
-	if frontmatter != "" {
-		mergedContent = frontmatter + "\n" + content
-	}
-	mergedContent = normalizeLineEndings(mergedContent)
-	if !hadFrontmatter {
-		if preserveUpdated {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-		} else {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+	saveResult, apiErr := s.saveNoteCommon(r.Context(), saveNoteInput{
+		NotePath:       notePath,
+		TargetOwner:    targetOwner,
+		Content:        content,
+		Frontmatter:    frontmatter,
+		Visibility:     visibility,
+		Folder:         folderInput,
+		Priority:       priorityValue,
+		RenameDecision: r.Form.Get("rename_decision"),
+	})
+	if apiErr != nil {
+		status := apiErr.status
+		if status == 0 {
+			status = http.StatusInternalServerError
 		}
-		if err != nil {
-			s.renderEditError(w, r, ViewData{
-				Title:            "Edit note",
-				ContentTemplate:  "edit",
-				NotePath:         notePath,
-				NoteTitle:        derivedTitle,
-				RawContent:       content,
-				FrontmatterBlock: frontmatter,
-				ErrorMessage:     err.Error(),
-				ErrorReturnURL:   "/notes/" + notePath + "/edit",
-				ReturnURL:        returnURL,
-			}, http.StatusInternalServerError)
-			return
-		}
-	}
-	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
 			ContentTemplate:  "edit",
 			NotePath:         notePath,
-			NoteTitle:        derivedTitle,
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
+			ErrorMessage:     apiErr.message,
 			ErrorReturnURL:   "/notes/" + notePath + "/edit",
 			ReturnURL:        returnURL,
-		}, http.StatusBadRequest)
-		return
-	} else {
-		mergedContent = updated
-	}
-	if updated, err := index.SetPriority(mergedContent, priority); err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         notePath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusBadRequest)
-		return
-	} else {
-		mergedContent = updated
-	}
-	if updated, err := index.SetFolder(mergedContent, folder); err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         notePath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusBadRequest)
-		return
-	} else {
-		mergedContent = updated
-	}
-	mergedContent = sanitizeTaskDoneTokens(mergedContent)
-	titleChanged := oldTitle != "" && oldTitle != derivedTitle
-	if preserveUpdated && titleChanged {
-		s.addToast(r, Toast{
-			ID:              uuid.NewString(),
-			Message:         "Journal note title cannot change.",
-			Kind:            "error",
-			DurationSeconds: 0,
-			CreatedAt:       time.Now(),
-		})
-		if isHTMX(r) {
-			w.Header().Set("HX-Retarget", "#toast-stack")
-			w.Header().Set("HX-Reswap", "outerHTML")
-			toasts := s.toasts.List(toastKey(r))
-			data := ViewData{
-				ContentTemplate: "toast",
-				ToastItems:      toasts,
-			}
-			s.attachViewData(r, &data)
-			s.views.RenderTemplate(w, "toast", data)
-			return
-		}
-		http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+		}, status)
 		return
 	}
-	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))
-	if folder != "" {
-		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
-	}
-	desiredPath := filepath.ToSlash(filepath.Join(targetOwner, desiredRel))
-	pathChanged := filepath.ToSlash(notePath) != desiredPath
-	decision := r.Form.Get("rename_decision")
-	autoMove := !preserveUpdated && pathChanged
 
-	if err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
-		targetURL := "/notes/" + notePath
+	if saveResult.NoChange {
+		targetURL := "/notes/" + saveResult.Path
 		if returnURL != "" {
 			targetURL = returnURL
 		}
@@ -10832,220 +10689,6 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		return
 	}
 
-	if hadFrontmatter {
-		if preserveUpdated {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-		} else {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-		}
-		if err != nil {
-			s.renderEditError(w, r, ViewData{
-				Title:            "Edit note",
-				ContentTemplate:  "edit",
-				NotePath:         notePath,
-				NoteTitle:        derivedTitle,
-				RawContent:       content,
-				FrontmatterBlock: frontmatter,
-				ErrorMessage:     err.Error(),
-				ErrorReturnURL:   "/notes/" + notePath + "/edit",
-				ReturnURL:        returnURL,
-			}, http.StatusInternalServerError)
-			return
-		}
-	}
-
-	unlock := s.locker.Lock(notePath)
-	defer unlock()
-
-	targetPath := notePath
-	targetFullPath := fullPath
-	moveConfirmed := (decision != "cancel") && (autoMove || (!preserveUpdated && titleChanged))
-	if !preserveUpdated && (titleChanged || pathChanged) && moveConfirmed {
-		targetPath = desiredPath
-		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
-		if err != nil {
-			s.renderEditError(w, r, ViewData{
-				Title:            "Edit note",
-				ContentTemplate:  "edit",
-				NotePath:         notePath,
-				NoteTitle:        derivedTitle,
-				RawContent:       content,
-				FrontmatterBlock: frontmatter,
-				ErrorMessage:     err.Error(),
-				ErrorReturnURL:   "/notes/" + notePath + "/edit",
-				ReturnURL:        returnURL,
-			}, http.StatusBadRequest)
-			return
-		}
-		if targetPath != notePath {
-			if _, err := os.Stat(targetFullPath); err == nil {
-				s.renderEditError(w, r, ViewData{
-					Title:            "Edit note",
-					ContentTemplate:  "edit",
-					NotePath:         notePath,
-					NoteTitle:        derivedTitle,
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					ErrorMessage:     "note already exists",
-					ErrorReturnURL:   "/notes/" + notePath + "/edit",
-					ReturnURL:        returnURL,
-				}, http.StatusConflict)
-				return
-			}
-			if err != nil && !os.IsNotExist(err) {
-				s.renderEditError(w, r, ViewData{
-					Title:            "Edit note",
-					ContentTemplate:  "edit",
-					NotePath:         notePath,
-					NoteTitle:        derivedTitle,
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					ErrorMessage:     err.Error(),
-					ErrorReturnURL:   "/notes/" + notePath + "/edit",
-					ReturnURL:        returnURL,
-				}, http.StatusInternalServerError)
-				return
-			}
-		}
-	}
-
-	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         targetPath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusInternalServerError)
-		return
-	}
-	writeLock, err := s.acquireNoteWriteLock()
-	if err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         targetPath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusInternalServerError)
-		return
-	}
-	defer writeLock.Release()
-	metaAttrs := index.FrontmatterAttributes(mergedContent)
-	commitPaths := []string{fullPath}
-	if metaAttrs.ID != "" {
-		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
-	}
-	if err := commitRepoIfDirty(ctx, s.ownerRepoPath(ownerName), "auto: backup before edit", commitPaths...); err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         targetPath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusInternalServerError)
-		return
-	}
-	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
-		s.renderEditError(w, r, ViewData{
-			Title:            "Edit note",
-			ContentTemplate:  "edit",
-			NotePath:         targetPath,
-			NoteTitle:        derivedTitle,
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-			ReturnURL:        returnURL,
-		}, http.StatusInternalServerError)
-		return
-	}
-	if targetPath != notePath && metaAttrs.ID != "" && targetOwner != ownerName {
-		oldAttach := s.noteAttachmentsDir(ownerName, metaAttrs.ID)
-		newAttach := s.noteAttachmentsDir(targetOwner, metaAttrs.ID)
-		if _, err := os.Stat(oldAttach); err == nil {
-			if _, err := os.Stat(newAttach); err == nil {
-				s.renderEditError(w, r, ViewData{
-					Title:            "Edit note",
-					ContentTemplate:  "edit",
-					NotePath:         targetPath,
-					NoteTitle:        derivedTitle,
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					ErrorMessage:     "attachments already exist for new owner",
-					ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-					ReturnURL:        returnURL,
-				}, http.StatusConflict)
-				return
-			}
-			if err := os.MkdirAll(filepath.Dir(newAttach), 0o755); err != nil {
-				s.renderEditError(w, r, ViewData{
-					Title:            "Edit note",
-					ContentTemplate:  "edit",
-					NotePath:         targetPath,
-					NoteTitle:        derivedTitle,
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					ErrorMessage:     err.Error(),
-					ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-					ReturnURL:        returnURL,
-				}, http.StatusInternalServerError)
-				return
-			}
-			if err := os.Rename(oldAttach, newAttach); err != nil {
-				s.renderEditError(w, r, ViewData{
-					Title:            "Edit note",
-					ContentTemplate:  "edit",
-					NotePath:         targetPath,
-					NoteTitle:        derivedTitle,
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					ErrorMessage:     err.Error(),
-					ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-					ReturnURL:        returnURL,
-				}, http.StatusInternalServerError)
-				return
-			}
-		}
-	}
-	if targetPath != notePath {
-		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
-			s.renderEditError(w, r, ViewData{
-				Title:            "Edit note",
-				ContentTemplate:  "edit",
-				NotePath:         targetPath,
-				NoteTitle:        derivedTitle,
-				RawContent:       content,
-				FrontmatterBlock: frontmatter,
-				ErrorMessage:     err.Error(),
-				ErrorReturnURL:   "/notes/" + targetPath + "/edit",
-				ReturnURL:        returnURL,
-			}, http.StatusInternalServerError)
-			return
-		}
-		_ = s.idx.RemoveNoteByPath(ctx, notePath)
-	}
-	info, err := os.Stat(targetFullPath)
-	if err == nil {
-		_ = s.idx.IndexNote(ctx, targetPath, []byte(mergedContent), info.ModTime(), info.Size())
-	}
-	s.commitOwnerRepoAsync(targetOwner, "save "+targetPath)
-	if targetOwner != ownerName {
-		s.commitOwnerRepoAsync(ownerName, "move "+notePath)
-	}
-
 	s.addToast(r, Toast{
 		ID:              uuid.NewString(),
 		Message:         "Note updated.",
@@ -11053,7 +10696,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		DurationSeconds: 3,
 		CreatedAt:       time.Now(),
 	})
-	targetURL := "/notes/" + targetPath
+	targetURL := "/notes/" + saveResult.TargetPath
 	if returnURL != "" {
 		targetURL = returnURL
 	}
@@ -11082,6 +10725,25 @@ type apiNoteSaveResponse struct {
 	Created    bool   `json:"created"`
 	Moved      bool   `json:"moved"`
 	Message    string `json:"message"`
+}
+
+type saveNoteInput struct {
+	NotePath       string
+	TargetOwner    string
+	Content        string
+	Frontmatter    string
+	Visibility     string
+	Folder         string
+	Priority       int
+	RenameDecision string
+}
+
+type saveNoteResult struct {
+	Path       string
+	TargetPath string
+	Created    bool
+	Moved      bool
+	NoChange   bool
 }
 
 func (s *Server) handleAPINotes(w http.ResponseWriter, r *http.Request) {
@@ -11114,249 +10776,32 @@ func (s *Server) handleAPINotes(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-	ownerName, relPath, err := s.ownerFromNotePath(notePath)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if apiErr := s.apiWriteAccessForRelPath(r.Context(), ownerName, relPath); apiErr != nil {
+	saveResult, apiErr := s.saveNoteCommon(r.Context(), saveNoteInput{
+		NotePath:       notePath,
+		TargetOwner:    payload.Owner,
+		Content:        payload.Content,
+		Frontmatter:    payload.Frontmatter,
+		Visibility:     payload.Visibility,
+		Folder:         payload.Folder,
+		Priority:       payload.Priority,
+		RenameDecision: payload.RenameDecision,
+	})
+	if apiErr != nil {
 		writeAPIError(w, apiErr.status, apiErr.message)
 		return
 	}
-
-	targetOwner := strings.TrimSpace(payload.Owner)
-	if targetOwner == "" {
-		targetOwner = ownerName
-	}
-	if targetOwner != ownerName {
-		if apiErr := s.apiWriteAccessForOwner(r.Context(), targetOwner); apiErr != nil {
-			writeAPIError(w, apiErr.status, apiErr.message)
-			return
-		}
-	}
-	if err := s.ensureOwnerNotesDir(targetOwner); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	content := normalizeLineEndings(payload.Content)
-	if content == "" {
-		writeAPIError(w, http.StatusBadRequest, "content required")
-		return
-	}
-	frontmatter := normalizeLineEndings(payload.Frontmatter)
-	visibility := strings.TrimSpace(payload.Visibility)
-	folderInput := payload.Folder
-	priorityInput := payload.Priority
-	priority := ""
-	if priorityInput < 0 {
-		writeAPIError(w, http.StatusBadRequest, "invalid priority")
-		return
-	}
-	if priorityInput > 0 {
-		priority = strconv.Itoa(priorityInput)
-	}
-
-	derivedTitle := index.DeriveTitleFromBody(content)
-	if derivedTitle == "" {
-		derivedTitle = time.Now().Format("2006-01-02 15-04")
-	}
-	preserveUpdated := isJournalNotePath(notePath)
-	folder, err := normalizeFolderPath(folderInput)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid folder")
-		return
-	}
-	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	existingContent, err := os.ReadFile(fullPath)
-	created := false
-	if err != nil {
-		if os.IsNotExist(err) {
-			created = true
-		} else {
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	existingContentNormalized := ""
-	existingFrontmatter := ""
-	oldTitle := ""
-	if err == nil {
-		existingContentNormalized = normalizeLineEndings(string(existingContent))
-		existingFrontmatter = index.FrontmatterBlock(existingContentNormalized)
-		oldTitle = index.DeriveTitleFromBody(existingContentNormalized)
-	}
-	hadFrontmatter := frontmatter != "" || existingFrontmatter != ""
-	if frontmatter == "" {
-		frontmatter = existingFrontmatter
-	}
-	mergedContent := content
-	if frontmatter != "" {
-		mergedContent = frontmatter + "\n" + content
-	}
-	mergedContent = normalizeLineEndings(mergedContent)
-	if !hadFrontmatter {
-		if preserveUpdated {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-		} else {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-		}
-		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	} else {
-		mergedContent = updated
-	}
-	if updated, err := index.SetPriority(mergedContent, priority); err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	} else {
-		mergedContent = updated
-	}
-	if updated, err := index.SetFolder(mergedContent, folder); err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	} else {
-		mergedContent = updated
-	}
-	mergedContent = sanitizeTaskDoneTokens(mergedContent)
-	titleChanged := oldTitle != "" && oldTitle != derivedTitle
-	if preserveUpdated && titleChanged {
-		writeAPIError(w, http.StatusConflict, "journal note title cannot change")
-		return
-	}
-	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))
-	if folder != "" {
-		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
-	}
-	desiredPath := filepath.ToSlash(filepath.Join(targetOwner, desiredRel))
-	pathChanged := filepath.ToSlash(notePath) != desiredPath
-	decision := payload.RenameDecision
-	autoMove := !preserveUpdated && pathChanged
-
-	if err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
-		writeAPIJSON(w, http.StatusOK, apiNoteSaveResponse{
-			Path:       notePath,
-			TargetPath: notePath,
-			Created:    created,
-			Moved:      false,
-			Message:    "No changes to save.",
-		})
-		return
-	}
-
-	if hadFrontmatter {
-		if preserveUpdated {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-		} else {
-			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-		}
-		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-
-	unlock := s.locker.Lock(notePath)
-	defer unlock()
-
-	targetPath := notePath
-	targetFullPath := fullPath
-	moveConfirmed := (decision != "cancel") && (autoMove || (!preserveUpdated && titleChanged))
-	if !preserveUpdated && (titleChanged || pathChanged) && moveConfirmed {
-		targetPath = desiredPath
-		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
-		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if targetPath != notePath {
-			if _, err := os.Stat(targetFullPath); err == nil {
-				writeAPIError(w, http.StatusConflict, "note already exists")
-				return
-			}
-			if err != nil && !os.IsNotExist(err) {
-				writeAPIError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
-	}
-
-	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeLock, err := s.acquireNoteWriteLock()
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer writeLock.Release()
-	metaAttrs := index.FrontmatterAttributes(mergedContent)
-	commitPaths := []string{fullPath}
-	if metaAttrs.ID != "" {
-		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
-	}
-	if err := commitRepoIfDirty(r.Context(), s.ownerRepoPath(ownerName), "auto: backup before edit", commitPaths...); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if targetPath != notePath && metaAttrs.ID != "" && targetOwner != ownerName {
-		oldAttach := s.noteAttachmentsDir(ownerName, metaAttrs.ID)
-		newAttach := s.noteAttachmentsDir(targetOwner, metaAttrs.ID)
-		if _, err := os.Stat(oldAttach); err == nil {
-			if _, err := os.Stat(newAttach); err == nil {
-				writeAPIError(w, http.StatusConflict, "attachments already exist for new owner")
-				return
-			}
-			if err := os.MkdirAll(filepath.Dir(newAttach), 0o755); err != nil {
-				writeAPIError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if err := os.Rename(oldAttach, newAttach); err != nil {
-				writeAPIError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
-	}
-	if targetPath != notePath {
-		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
-			writeAPIError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		_ = s.idx.RemoveNoteByPath(r.Context(), notePath)
-	}
-	info, err := os.Stat(targetFullPath)
-	if err == nil {
-		_ = s.idx.IndexNote(r.Context(), targetPath, []byte(mergedContent), info.ModTime(), info.Size())
-	}
-	s.commitOwnerRepoAsync(targetOwner, "save "+targetPath)
-	if targetOwner != ownerName {
-		s.commitOwnerRepoAsync(ownerName, "move "+notePath)
-	}
-
 	message := "Note updated."
-	if created {
+	if saveResult.Created {
 		message = "Note created."
 	}
+	if saveResult.NoChange {
+		message = "No changes to save."
+	}
 	writeAPIJSON(w, http.StatusOK, apiNoteSaveResponse{
-		Path:       notePath,
-		TargetPath: targetPath,
-		Created:    created,
-		Moved:      targetPath != notePath,
+		Path:       saveResult.Path,
+		TargetPath: saveResult.TargetPath,
+		Created:    saveResult.Created,
+		Moved:      saveResult.Moved,
 		Message:    message,
 	})
 }
@@ -11384,6 +10829,228 @@ func sanitizeTaskDoneTokens(content string) string {
 		return body
 	}
 	return frontmatter + "\n" + body
+}
+
+func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveNoteResult, *apiError) {
+	notePath := strings.TrimSpace(input.NotePath)
+	if notePath == "" {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: "invalid path"}
+	}
+	notePath = strings.TrimPrefix(notePath, "/")
+	ownerName, relPath, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+	}
+	if apiErr := s.apiWriteAccessForRelPath(ctx, ownerName, relPath); apiErr != nil {
+		return saveNoteResult{}, apiErr
+	}
+
+	targetOwner := strings.TrimSpace(input.TargetOwner)
+	if targetOwner == "" {
+		targetOwner = ownerName
+	}
+	if targetOwner != ownerName {
+		if apiErr := s.apiWriteAccessForOwner(ctx, targetOwner); apiErr != nil {
+			return saveNoteResult{}, apiErr
+		}
+	}
+	if err := s.ensureOwnerNotesDir(targetOwner); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+	}
+
+	content := normalizeLineEndings(input.Content)
+	if content == "" {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: "content required"}
+	}
+	frontmatter := normalizeLineEndings(input.Frontmatter)
+	visibility := strings.TrimSpace(input.Visibility)
+	folderInput := input.Folder
+	priorityInput := input.Priority
+	if priorityInput < 0 {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: "invalid priority"}
+	}
+
+	derivedTitle := index.DeriveTitleFromBody(content)
+	if derivedTitle == "" {
+		derivedTitle = time.Now().Format("2006-01-02 15-04")
+	}
+	preserveUpdated := isJournalNotePath(notePath)
+	folder, err := normalizeFolderPath(folderInput)
+	if err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: "invalid folder"}
+	}
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+	}
+	existingContent, err := os.ReadFile(fullPath)
+	created := false
+	if err != nil {
+		if os.IsNotExist(err) {
+			created = true
+		} else {
+			return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		}
+	}
+	existingContentNormalized := ""
+	existingFrontmatter := ""
+	oldTitle := ""
+	if err == nil {
+		existingContentNormalized = normalizeLineEndings(string(existingContent))
+		existingFrontmatter = index.FrontmatterBlock(existingContentNormalized)
+		oldTitle = index.DeriveTitleFromBody(existingContentNormalized)
+	}
+	hadFrontmatter := frontmatter != "" || existingFrontmatter != ""
+	if frontmatter == "" {
+		frontmatter = existingFrontmatter
+	}
+	mergedContent := content
+	if frontmatter != "" {
+		mergedContent = frontmatter + "\n" + content
+	}
+	mergedContent = normalizeLineEndings(mergedContent)
+	if !hadFrontmatter {
+		if preserveUpdated {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(ctx))
+		} else {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(ctx))
+		}
+		if err != nil {
+			return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		}
+	}
+	if updated, err := index.SetVisibility(mergedContent, visibility); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+	} else {
+		mergedContent = updated
+	}
+	priority := ""
+	if priorityInput > 0 {
+		priority = strconv.Itoa(priorityInput)
+	}
+	if updated, err := index.SetPriority(mergedContent, priority); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+	} else {
+		mergedContent = updated
+	}
+	if updated, err := index.SetFolder(mergedContent, folder); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+	} else {
+		mergedContent = updated
+	}
+	mergedContent = sanitizeTaskDoneTokens(mergedContent)
+	titleChanged := oldTitle != "" && oldTitle != derivedTitle
+	if preserveUpdated && titleChanged {
+		return saveNoteResult{}, &apiError{status: http.StatusConflict, message: "journal note title cannot change"}
+	}
+	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))
+	if folder != "" {
+		desiredRel = filepath.ToSlash(filepath.Join(folder, desiredRel))
+	}
+	desiredPath := filepath.ToSlash(filepath.Join(targetOwner, desiredRel))
+	pathChanged := filepath.ToSlash(notePath) != desiredPath
+	decision := input.RenameDecision
+	autoMove := !preserveUpdated && pathChanged
+
+	if err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
+		return saveNoteResult{
+			Path:       notePath,
+			TargetPath: notePath,
+			Created:    created,
+			Moved:      false,
+			NoChange:   true,
+		}, nil
+	}
+
+	if hadFrontmatter {
+		if preserveUpdated {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(ctx))
+		} else {
+			mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(ctx))
+		}
+		if err != nil {
+			return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		}
+	}
+
+	unlock := s.locker.Lock(notePath)
+	defer unlock()
+
+	targetPath := notePath
+	targetFullPath := fullPath
+	moveConfirmed := (decision != "cancel") && (autoMove || (!preserveUpdated && titleChanged))
+	if !preserveUpdated && (titleChanged || pathChanged) && moveConfirmed {
+		targetPath = desiredPath
+		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
+		if err != nil {
+			return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+		}
+		if targetPath != notePath {
+			if _, err := os.Stat(targetFullPath); err == nil {
+				return saveNoteResult{}, &apiError{status: http.StatusConflict, message: "note already exists"}
+			}
+			if err != nil && !os.IsNotExist(err) {
+				return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+			}
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+	}
+	writeLock, err := s.acquireNoteWriteLock()
+	if err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+	}
+	defer writeLock.Release()
+	metaAttrs := index.FrontmatterAttributes(mergedContent)
+	commitPaths := []string{fullPath}
+	if metaAttrs.ID != "" {
+		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
+	}
+	if err := commitRepoIfDirty(ctx, s.ownerRepoPath(ownerName), "auto: backup before edit", commitPaths...); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+	}
+	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+	}
+	if targetPath != notePath && metaAttrs.ID != "" && targetOwner != ownerName {
+		oldAttach := s.noteAttachmentsDir(ownerName, metaAttrs.ID)
+		newAttach := s.noteAttachmentsDir(targetOwner, metaAttrs.ID)
+		if _, err := os.Stat(oldAttach); err == nil {
+			if _, err := os.Stat(newAttach); err == nil {
+				return saveNoteResult{}, &apiError{status: http.StatusConflict, message: "attachments already exist for new owner"}
+			}
+			if err := os.MkdirAll(filepath.Dir(newAttach), 0o755); err != nil {
+				return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+			}
+			if err := os.Rename(oldAttach, newAttach); err != nil {
+				return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+			}
+		}
+	}
+	if targetPath != notePath {
+		if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+			return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		}
+		_ = s.idx.RemoveNoteByPath(ctx, notePath)
+	}
+	info, err := os.Stat(targetFullPath)
+	if err == nil {
+		_ = s.idx.IndexNote(ctx, targetPath, []byte(mergedContent), info.ModTime(), info.Size())
+	}
+	s.commitOwnerRepoAsync(targetOwner, "save "+targetPath)
+	if targetOwner != ownerName {
+		s.commitOwnerRepoAsync(ownerName, "move "+notePath)
+	}
+
+	return saveNoteResult{
+		Path:       notePath,
+		TargetPath: targetPath,
+		Created:    created,
+		Moved:      targetPath != notePath,
+		NoChange:   false,
+	}, nil
 }
 
 func commitRepoIfDirty(ctx context.Context, repoPath string, message string, paths ...string) error {

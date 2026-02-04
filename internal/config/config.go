@@ -15,6 +15,11 @@ type Config struct {
 	AuthUser             string
 	AuthPass             string
 	AuthFile             string
+	SignalURL            string
+	SignalNumber         string
+	SignalOwner          string
+	SignalGroup          string
+	SignalPoll           time.Duration
 	GitDebounce          time.Duration
 	GitPushDebounce      time.Duration
 	GitSchedule          time.Duration
@@ -28,12 +33,16 @@ type Config struct {
 func Load() Config {
 	initEnvFile()
 	cfg := Config{
-		RepoPath:   os.Getenv("WIKI_REPO_PATH"),
-		DataPath:   os.Getenv("WIKI_DATA_PATH"),
-		ListenAddr: envOr("WIKI_LISTEN_ADDR", "127.0.0.1:8080"),
-		AuthUser:   os.Getenv("WIKI_AUTH_USER"),
-		AuthPass:   os.Getenv("WIKI_AUTH_PASS"),
-		AuthFile:   os.Getenv("WIKI_AUTH_FILE"),
+		RepoPath:     os.Getenv("WIKI_REPO_PATH"),
+		DataPath:     os.Getenv("WIKI_DATA_PATH"),
+		ListenAddr:   envOr("WIKI_LISTEN_ADDR", "127.0.0.1:8080"),
+		AuthUser:     os.Getenv("WIKI_AUTH_USER"),
+		AuthPass:     os.Getenv("WIKI_AUTH_PASS"),
+		AuthFile:     os.Getenv("WIKI_AUTH_FILE"),
+		SignalURL:    strings.TrimSpace(os.Getenv("WIKI_SIGNAL_URL")),
+		SignalNumber: strings.TrimSpace(os.Getenv("WIKI_SIGNAL_NUMBER")),
+		SignalOwner:  strings.TrimSpace(os.Getenv("WIKI_SIGNAL_OWNER")),
+		SignalGroup:  envOr("WIKI_SIGNAL_GROUP", "gwiki"),
 	}
 	if cfg.DataPath == "" && cfg.RepoPath != "" {
 		cfg.DataPath = filepath.Join(cfg.RepoPath, ".wiki")
@@ -45,6 +54,7 @@ func Load() Config {
 	cfg.GitDebounce = parseDurationOr("WIKI_GIT_DEBOUNCE", 3*time.Minute)
 	cfg.GitPushDebounce = parseDurationOr("WIKI_GIT_PUSH_DEBOUNCE", 10*time.Minute)
 	cfg.GitSchedule = parseDurationOr("WIKI_GIT_SCHEDULE", 10*time.Minute)
+	cfg.SignalPoll = parseDurationOr("WIKI_SIGNAL_POLL", 30*time.Second)
 	cfg.NoteLockTimeout = parseDurationOr("WIKI_NOTE_LOCK_TIMEOUT", 5*time.Second)
 	cfg.UpdatedHistoryMax = parseIntOr("WIKI_UPDATED_HISTORY_MAX", 100)
 	cfg.DBLockTimeout = time.Duration(parseIntOr("WIKI_DB_LOCK_TIMEOUT_MS", 5000)) * time.Millisecond
