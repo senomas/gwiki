@@ -100,16 +100,22 @@ type signalPoller struct {
 	state     signalState
 	stateMu   *sync.Mutex
 	statePath string
+	groupID   string
 }
 
 func (p *signalPoller) tick() {
 	timeout := signalHTTPTimeout(p.cfg) + 50*time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	groupID, err := p.resolveGroupID(ctx)
-	if err != nil {
-		slog.Warn("signal resolve group", "err", err)
-		return
+	groupID := p.groupID
+	if groupID == "" {
+		var err error
+		groupID, err = p.resolveGroupID(ctx)
+		if err != nil {
+			slog.Warn("signal resolve group", "err", err)
+			return
+		}
+		p.groupID = groupID
 	}
 	messages, err := p.receiveMessages(ctx)
 	if err != nil {
