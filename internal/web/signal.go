@@ -62,7 +62,7 @@ func (s *Server) StartSignalPoller() {
 	poller := &signalPoller{
 		cfg:       cfg,
 		server:    s,
-		client:    &http.Client{Timeout: 15 * time.Second},
+		client:    &http.Client{Timeout: signalHTTPTimeout(cfg)},
 		state:     signalState{Groups: map[string]int64{}},
 		stateMu:   &sync.Mutex{},
 		statePath: filepath.Join(cfg.DataPath, "signal-state.json"),
@@ -91,7 +91,8 @@ type signalPoller struct {
 }
 
 func (p *signalPoller) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	timeout := signalHTTPTimeout(p.cfg) + 50*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	groupID, err := p.resolveGroupID(ctx)
 	if err != nil {
@@ -338,4 +339,11 @@ func (p *signalPoller) saveState() error {
 		return err
 	}
 	return os.WriteFile(p.statePath, payload, 0o644)
+}
+
+func signalHTTPTimeout(cfg config.Config) time.Duration {
+	if cfg.SignalHTTPTimeout > 0 {
+		return cfg.SignalHTTPTimeout
+	}
+	return 120 * time.Millisecond
 }
