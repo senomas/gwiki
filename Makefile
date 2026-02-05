@@ -1,3 +1,4 @@
+-include .env.build
 -include .env
 export
 

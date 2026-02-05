@@ -21,9 +21,9 @@ RUN BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwi
 FROM golang:${GO_VERSION} AS build
 
 WORKDIR /src
-ARG BUILD_TAG=dev
 COPY go.mod go.sum ./
 RUN go mod download
+ARG BUILD_TAG=dev
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_TAG}" -o /out/wiki ./cmd/wiki
 RUN CGO_ENABLED=0 go build -o /out/user ./cmd/user
