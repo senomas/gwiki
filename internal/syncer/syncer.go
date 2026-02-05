@@ -130,6 +130,8 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	}
 	hasOrigin := gitHasOriginRemote(ctx, repoDir, env, writer)
 	hasCommits := gitHasCommits(ctx, repoDir, env, writer)
+	remotes := gitListRemotes(ctx, repoDir, env, writer)
+	remotes = orderRemotes(remotes)
 	remoteMain := ""
 	if hasOrigin {
 		remoteMain = resolveRemoteMainBranch(ctx, repoDir, env, writer)
@@ -159,7 +161,7 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	} else {
 		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", "-b", effectiveMain)
 	}
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "notes/")
+	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "--", "notes/", ":(exclude)notes/attachments/TEMP-*")
 
 	hasChanges, err := gitHasStagedChanges(ctx, repoDir, env, writer)
 	if err != nil {
@@ -170,8 +172,12 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 			writeLine("auto-sync: no commits yet")
 		} else if hasOrigin {
 			if !remoteBranchExists(ctx, repoDir, env, writer, effectiveMain) {
-				writeLine("auto-sync: push %s", effectiveMain)
-				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "-u", "origin", effectiveMain)
+				pushToAllRemotes(ctx, repoDir, env, writer, remotes, func(remote string) []string {
+					if remote == "origin" {
+						return []string{"git", "push", "-u", remote, effectiveMain}
+					}
+					return []string{"git", "push", remote, effectiveMain}
+				})
 				_ = trimLogFile(logFile, 1000)
 				writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
 				return output.String(), nil
@@ -179,15 +185,18 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 		}
 		if hasOrigin && remoteMain != "" {
 			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
-			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
+			pushToAllRemotes(ctx, repoDir, env, writer, remotes, func(remote string) []string {
+				return []string{"git", "push", "--force-with-lease", remote, "HEAD:" + pushBranch}
+			})
 			if _, err := runGitCommand(ctx, repoDir, env, writer, "git", "pull", "--rebase", "origin", remoteMain); err != nil {
 				_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "rebase", "--abort")
 				writeLine("auto-sync: rebase failed")
 				_ = trimLogFile(logFile, 1000)
 				return output.String(), nil
 			}
-			writeLine("auto-sync: push %s", remoteMain)
-			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", remoteMain)
+			pushToAllRemotes(ctx, repoDir, env, writer, remotes, func(remote string) []string {
+				return []string{"git", "push", remote, effectiveMain}
+			})
 		} else if hasOrigin && remoteMain == "" {
 			writeLine("auto-sync: remote HEAD missing; skip rebase")
 		} else {
@@ -202,7 +211,9 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	if hasOrigin {
 		if hasCommits && remoteMain != "" {
 			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "fetch", "origin", pushBranch)
-			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "--force-with-lease", "origin", "HEAD:"+pushBranch)
+			pushToAllRemotes(ctx, repoDir, env, writer, remotes, func(remote string) []string {
+				return []string{"git", "push", "--force-with-lease", remote, "HEAD:" + pushBranch}
+			})
 		}
 
 		if hasCommits && remoteMain != "" {
@@ -215,8 +226,12 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 		}
 
 		if !hasCommits {
-			writeLine("auto-sync: push %s", effectiveMain)
-			_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "-u", "origin", effectiveMain)
+			pushToAllRemotes(ctx, repoDir, env, writer, remotes, func(remote string) []string {
+				if remote == "origin" {
+					return []string{"git", "push", "-u", remote, effectiveMain}
+				}
+				return []string{"git", "push", remote, effectiveMain}
+			})
 			_ = trimLogFile(logFile, 1000)
 			writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
 			return output.String(), nil
@@ -233,10 +248,17 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 			writeLine("auto-sync: remote HEAD missing; skip rebase")
 		}
 
-		writeLine("auto-sync: push %s", effectiveMain)
-		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "push", "origin", effectiveMain)
+		pushToAllRemotes(ctx, repoDir, env, writer, remotes, func(remote string) []string {
+			return []string{"git", "push", remote, effectiveMain}
+		})
 	} else {
-		writeLine("auto-sync: no remote origin")
+		if len(remotes) == 0 {
+			writeLine("auto-sync: no remotes")
+		} else {
+			pushToAllRemotes(ctx, repoDir, env, writer, remotes, func(remote string) []string {
+				return []string{"git", "push", remote, effectiveMain}
+			})
+		}
 	}
 	_ = trimLogFile(logFile, 1000)
 	writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
@@ -330,7 +352,7 @@ func CommitOnlyWithOptions(ctx context.Context, repoPath string, opts Options) (
 	if strings.TrimSpace(mainBranch) != "" {
 		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", mainBranch)
 	}
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "notes/")
+	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "--", "notes/", ":(exclude)notes/attachments/TEMP-*")
 	hasChanges, err := gitHasStagedChanges(ctx, repoDir, env, writer)
 	if err != nil {
 		return output.String(), err
@@ -693,6 +715,74 @@ func remoteBranchExists(ctx context.Context, dir string, env []string, writer io
 	_, _ = fmt.Fprintln(writer, "-> ok")
 	_, _ = fmt.Fprintln(writer)
 	return true
+}
+
+func gitListRemotes(ctx context.Context, dir string, env []string, writer io.Writer) []string {
+	writeCommand(writer, "git", "remote")
+	cmd := exec.CommandContext(ctx, "git", "remote")
+	cmd.Dir = dir
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		_, _ = writer.Write(output)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "-> error: %v\n", err)
+		_, _ = fmt.Fprintln(writer)
+		return nil
+	}
+	_, _ = fmt.Fprintln(writer, "-> ok")
+	_, _ = fmt.Fprintln(writer)
+	lines := strings.Split(string(output), "\n")
+	remotes := make([]string, 0, len(lines))
+	for _, line := range lines {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		remotes = append(remotes, name)
+	}
+	return remotes
+}
+
+func orderRemotes(remotes []string) []string {
+	if len(remotes) == 0 {
+		return remotes
+	}
+	ordered := make([]string, 0, len(remotes))
+	hasOrigin := false
+	for _, remote := range remotes {
+		if remote == "origin" {
+			hasOrigin = true
+			break
+		}
+	}
+	if hasOrigin {
+		ordered = append(ordered, "origin")
+	}
+	for _, remote := range remotes {
+		if remote == "origin" {
+			continue
+		}
+		ordered = append(ordered, remote)
+	}
+	return ordered
+}
+
+func pushToAllRemotes(ctx context.Context, dir string, env []string, writer io.Writer, remotes []string, buildArgs func(remote string) []string) {
+	if len(remotes) == 0 {
+		_, _ = fmt.Fprintln(writer, "auto-sync: no remotes")
+		return
+	}
+	for _, remote := range remotes {
+		args := buildArgs(remote)
+		if len(args) == 0 {
+			continue
+		}
+		name := args[0]
+		cmdArgs := args[1:]
+		_, _ = runGitCommand(ctx, dir, env, writer, name, cmdArgs...)
+	}
 }
 
 func runGitCommand(ctx context.Context, dir string, env []string, writer io.Writer, name string, args ...string) (string, error) {

@@ -1246,6 +1246,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	meta := ParseContent(string(content))
 	attrs := FrontmatterAttributes(string(content))
 	uid := strings.TrimSpace(attrs.ID)
+	if strings.HasPrefix(uid, "TEMP-") {
+		return nil
+	}
 	checksum := ContentHash(content)
 	isJournal := 0
 	if isJournalPath(relPath) {

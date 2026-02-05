@@ -166,31 +166,13 @@
 </script>
 <script>
   (function () {
-    const bindAttachmentCopy = function () {
-      const buttons = document.querySelectorAll(".attachment-copy");
-      if (!buttons.length) {
-        return;
+    const buildAttachmentMarkdown = function (path, filename) {
+      const lower = (filename || path || "").toLowerCase();
+      const isImage = /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(lower);
+      if (isImage) {
+        return `![${filename || "attachment"}](${path})`;
       }
-      buttons.forEach((button) => {
-        if (button.dataset.boundCopy === "true") {
-          return;
-        }
-        button.dataset.boundCopy = "true";
-        button.addEventListener("click", async () => {
-          const path = button.getAttribute("data-attachment-path");
-          if (!path) {
-            return;
-          }
-          const markdown = `![](${encodeURI(path)})`;
-          try {
-            await navigator.clipboard.writeText(markdown);
-            button.classList.add("text-emerald-300");
-            setTimeout(() => button.classList.remove("text-emerald-300"), 1200);
-          } catch (err) {
-            console.warn("Clipboard copy failed", err);
-          }
-        });
-      });
+      return `[${filename || "attachment"}](${path})`;
     };
     const bindAttachmentPreview = function () {
       const modal = document.getElementById("attachment-preview-modal");
@@ -251,15 +233,53 @@
       });
     };
 
-    bindAttachmentCopy();
     bindAttachmentPreview();
+    document.addEventListener("click", async (event) => {
+      const button = event.target.closest(".attachment-copy");
+      if (!button) {
+        return;
+      }
+      const path = button.getAttribute("data-attachment-path");
+      if (!path) {
+        return;
+      }
+      const filename = button.textContent ? button.textContent.trim() : "";
+      const markdown = buildAttachmentMarkdown(encodeURI(path), filename);
+      const markCopied = () => {
+        button.classList.add("text-emerald-300");
+        setTimeout(() => button.classList.remove("text-emerald-300"), 1200);
+      };
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(markdown);
+          markCopied();
+          return;
+        }
+      } catch (err) {
+        console.warn("Clipboard copy failed", err);
+      }
+      const temp = document.createElement("textarea");
+      temp.value = markdown;
+      temp.style.position = "fixed";
+      temp.style.left = "-9999px";
+      temp.style.opacity = "0";
+      document.body.appendChild(temp);
+      temp.select();
+      try {
+        document.execCommand("copy");
+        markCopied();
+      } catch (err) {
+        console.warn("Clipboard fallback failed", err);
+      } finally {
+        document.body.removeChild(temp);
+      }
+    });
     document.body.addEventListener("htmx:afterSwap", function (event) {
       const target = event.target;
       if (!target) {
         return;
       }
-      if (target.id === "attachments-list" || target.querySelector(".attachment-copy") || target.querySelector(".attachment-preview")) {
-        bindAttachmentCopy();
+      if (target.id === "attachments-list" || target.querySelector(".attachment-preview")) {
         bindAttachmentPreview();
       }
     });

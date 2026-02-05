@@ -78,6 +78,7 @@ var mdRenderer = goldmark.New(
 	goldmark.WithExtensions(&linkTitleExtension{}),
 	goldmark.WithExtensions(extension.TaskList),
 	goldmark.WithRendererOptions(renderer.WithNodeRenderers(
+		util.Prioritized(newAttachmentImageHTMLRenderer(), 680),
 		util.Prioritized(newCodeBlockHTMLRenderer(), 700),
 	)),
 )
@@ -122,6 +123,59 @@ func shouldOpenNewTab(dest []byte) bool {
 		strings.HasPrefix(s, "https://") ||
 		strings.HasPrefix(s, "ftp://") ||
 		strings.HasPrefix(s, "//")
+}
+
+type attachmentImageHTMLRenderer struct{}
+
+func newAttachmentImageHTMLRenderer() renderer.NodeRenderer {
+	return &attachmentImageHTMLRenderer{}
+}
+
+func (r *attachmentImageHTMLRenderer) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(ast.KindImage, r.renderImage)
+}
+
+func (r *attachmentImageHTMLRenderer) renderImage(
+	w util.BufWriter, source []byte, node ast.Node, entering bool,
+) (ast.WalkStatus, error) {
+	if !entering {
+		return ast.WalkContinue, nil
+	}
+	img := node.(*ast.Image)
+	dest := strings.TrimSpace(string(img.Destination))
+	if dest == "" {
+		return ast.WalkContinue, nil
+	}
+	lowerDest := strings.ToLower(dest)
+	if !strings.HasPrefix(lowerDest, "/attachments/") && !strings.HasPrefix(lowerDest, "attachments/") {
+		return ast.WalkContinue, nil
+	}
+	alt := extractTextFromNode(img, source)
+	title := strings.TrimSpace(string(img.Title))
+	if title != "" {
+		alt = title
+	}
+	if alt == "" {
+		alt = "attachment"
+	}
+	for child := img.FirstChild(); child != nil; {
+		next := child.NextSibling()
+		img.RemoveChild(img, child)
+		child = next
+	}
+	escapedDest := html.EscapeString(dest)
+	escapedAlt := html.EscapeString(alt)
+	escapedTitle := html.EscapeString(title)
+	_, _ = w.WriteString(`<img src="`)
+	_, _ = w.WriteString(escapedDest)
+	_, _ = w.WriteString(`" alt="`)
+	_, _ = w.WriteString(escapedAlt)
+	if escapedTitle != "" {
+		_, _ = w.WriteString(`" title="`)
+		_, _ = w.WriteString(escapedTitle)
+	}
+	_, _ = w.WriteString(`">`)
+	return ast.WalkContinue, nil
 }
 
 type codeBlockHTMLRenderer struct{}
@@ -728,6 +782,53 @@ func (s *Server) tempAttachmentsDir(owner, token string) string {
 
 func (s *Server) noteAttachmentsDir(owner, noteID string) string {
 	return filepath.Join(s.attachmentsRoot(owner), noteID)
+}
+
+func isTempNoteID(noteID string) bool {
+	return strings.HasPrefix(noteID, "TEMP-")
+}
+
+func newTempNoteID() string {
+	now := time.Now().Format("20060102150405")
+	seed := strings.ReplaceAll(uuid.NewString(), "-", "")
+	if len(seed) > 6 {
+		seed = seed[:6]
+	}
+	return "TEMP-" + now + "-" + seed
+}
+
+func (s *Server) tempAttachmentView(ownerName, token string) ([]string, string) {
+	if isTempNoteID(token) {
+		return listAttachmentNames(s.noteAttachmentsDir(ownerName, token)),
+			"/" + filepath.ToSlash(filepath.Join("attachments", token))
+	}
+	return listAttachmentNames(s.tempAttachmentsDir(ownerName, token)), ""
+}
+
+func (s *Server) moveTempAttachments(ownerName, tempID, newID string) error {
+	if tempID == "" || newID == "" || tempID == newID {
+		return nil
+	}
+	src := s.noteAttachmentsDir(ownerName, tempID)
+	slog.Debug("temp attachments move", "owner", ownerName, "temp_id", tempID, "new_id", newID, "src", src)
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			slog.Debug("temp attachments missing", "owner", ownerName, "temp_id", tempID)
+			return nil
+		}
+		return err
+	}
+	dst := s.noteAttachmentsDir(ownerName, newID)
+	slog.Debug("temp attachments target", "owner", ownerName, "new_id", newID, "dst", dst)
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("attachments already exist for new id")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
 }
 
 type attachmentRef struct {
@@ -8757,9 +8858,11 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}
 		uploadToken := strings.TrimSpace(r.URL.Query().Get("upload_token"))
 		if uploadToken == "" {
-			uploadToken = uuid.NewString()
-		} else if _, err := uuid.Parse(uploadToken); err != nil {
-			uploadToken = uuid.NewString()
+			uploadToken = newTempNoteID()
+		} else if !isTempNoteID(uploadToken) {
+			if _, err := uuid.Parse(uploadToken); err != nil {
+				uploadToken = newTempNoteID()
+			}
 		}
 		rawRef := strings.TrimSpace(r.URL.Query().Get("path"))
 		presetTitle := ""
@@ -8787,19 +8890,22 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		if presetTitle != "" {
 			rawContent = "# " + presetTitle + "\n\n"
 		}
+		tempFrontmatter := fmt.Sprintf("---\nid: %s\n---\n", uploadToken)
+		attachments, attachmentBase := s.tempAttachmentView(selectedOwner, uploadToken)
 		data := ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
 			NoteTitle:        presetTitle,
 			RawContent:       rawContent,
-			FrontmatterBlock: "",
+			FrontmatterBlock: tempFrontmatter,
 			NoteMeta:         noteMeta,
 			FolderOptions:    s.folderOptions(r.Context()),
 			OwnerOptions:     ownerOptions,
 			SelectedOwner:    selectedOwner,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(selectedOwner, uploadToken)),
+			Attachments:      attachments,
+			AttachmentBase:   attachmentBase,
 		}
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
@@ -8823,6 +8929,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		if ownerName == "" {
 			ownerName = defaultOwner
 		}
+		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -8832,7 +8939,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      attachments,
+			AttachmentBase:   attachmentBase,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -8841,6 +8949,10 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	uploadToken := r.Form.Get("upload_token")
+	if frontmatter == "" && isTempNoteID(uploadToken) {
+		frontmatter = fmt.Sprintf("---\nid: %s\n---\n", uploadToken)
+	}
+	slog.Debug("new note submit", "upload_token", uploadToken, "frontmatter_len", len(frontmatter), "temp_token", isTempNoteID(uploadToken))
 	ownerName := strings.TrimSpace(r.Form.Get("owner"))
 	if ownerName == "" {
 		ownerName = currentUserName(r.Context())
@@ -8851,6 +8963,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.ensureOwnerNotesDir(ownerName); err != nil {
 		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -8860,7 +8973,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      attachments,
+			AttachmentBase:   attachmentBase,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -8871,6 +8985,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	priorityInput := strings.TrimSpace(r.Form.Get("priority"))
 	if content == "" {
 		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -8880,7 +8995,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      attachments,
+			AttachmentBase:   attachmentBase,
 			ErrorMessage:     "content required",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -8937,7 +9053,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SelectedOwner:    ownerName,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -8962,7 +9079,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SelectedOwner:    ownerName,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -8981,7 +9099,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SelectedOwner:    ownerName,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -8999,7 +9118,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SelectedOwner:    ownerName,
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9035,7 +9155,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SelectedOwner:    ownerName,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusInternalServerError)
@@ -9066,11 +9187,57 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
 		return
+	}
+	if attrs := index.FrontmatterAttributes(mergedContent); attrs.ID != "" {
+		slog.Debug("new note frontmatter id", "upload_token", uploadToken, "id", attrs.ID, "temp_id", isTempNoteID(attrs.ID))
+	}
+	if attrs := index.FrontmatterAttributes(mergedContent); isTempNoteID(attrs.ID) {
+		newID := uuid.NewString()
+		updated, err := index.SetFrontmatterID(mergedContent, newID)
+		if err != nil {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+			s.renderEditError(w, r, ViewData{
+				Title:            "New note",
+				ContentTemplate:  "edit",
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				OwnerOptions:     ownerOptions,
+				SelectedOwner:    ownerName,
+				SaveAction:       "/notes/new",
+				UploadToken:      uploadToken,
+				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				ErrorMessage:     err.Error(),
+				ErrorReturnURL:   "/notes/new",
+			}, http.StatusInternalServerError)
+			return
+		}
+		mergedContent = strings.ReplaceAll(updated, "/attachments/"+attrs.ID+"/", "/attachments/"+newID+"/")
+		mergedContent = strings.ReplaceAll(mergedContent, "attachments/"+attrs.ID+"/", "attachments/"+newID+"/")
+		if err := s.moveTempAttachments(ownerName, attrs.ID, newID); err != nil {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+			s.renderEditError(w, r, ViewData{
+				Title:            "New note",
+				ContentTemplate:  "edit",
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				OwnerOptions:     ownerOptions,
+				SelectedOwner:    ownerName,
+				SaveAction:       "/notes/new",
+				UploadToken:      uploadToken,
+				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				ErrorMessage:     err.Error(),
+				ErrorReturnURL:   "/notes/new",
+			}, http.StatusInternalServerError)
+			return
+		}
 	}
 	folder, err := normalizeFolderPath(folderInput)
 	if err != nil {
@@ -9084,7 +9251,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     "invalid folder",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9111,7 +9279,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SelectedOwner:    ownerName,
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 				ErrorMessage:     "invalid priority",
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -9130,7 +9299,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9149,7 +9319,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9168,7 +9339,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9201,7 +9373,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9218,7 +9391,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     "note already exists",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusConflict)
@@ -9235,7 +9409,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9253,7 +9428,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9270,7 +9446,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9287,7 +9464,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SelectedOwner:    ownerName,
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.tempAttachmentsDir(ownerName, uploadToken)),
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -10341,9 +10519,11 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "upload token required", http.StatusBadRequest)
 		return
 	}
-	if _, err := uuid.Parse(token); err != nil {
-		http.Error(w, "invalid upload token", http.StatusBadRequest)
-		return
+	if !isTempNoteID(token) {
+		if _, err := uuid.Parse(token); err != nil {
+			http.Error(w, "invalid upload token", http.StatusBadRequest)
+			return
+		}
 	}
 	file, header, err := r.FormFile("attachment")
 	if err != nil {
@@ -10364,6 +10544,9 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 	}
 
 	attachmentsDir := s.tempAttachmentsDir(ownerName, token)
+	if isTempNoteID(token) {
+		attachmentsDir = s.noteAttachmentsDir(ownerName, token)
+	}
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -10398,12 +10581,13 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 	}
 
 	if isHTMX(r) {
-		attachments := listAttachmentNames(s.tempAttachmentsDir(ownerName, token))
+		attachments, attachmentBase := s.tempAttachmentView(ownerName, token)
 		data := ViewData{
-			Attachments:   attachments,
-			UploadToken:   token,
-			OwnerOptions:  []OwnerOption{{Name: ownerName, Label: ownerName}},
-			SelectedOwner: ownerName,
+			Attachments:    attachments,
+			AttachmentBase: attachmentBase,
+			UploadToken:    token,
+			OwnerOptions:   []OwnerOption{{Name: ownerName, Label: ownerName}},
+			SelectedOwner:  ownerName,
 		}
 		s.views.RenderTemplate(w, "attachments_list", data)
 		return
@@ -10444,9 +10628,11 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "upload token required", http.StatusBadRequest)
 		return
 	}
-	if _, err := uuid.Parse(token); err != nil {
-		http.Error(w, "invalid upload token", http.StatusBadRequest)
-		return
+	if !isTempNoteID(token) {
+		if _, err := uuid.Parse(token); err != nil {
+			http.Error(w, "invalid upload token", http.StatusBadRequest)
+			return
+		}
 	}
 	name := strings.TrimSpace(r.FormValue("file"))
 	if name == "" {
@@ -10460,6 +10646,9 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 	}
 
 	targetPath := filepath.Join(s.tempAttachmentsDir(ownerName, token), name)
+	if isTempNoteID(token) {
+		targetPath = filepath.Join(s.noteAttachmentsDir(ownerName, token), name)
+	}
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -10547,14 +10736,33 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	noteID, ok := firstPathSegment(clean)
-	if !ok || !s.noteIDAccessible(r.Context(), noteID) {
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	ownerName, _, err := s.ownerFromNoteID(r.Context(), noteID)
-	if err != nil {
-		http.NotFound(w, r)
-		return
+	var ownerName string
+	if isTempNoteID(noteID) {
+		if !IsAuthenticated(r.Context()) {
+			http.NotFound(w, r)
+			return
+		}
+		foundOwner, err := s.ownerForTempAttachment(r.Context(), noteID)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		ownerName = foundOwner
+	} else {
+		if !s.noteIDAccessible(r.Context(), noteID) {
+			http.NotFound(w, r)
+			return
+		}
+		var err error
+		ownerName, _, err = s.ownerFromNoteID(r.Context(), noteID)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 	}
 	attachmentsRoot := filepath.Clean(s.attachmentsRoot(ownerName))
 	fullPath := filepath.Clean(filepath.Join(attachmentsRoot, clean))
@@ -10678,6 +10886,28 @@ func (s *Server) noteIDAccessible(ctx context.Context, noteID string) bool {
 	return true
 }
 
+func (s *Server) ownerForTempAttachment(ctx context.Context, noteID string) (string, error) {
+	userName := currentUserName(ctx)
+	if userName == "" {
+		return "", fmt.Errorf("unauthorized")
+	}
+	candidates := []string{userName}
+	if owners, err := s.idx.WritableOwnersForUser(ctx, userName); err == nil {
+		for _, owner := range owners {
+			if owner != userName {
+				candidates = append(candidates, owner)
+			}
+		}
+	}
+	for _, owner := range candidates {
+		dir := s.noteAttachmentsDir(owner, noteID)
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return owner, nil
+		}
+	}
+	return "", fmt.Errorf("owner not found")
+}
+
 func (s *Server) ensureVideoThumbnail(ctx context.Context, noteID, relPath string) (string, bool) {
 	if noteID == "" || relPath == "" {
 		return "", false
@@ -10784,6 +11014,9 @@ func generateVideoThumbnail(videoPath, thumbPath string) error {
 func (s *Server) promoteTempAttachments(owner, token, content string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
+		return nil
+	}
+	if isTempNoteID(token) {
 		return nil
 	}
 	if _, err := uuid.Parse(token); err != nil {
