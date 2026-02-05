@@ -730,6 +730,251 @@ func (s *Server) noteAttachmentsDir(owner, noteID string) string {
 	return filepath.Join(s.attachmentsRoot(owner), noteID)
 }
 
+type attachmentRef struct {
+	start  int
+	end    int
+	noteID string
+	rel    string
+	prefix string
+}
+
+func (s *Server) cleanupUnusedAttachments(owner, noteID, content string) error {
+	owner = strings.TrimSpace(owner)
+	noteID = strings.TrimSpace(noteID)
+	if owner == "" || noteID == "" {
+		return nil
+	}
+	attachmentsDir := s.noteAttachmentsDir(owner, noteID)
+	if _, err := os.Stat(attachmentsDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	refs := extractAttachmentRefs(content, noteID)
+	return filepath.WalkDir(attachmentsDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(attachmentsDir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." || rel == "" {
+			return nil
+		}
+		if _, ok := refs[rel]; ok {
+			return nil
+		}
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			return removeErr
+		}
+		return nil
+	})
+}
+
+func extractAttachmentRefs(content, noteID string) map[string]struct{} {
+	noteID = strings.TrimSpace(noteID)
+	if noteID == "" {
+		return nil
+	}
+	refs := map[string]struct{}{}
+	prefixes := []string{
+		"/attachments/" + noteID + "/",
+		"attachments/" + noteID + "/",
+	}
+	for _, prefix := range prefixes {
+		offset := 0
+		for {
+			idx := strings.Index(content[offset:], prefix)
+			if idx == -1 {
+				break
+			}
+			start := offset + idx + len(prefix)
+			end := start
+			for end < len(content) {
+				switch content[end] {
+				case ' ', '\n', '\r', '\t', ')', ']', '"', '\'', '<', '>', '(':
+					goto done
+				}
+				end++
+			}
+		done:
+			rel := strings.TrimSpace(content[start:end])
+			rel = strings.TrimPrefix(rel, "./")
+			rel = strings.TrimPrefix(rel, "/")
+			rel = path.Clean(rel)
+			if rel != "." && !strings.HasPrefix(rel, "..") && !strings.Contains(rel, "\\") {
+				rel = strings.TrimPrefix(rel, "/")
+				if rel != "" {
+					refs[rel] = struct{}{}
+				}
+			}
+			offset = end
+		}
+	}
+	return refs
+}
+
+func scanAttachmentRefs(content string) []attachmentRef {
+	refs := make([]attachmentRef, 0, 8)
+	prefixes := []string{"/attachments/", "attachments/"}
+	delims := func(r byte) bool {
+		switch r {
+		case ' ', '\n', '\r', '\t', ')', ']', '"', '\'', '<', '>', '(':
+			return true
+		default:
+			return false
+		}
+	}
+	for _, prefix := range prefixes {
+		offset := 0
+		for {
+			idx := strings.Index(content[offset:], prefix)
+			if idx == -1 {
+				break
+			}
+			start := offset + idx
+			cursor := start + len(prefix)
+			if cursor >= len(content) {
+				break
+			}
+			slash := strings.IndexByte(content[cursor:], '/')
+			if slash <= 0 {
+				offset = cursor
+				continue
+			}
+			noteID := strings.TrimSpace(content[cursor : cursor+slash])
+			if noteID == "" {
+				offset = cursor + slash
+				continue
+			}
+			pathStart := cursor + slash + 1
+			pathEnd := pathStart
+			for pathEnd < len(content) && !delims(content[pathEnd]) {
+				pathEnd++
+			}
+			if pathEnd <= pathStart {
+				offset = pathStart
+				continue
+			}
+			rel := strings.TrimSpace(content[pathStart:pathEnd])
+			rel = strings.TrimPrefix(rel, "./")
+			rel = strings.TrimPrefix(rel, "/")
+			rel = path.Clean(rel)
+			if rel == "." || strings.HasPrefix(rel, "..") || strings.Contains(rel, "\\") || rel == "" {
+				offset = pathEnd
+				continue
+			}
+			refs = append(refs, attachmentRef{
+				start:  start,
+				end:    pathEnd,
+				noteID: noteID,
+				rel:    rel,
+				prefix: prefix,
+			})
+			offset = pathEnd
+		}
+	}
+	return refs
+}
+
+func (s *Server) localizeAttachmentLinks(owner, noteID, content string) (string, error) {
+	owner = strings.TrimSpace(owner)
+	noteID = strings.TrimSpace(noteID)
+	if owner == "" || noteID == "" {
+		return content, nil
+	}
+	refs := scanAttachmentRefs(content)
+	if len(refs) == 0 {
+		return content, nil
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].start == refs[j].start {
+			return refs[i].end < refs[j].end
+		}
+		return refs[i].start < refs[j].start
+	})
+	attachmentsDir := s.noteAttachmentsDir(owner, noteID)
+	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
+		return content, err
+	}
+	type copyInfo struct {
+		srcNote string
+		rel     string
+		dstRel  string
+	}
+	copies := map[string]copyInfo{}
+	for _, ref := range refs {
+		if ref.noteID == noteID {
+			continue
+		}
+		key := ref.noteID + "::" + ref.rel
+		if _, ok := copies[key]; ok {
+			continue
+		}
+		srcDir := s.noteAttachmentsDir(owner, ref.noteID)
+		srcPath := filepath.Join(srcDir, filepath.FromSlash(ref.rel))
+		if _, err := os.Stat(srcPath); err != nil {
+			slog.Warn("attachment source missing", "note_id", ref.noteID, "path", ref.rel, "err", err)
+			continue
+		}
+		dstRel := ref.rel
+		dstPath := filepath.Join(attachmentsDir, filepath.FromSlash(dstRel))
+		if _, err := os.Stat(dstPath); err == nil {
+			base := strings.TrimSuffix(dstRel, path.Ext(dstRel))
+			ext := path.Ext(dstRel)
+			for i := 2; ; i++ {
+				candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
+				candidatePath := filepath.Join(attachmentsDir, filepath.FromSlash(candidate))
+				if _, err := os.Stat(candidatePath); os.IsNotExist(err) {
+					dstRel = candidate
+					dstPath = candidatePath
+					break
+				}
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+			return content, err
+		}
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return content, err
+		}
+		if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+			return content, err
+		}
+		copies[key] = copyInfo{srcNote: ref.noteID, rel: ref.rel, dstRel: dstRel}
+	}
+	if len(copies) == 0 {
+		return content, nil
+	}
+	var b strings.Builder
+	cursor := 0
+	for _, ref := range refs {
+		if ref.start < cursor || ref.end > len(content) || ref.start >= ref.end {
+			continue
+		}
+		b.WriteString(content[cursor:ref.start])
+		key := ref.noteID + "::" + ref.rel
+		if info, ok := copies[key]; ok {
+			b.WriteString(ref.prefix)
+			b.WriteString(noteID)
+			b.WriteString("/")
+			b.WriteString(info.dstRel)
+		} else {
+			b.WriteString(content[ref.start:ref.end])
+		}
+		cursor = ref.end
+	}
+	b.WriteString(content[cursor:])
+	return b.String(), nil
+}
+
 func (s *Server) assetsRoot() string {
 	if s.cfg.DataPath == "" {
 		if s.cfg.RepoPath == "" {
@@ -11006,6 +11251,15 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		}
 	}
 
+metaAttrs := index.FrontmatterAttributes(mergedContent)
+	if metaAttrs.ID != "" {
+		if updated, err := s.localizeAttachmentLinks(targetOwner, metaAttrs.ID, mergedContent); err != nil {
+			slog.Warn("localize attachment links", "owner", targetOwner, "note_id", metaAttrs.ID, "err", err)
+		} else {
+			mergedContent = updated
+		}
+	}
+
 	unlock := s.locker.Lock(notePath)
 	defer unlock()
 
@@ -11036,7 +11290,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 	}
 	defer writeLock.Release()
-	metaAttrs := index.FrontmatterAttributes(mergedContent)
+metaAttrs = index.FrontmatterAttributes(mergedContent)
 	commitPaths := []string{fullPath}
 	if metaAttrs.ID != "" {
 		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
@@ -11060,6 +11314,11 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 			if err := os.Rename(oldAttach, newAttach); err != nil {
 				return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 			}
+		}
+	}
+	if metaAttrs.ID != "" {
+		if err := s.cleanupUnusedAttachments(targetOwner, metaAttrs.ID, mergedContent); err != nil {
+			slog.Warn("cleanup unused attachments", "owner", targetOwner, "note_id", metaAttrs.ID, "err", err)
 		}
 	}
 	if targetPath != notePath {

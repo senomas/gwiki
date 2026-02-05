@@ -238,6 +238,148 @@ func TestRenderVideoAttachmentEmbed(t *testing.T) {
 	}
 }
 
+func TestCleanupUnusedAttachments(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	noteID := "note-attach"
+	attachmentsDir := filepath.Join(notesDir, "attachments", noteID)
+	if err := os.MkdirAll(filepath.Join(attachmentsDir, "dir"), 0o755); err != nil {
+		t.Fatalf("mkdir attachments: %v", err)
+	}
+	keep := filepath.Join(attachmentsDir, "keep.png")
+	keepNested := filepath.Join(attachmentsDir, "dir", "keep2.png")
+	remove := filepath.Join(attachmentsDir, "remove.png")
+	for _, path := range []string{keep, keepNested, remove} {
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatalf("write attachment: %v", err)
+		}
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	content := strings.Join([]string{
+		"![](/attachments/" + noteID + "/keep.png)",
+		"![](/attachments/" + noteID + "/dir/keep2.png)",
+		"",
+	}, "\n")
+	if err := srv.cleanupUnusedAttachments(owner, noteID, content); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("expected keep to remain: %v", err)
+	}
+	if _, err := os.Stat(keepNested); err != nil {
+		t.Fatalf("expected keep nested to remain: %v", err)
+	}
+	if _, err := os.Stat(remove); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected remove to be deleted, got err=%v", err)
+	}
+}
+
+func TestLocalizeAttachmentLinks(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	sourceID := "src-note"
+	sourceRel := "image.png"
+	sourcePath := filepath.Join(notesDir, "attachments", sourceID, sourceRel)
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("source-data"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	targetID := "target-note"
+	frontmatter := strings.Join([]string{
+		"---",
+		"id: " + targetID,
+		"title: Target",
+		"---",
+		"",
+	}, "\n")
+	content := "See ![](/attachments/" + sourceID + "/" + sourceRel + ")\n"
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	noteCtx := WithUser(context.Background(), User{Name: owner, Authenticated: true})
+	_, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
+		NotePath:    filepath.ToSlash(filepath.Join(owner, "test.md")),
+		TargetOwner: owner,
+		Content:     content,
+		Frontmatter: frontmatter,
+		RenameDecision: "cancel",
+	})
+	if apiErr != nil {
+		t.Fatalf("save note: %v", apiErr)
+	}
+
+	updatedPath := filepath.Join(notesDir, "test.md")
+	raw, err := os.ReadFile(updatedPath)
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if !strings.Contains(string(raw), "/attachments/"+targetID+"/"+sourceRel) {
+		t.Fatalf("expected link to be localized, got:\n%s", string(raw))
+	}
+	copied := filepath.Join(notesDir, "attachments", targetID, sourceRel)
+	if _, err := os.Stat(copied); err != nil {
+		t.Fatalf("expected copied attachment, got err=%v", err)
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		t.Fatalf("expected source to remain, got err=%v", err)
+	}
+}
+
 func TestAttachmentAndAssetAccessControl(t *testing.T) {
 	repo := t.TempDir()
 	owner := "alice"
