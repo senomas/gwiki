@@ -6,19 +6,27 @@ import (
 )
 
 func TestParseContent(t *testing.T) {
-	input := `---
-title: Test Note
-tags: [alpha, beta]
----
-# Ignored Title
-
-Some text with #inline tag, #travel/food and a link [[Wiki Note]].
-
-- [ ] Task one @due(2024-01-01)
-- [x] Done task due:2024-02-02
-
-[md](path/to.md)
-`
+	input := strings.Join([]string{
+		"---",
+		"title: Test Note",
+		"tags: [alpha, beta]",
+		"---",
+		"# Ignored Title",
+		"",
+		"Some text with #inline tag, #travel/food and a link [[Wiki Note]].",
+		"",
+		"- [ ] Task one @due(2024-01-01)",
+		"- [x] Done task due:2024-02-02",
+		"",
+		"[md](path/to.md)",
+		"",
+		"```",
+		"#codeblock",
+		"```",
+		"",
+		"    #indented",
+		"",
+	}, "\n")
 	meta := ParseContent(input)
 	if meta.Title != "Ignored Title" {
 		t.Fatalf("expected title from H1, got %q", meta.Title)
@@ -119,14 +127,22 @@ title: Demo
 }
 
 func TestParseTaskTags(t *testing.T) {
-	input := `# demo
-
-- [ ] task one #alpha
-
-  details with #beta and #work/btn
-
-- [ ] task two
-`
+	input := strings.Join([]string{
+		"# demo",
+		"",
+		"- [ ] task one #alpha",
+		"",
+		"  details with #beta and #work/btn",
+		"",
+		"  ```",
+		"  #codeblock",
+		"  ```",
+		"",
+		"      #indented",
+		"",
+		"- [ ] task two",
+		"",
+	}, "\n")
 	meta := ParseContent(input)
 	if len(meta.Tasks) < 2 {
 		t.Fatalf("expected tasks, got %d", len(meta.Tasks))

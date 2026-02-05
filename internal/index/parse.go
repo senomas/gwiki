@@ -51,9 +51,11 @@ func ParseContent(input string) Metadata {
 	for _, t := range parseTagsFromFrontmatter(fm) {
 		tags[t] = struct{}{}
 	}
-	for _, m := range tagRe.FindAllStringSubmatch(body, -1) {
-		for _, tag := range expandTagPrefixes(m[1]) {
-			tags[tag] = struct{}{}
+	for _, line := range nonCodeLines(body) {
+		for _, m := range tagRe.FindAllStringSubmatch(line, -1) {
+			for _, tag := range expandTagPrefixes(m[1]) {
+				tags[tag] = struct{}{}
+			}
 		}
 	}
 	for t := range tags {
@@ -103,6 +105,45 @@ func ParseContent(input string) Metadata {
 	}
 
 	return meta
+}
+
+func nonCodeLines(body string) []string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	inFence := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if isIndentedCodeLine(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func isIndentedCodeLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	spaces := 0
+	for _, r := range line {
+		if r == ' ' {
+			spaces++
+			continue
+		}
+		if r == '\t' {
+			return true
+		}
+		break
+	}
+	return spaces >= 4
 }
 
 func UncheckedTasksSnippet(input string) string {
@@ -285,7 +326,16 @@ func extractTaskTags(lines []string, start int) []string {
 		paragraph = append(paragraph, next)
 	}
 	tags := map[string]struct{}{}
+	inFence := false
 	for _, line := range paragraph {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || isIndentedCodeLine(line) {
+			continue
+		}
 		for _, m := range tagRe.FindAllStringSubmatch(line, -1) {
 			for _, tag := range expandTagPrefixes(m[1]) {
 				tags[tag] = struct{}{}
