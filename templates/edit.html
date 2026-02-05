@@ -149,25 +149,41 @@
 </script>
 <script>
   (function () {
-    const buttons = document.querySelectorAll(".attachment-copy");
-    if (!buttons.length) {
-      return;
-    }
-    buttons.forEach((button) => {
-      button.addEventListener("click", async () => {
-        const path = button.getAttribute("data-attachment-path");
-        if (!path) {
+    const bindAttachmentCopy = function () {
+      const buttons = document.querySelectorAll(".attachment-copy");
+      if (!buttons.length) {
+        return;
+      }
+      buttons.forEach((button) => {
+        if (button.dataset.boundCopy === "true") {
           return;
         }
-        const markdown = `![](${encodeURI(path)})`;
-        try {
-          await navigator.clipboard.writeText(markdown);
-          button.classList.add("text-emerald-300");
-          setTimeout(() => button.classList.remove("text-emerald-300"), 1200);
-        } catch (err) {
-          console.warn("Clipboard copy failed", err);
-        }
+        button.dataset.boundCopy = "true";
+        button.addEventListener("click", async () => {
+          const path = button.getAttribute("data-attachment-path");
+          if (!path) {
+            return;
+          }
+          const markdown = `![](${encodeURI(path)})`;
+          try {
+            await navigator.clipboard.writeText(markdown);
+            button.classList.add("text-emerald-300");
+            setTimeout(() => button.classList.remove("text-emerald-300"), 1200);
+          } catch (err) {
+            console.warn("Clipboard copy failed", err);
+          }
+        });
       });
+    };
+    bindAttachmentCopy();
+    document.body.addEventListener("htmx:afterSwap", function (event) {
+      const target = event.target;
+      if (!target) {
+        return;
+      }
+      if (target.id === "attachments-list" || target.querySelector(".attachment-copy")) {
+        bindAttachmentCopy();
+      }
     });
   })();
 </script>
@@ -1004,7 +1020,7 @@
       {{range .Attachments}}
       <li class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-[#151922]/80 px-3 py-2">
         {{if $.AttachmentBase}}
-        <button class="attachment-copy text-left text-slate-100 hover:text-sky-200" type="button" data-attachment-path="{{$.AttachmentBase}}/{{.}}">{{.}}</button>
+        <button class="attachment-copy break-all text-left text-slate-100 hover:text-sky-200" type="button" data-attachment-path="{{$.AttachmentBase}}/{{.}}">{{.}}</button>
         {{else}}
         <span class="break-all">{{.}}</span>
         {{end}}
