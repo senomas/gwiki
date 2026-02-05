@@ -642,6 +642,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 29
+		case 29:
+			slog.Info("schema migration", "from", 29, "to", 30)
+			if err := i.migrate29To30(ctx); err != nil {
+				return err
+			}
+			version = 30
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1023,6 +1029,22 @@ func (i *Index) RebuildFromFS(ctx context.Context, repoPath string) error {
 		return err
 	}
 	slog.Info("index rebuild complete", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+	return nil
+}
+
+func (i *Index) migrate29To30(ctx context.Context) error {
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS file_cleanup (
+			user_id INTEGER NOT NULL,
+			path TEXT NOT NULL,
+			expires_at INTEGER NOT NULL,
+			PRIMARY KEY(user_id, path)
+		)`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS file_cleanup_expires ON file_cleanup(user_id, expires_at)"); err != nil {
+		return err
+	}
 	return nil
 }
 

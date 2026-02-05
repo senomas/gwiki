@@ -738,7 +738,7 @@ type attachmentRef struct {
 	prefix string
 }
 
-func (s *Server) cleanupUnusedAttachments(owner, noteID, content string) error {
+func (s *Server) cleanupUnusedAttachments(ctx context.Context, owner, noteID, content string) error {
 	owner = strings.TrimSpace(owner)
 	noteID = strings.TrimSpace(noteID)
 	if owner == "" || noteID == "" {
@@ -752,7 +752,28 @@ func (s *Server) cleanupUnusedAttachments(owner, noteID, content string) error {
 		return err
 	}
 	refs := extractAttachmentRefs(content, noteID)
-	return filepath.WalkDir(attachmentsDir, func(path string, entry os.DirEntry, err error) error {
+	repoBase := s.ownerRepoPath(owner)
+	if repoBase == "" {
+		repoBase = s.cfg.RepoPath
+	}
+	referencedPaths := make([]string, 0, len(refs))
+	for rel := range refs {
+		full := filepath.Join(attachmentsDir, filepath.FromSlash(rel))
+		if relPath, err := filepath.Rel(repoBase, full); err == nil {
+			relPath = filepath.ToSlash(relPath)
+			if relPath != "" && !strings.HasPrefix(relPath, "..") {
+				referencedPaths = append(referencedPaths, relPath)
+			}
+		}
+	}
+	if len(referencedPaths) > 0 && s.idx != nil {
+		if _, err := s.idx.ClearFileCleanup(ctx, owner, referencedPaths); err != nil {
+			slog.Warn("clear file cleanup", "owner", owner, "err", err)
+		}
+	}
+	expiry := time.Now().Add(24 * time.Hour)
+	var toCleanup []string
+	err := filepath.WalkDir(attachmentsDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -770,11 +791,23 @@ func (s *Server) cleanupUnusedAttachments(owner, noteID, content string) error {
 		if _, ok := refs[rel]; ok {
 			return nil
 		}
-		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-			return removeErr
+		if relPath, err := filepath.Rel(repoBase, path); err == nil {
+			relPath = filepath.ToSlash(relPath)
+			if relPath != "" && !strings.HasPrefix(relPath, "..") {
+				toCleanup = append(toCleanup, relPath)
+			}
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if len(toCleanup) > 0 && s.idx != nil {
+		if _, err := s.idx.EnqueueFileCleanup(ctx, owner, toCleanup, expiry); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func extractAttachmentRefs(content, noteID string) map[string]struct{} {
@@ -11251,7 +11284,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		}
 	}
 
-metaAttrs := index.FrontmatterAttributes(mergedContent)
+	metaAttrs := index.FrontmatterAttributes(mergedContent)
 	if metaAttrs.ID != "" {
 		if updated, err := s.localizeAttachmentLinks(targetOwner, metaAttrs.ID, mergedContent); err != nil {
 			slog.Warn("localize attachment links", "owner", targetOwner, "note_id", metaAttrs.ID, "err", err)
@@ -11290,7 +11323,7 @@ metaAttrs := index.FrontmatterAttributes(mergedContent)
 		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 	}
 	defer writeLock.Release()
-metaAttrs = index.FrontmatterAttributes(mergedContent)
+	metaAttrs = index.FrontmatterAttributes(mergedContent)
 	commitPaths := []string{fullPath}
 	if metaAttrs.ID != "" {
 		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
@@ -11317,7 +11350,7 @@ metaAttrs = index.FrontmatterAttributes(mergedContent)
 		}
 	}
 	if metaAttrs.ID != "" {
-		if err := s.cleanupUnusedAttachments(targetOwner, metaAttrs.ID, mergedContent); err != nil {
+		if err := s.cleanupUnusedAttachments(ctx, targetOwner, metaAttrs.ID, mergedContent); err != nil {
 			slog.Warn("cleanup unused attachments", "owner", targetOwner, "note_id", metaAttrs.ID, "err", err)
 		}
 	}

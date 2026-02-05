@@ -287,7 +287,7 @@ func TestCleanupUnusedAttachments(t *testing.T) {
 		"![](/attachments/" + noteID + "/dir/keep2.png)",
 		"",
 	}, "\n")
-	if err := srv.cleanupUnusedAttachments(owner, noteID, content); err != nil {
+	if err := srv.cleanupUnusedAttachments(context.Background(), owner, noteID, content); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
 	if _, err := os.Stat(keep); err != nil {
@@ -296,8 +296,22 @@ func TestCleanupUnusedAttachments(t *testing.T) {
 	if _, err := os.Stat(keepNested); err != nil {
 		t.Fatalf("expected keep nested to remain: %v", err)
 	}
-	if _, err := os.Stat(remove); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected remove to be deleted, got err=%v", err)
+	if _, err := os.Stat(remove); err != nil {
+		t.Fatalf("expected remove to remain (deferred cleanup), got err=%v", err)
+	}
+	expired, err := idx.ListExpiredFileCleanup(context.Background(), owner, time.Now().Add(48*time.Hour), 10)
+	if err != nil {
+		t.Fatalf("list cleanup: %v", err)
+	}
+	found := false
+	for _, path := range expired {
+		if strings.Contains(path, "remove.png") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected remove.png to be queued for cleanup, got %v", expired)
 	}
 }
 
@@ -353,10 +367,10 @@ func TestLocalizeAttachmentLinks(t *testing.T) {
 
 	noteCtx := WithUser(context.Background(), User{Name: owner, Authenticated: true})
 	_, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
-		NotePath:    filepath.ToSlash(filepath.Join(owner, "test.md")),
-		TargetOwner: owner,
-		Content:     content,
-		Frontmatter: frontmatter,
+		NotePath:       filepath.ToSlash(filepath.Join(owner, "test.md")),
+		TargetOwner:    owner,
+		Content:        content,
+		Frontmatter:    frontmatter,
 		RenameDecision: "cancel",
 	})
 	if apiErr != nil {

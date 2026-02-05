@@ -222,6 +222,21 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index) 
 			UserName:           target.Owner,
 			CommitMessage:      "scheduler sync",
 		}
+		if cleaned, err := cleanupExpiredFiles(ctx, idx, target); err != nil {
+			slog.Warn("sync schedule cleanup failed", "owner", target.Owner, "err", err)
+		} else if cleaned > 0 {
+			commitOpts := opts
+			commitOpts.CommitMessage = "cleanup attachments"
+			output, commitErr := syncer.CommitOnlyWithOptions(ctx, target.Path, commitOpts)
+			if commitErr != nil {
+				slog.Warn("sync schedule cleanup commit failed", "owner", target.Owner, "err", commitErr)
+			}
+			logOutput, logErr := syncer.LogGraphWithOptions(ctx, target.Path, 10, commitOpts)
+			if logErr != nil {
+				slog.Warn("sync schedule cleanup log graph failed", "owner", target.Owner, "err", logErr)
+			}
+			logSyncOutput(target.Owner, output+logOutput)
+		}
 		output, runErr := syncer.RunWithOptions(ctx, target.Path, opts)
 		unlock()
 		if runErr != nil {
@@ -250,6 +265,49 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index) 
 		slog.Info("sync schedule recheck", "scanned", scanned, "updated", updated, "cleaned", cleaned)
 		if err := refreshAuthSources(ctx, cfg, idx, users); err != nil {
 			slog.Warn("sync schedule auth refresh failed", "err", err)
+		}
+	}
+}
+
+func cleanupExpiredFiles(ctx context.Context, idx *index.Index, target syncTarget) (int, error) {
+	if idx == nil {
+		return 0, nil
+	}
+	now := time.Now()
+	removed := 0
+	for {
+		expired, err := idx.ListExpiredFileCleanup(ctx, target.Owner, now, 200)
+		if err != nil {
+			return removed, err
+		}
+		if len(expired) == 0 {
+			return removed, nil
+		}
+		removedPaths := make([]string, 0, len(expired))
+		for _, rel := range expired {
+			rel = filepath.Clean(filepath.FromSlash(rel))
+			if rel == "." || strings.HasPrefix(rel, "..") {
+				continue
+			}
+			full := filepath.Join(target.Path, rel)
+			if !strings.HasPrefix(full, target.Path+string(filepath.Separator)) && full != target.Path {
+				continue
+			}
+			if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+				slog.Warn("cleanup expired file", "owner", target.Owner, "path", rel, "err", err)
+				continue
+			}
+			removedPaths = append(removedPaths, rel)
+		}
+		if len(removedPaths) == 0 {
+			return removed, nil
+		}
+		if _, err := idx.ClearFileCleanup(ctx, target.Owner, removedPaths); err != nil {
+			return removed, err
+		}
+		removed += len(removedPaths)
+		if len(expired) < 200 {
+			return removed, nil
 		}
 	}
 }
