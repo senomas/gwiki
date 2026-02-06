@@ -27,6 +27,11 @@ type ViewData struct {
 	RenamePrompt         bool
 	RenameFromPath       string
 	RenameToPath         string
+	DuplicateNotePrompt  bool
+	DuplicateFromPath    string
+	DuplicateFolder      string
+	DuplicateFilename    string
+	DuplicateBody        string
 	RenderedHTML         template.HTML
 	SearchQuery          string
 	NoteMeta             index.FrontmatterAttrs

@@ -1,5 +1,5 @@
 {{define "edit"}}
-<div class="relative mx-auto min-h-screen max-w-4xl px-4 py-8 md:px-6 md:py-10">
+<div id="note-edit-shell" class="relative mx-auto min-h-screen max-w-4xl px-4 py-8 md:px-6 md:py-10">
   <article class="mt-6 rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
       <h1 class="text-2xl font-semibold text-slate-100">Edit {{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NotePath}}{{end}}</h1>
       {{if .ErrorMessage}}
@@ -42,6 +42,41 @@
                 <button class="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700" type="submit">Rename file</button>
               </form>
             </div>
+          </div>
+        </div>
+      </div>
+      {{end}}
+      {{if .DuplicateNotePrompt}}
+      <div>
+        <input id="duplicate-modal" class="peer hidden" type="checkbox" checked>
+        <div class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/70 px-4 peer-checked:flex">
+          <div class="w-full max-w-md rounded-2xl border border-slate-700/70 bg-slate-900/95 p-5 text-slate-100 shadow-2xl">
+            <div class="text-sm font-semibold text-slate-100">Note already exists</div>
+            <div class="mt-2 text-sm text-slate-400">
+              File <span class="font-semibold text-slate-200">{{.DuplicateFromPath}}</span> already exists. Rename or append?
+            </div>
+            <form class="mt-4 space-y-3" action="/notes/new" method="post" data-edit-save hx-post="/notes/new" hx-swap="none">
+              <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
+              <textarea class="hidden" name="content">{{.RawContent}}</textarea>
+              <input type="hidden" name="return_url" value="{{.ReturnURL}}">
+              {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
+              {{if .SelectedOwner}}<input type="hidden" name="owner" value="{{.SelectedOwner}}">{{end}}
+              <input type="hidden" name="visibility" value="{{.NoteMeta.Visibility}}">
+              <input type="hidden" name="priority" value="{{if .NoteMeta.Priority}}{{.NoteMeta.Priority}}{{else}}10{{end}}">
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Folder</label>
+                <input class="w-full rounded-lg border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="duplicate_folder" value="{{.DuplicateFolder}}">
+              </div>
+              <div class="space-y-1.5">
+                <label class="block text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Filename</label>
+                <input class="w-full rounded-lg border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="duplicate_name" value="{{.DuplicateFilename}}">
+              </div>
+              <div class="mt-4 flex flex-wrap justify-end gap-2">
+                <label class="cursor-pointer rounded-md border border-slate-700/70 bg-slate-800/70 px-3 py-1.5 text-sm font-semibold text-slate-200 hover:bg-slate-700/70" for="duplicate-modal">Cancel</label>
+                <button class="rounded-md border border-slate-700/70 bg-slate-800/70 px-3 py-1.5 text-sm font-semibold text-slate-200 hover:bg-slate-700/70" type="submit" name="duplicate_action" value="append">Append</button>
+                <button class="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700" type="submit" name="duplicate_action" value="rename">Rename</button>
+              </div>
+            </form>
           </div>
         </div>
       </div>

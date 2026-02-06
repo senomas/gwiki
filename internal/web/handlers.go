@@ -831,6 +831,97 @@ func (s *Server) moveTempAttachments(ownerName, tempID, newID string) error {
 	return os.Rename(src, dst)
 }
 
+func (s *Server) mergeTempAttachments(ownerName, tempID, targetID string, body *string) error {
+	if tempID == "" || targetID == "" || tempID == targetID {
+		return nil
+	}
+	src := s.noteAttachmentsDir(ownerName, tempID)
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	dst := s.noteAttachmentsDir(ownerName, targetID)
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	renames := map[string]string{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		oldName := entry.Name()
+		srcPath := filepath.Join(src, oldName)
+		newName := oldName
+		dstPath := filepath.Join(dst, newName)
+		if _, err := os.Stat(dstPath); err == nil {
+			ext := filepath.Ext(oldName)
+			base := strings.TrimSuffix(oldName, ext)
+			newName = fmt.Sprintf("%s-%s%s", base, uuid.NewString()[:8], ext)
+			dstPath = filepath.Join(dst, newName)
+			renames[oldName] = newName
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Rename(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	_ = os.RemoveAll(src)
+	if body != nil && len(renames) > 0 {
+		for oldName, newName := range renames {
+			*body = strings.ReplaceAll(*body, "/attachments/"+targetID+"/"+oldName, "/attachments/"+targetID+"/"+newName)
+			*body = strings.ReplaceAll(*body, "attachments/"+targetID+"/"+oldName, "attachments/"+targetID+"/"+newName)
+		}
+	}
+	return nil
+}
+
+func stripLeadingH1(content string) string {
+	lines := strings.Split(normalizeLineEndings(content), "\n")
+	first := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		first = i
+		break
+	}
+	if first >= 0 {
+		trimmed := strings.TrimSpace(lines[first])
+		if strings.HasPrefix(trimmed, "# ") && !strings.HasPrefix(trimmed, "##") {
+			remaining := append([]string{}, lines[:first]...)
+			remaining = append(remaining, lines[first+1:]...)
+			return strings.TrimLeft(strings.Join(remaining, "\n"), "\n")
+		}
+	}
+	return content
+}
+
+func duplicateDefaults(ownerName, notePath string) (string, string) {
+	rel := notePath
+	prefix := ownerName + "/"
+	if strings.HasPrefix(rel, prefix) {
+		rel = strings.TrimPrefix(rel, prefix)
+	}
+	rel = strings.TrimPrefix(rel, "/")
+	dir := path.Dir(rel)
+	folder := ""
+	if dir != "." {
+		folder = dir
+	}
+	base := path.Base(rel)
+	if ext := path.Ext(base); ext != "" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	return folder, base
+}
+
 type attachmentRef struct {
 	start  int
 	end    int
@@ -8949,6 +9040,9 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	content := normalizeLineEndings(r.Form.Get("content"))
 	frontmatter := normalizeLineEndings(r.Form.Get("frontmatter"))
 	uploadToken := r.Form.Get("upload_token")
+	duplicateAction := strings.TrimSpace(r.Form.Get("duplicate_action"))
+	duplicateFolder := strings.TrimSpace(r.Form.Get("duplicate_folder"))
+	duplicateName := strings.TrimSpace(r.Form.Get("duplicate_name"))
 	if frontmatter == "" && isTempNoteID(uploadToken) {
 		frontmatter = fmt.Sprintf("---\nid: %s\n---\n", uploadToken)
 	}
@@ -9034,6 +9128,57 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	title := index.DeriveTitleFromBody(content)
 	if title == "" {
 		journalMode = true
+	}
+	customFilename := ""
+	if duplicateAction == "rename" {
+		if duplicateName == "" {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+			attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+			s.renderEditError(w, r, ViewData{
+				Title:               "New note",
+				ContentTemplate:     "edit",
+				RawContent:          content,
+				FrontmatterBlock:    frontmatter,
+				OwnerOptions:        ownerOptions,
+				SelectedOwner:       ownerName,
+				SaveAction:          "/notes/new",
+				UploadToken:         uploadToken,
+				Attachments:         attachments,
+				AttachmentBase:      attachmentBase,
+				ErrorMessage:        "filename required",
+				ErrorReturnURL:      "/notes/new",
+				DuplicateNotePrompt: true,
+				DuplicateFolder:     duplicateFolder,
+				DuplicateFilename:   duplicateName,
+			}, http.StatusBadRequest)
+			return
+		}
+		customFilename = slugify(duplicateName)
+		if customFilename == "" {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+			attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+			s.renderEditError(w, r, ViewData{
+				Title:               "New note",
+				ContentTemplate:     "edit",
+				RawContent:          content,
+				FrontmatterBlock:    frontmatter,
+				OwnerOptions:        ownerOptions,
+				SelectedOwner:       ownerName,
+				SaveAction:          "/notes/new",
+				UploadToken:         uploadToken,
+				Attachments:         attachments,
+				AttachmentBase:      attachmentBase,
+				ErrorMessage:        "invalid filename",
+				ErrorReturnURL:      "/notes/new",
+				DuplicateNotePrompt: true,
+				DuplicateFolder:     duplicateFolder,
+				DuplicateFilename:   duplicateName,
+			}, http.StatusBadRequest)
+			return
+		}
+		if duplicateFolder != "" {
+			folderInput = duplicateFolder
+		}
 	}
 	if journalMode {
 		journalDate := journalDay.Format("2 Jan 2006")
@@ -9355,6 +9500,9 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		notePath = filepath.ToSlash(filepath.Join(ownerName, relPath))
 	} else {
 		slug := slugify(title)
+		if customFilename != "" {
+			slug = customFilename
+		}
 		notePath = fs.EnsureMDExt(slug)
 		if folder != "" {
 			notePath = filepath.ToSlash(filepath.Join(folder, notePath))
@@ -9381,20 +9529,193 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := os.Stat(fullPath); err == nil {
+		if duplicateAction == "append" {
+			appendBody := strings.TrimSpace(stripLeadingH1(content))
+			if appendBody == "" {
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+				attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+				s.renderEditError(w, r, ViewData{
+					Title:               "New note",
+					ContentTemplate:     "edit",
+					RawContent:          content,
+					FrontmatterBlock:    frontmatter,
+					OwnerOptions:        ownerOptions,
+					SelectedOwner:       ownerName,
+					SaveAction:          "/notes/new",
+					UploadToken:         uploadToken,
+					Attachments:         attachments,
+					AttachmentBase:      attachmentBase,
+					ErrorMessage:        "append content required",
+					ErrorReturnURL:      "/notes/new",
+					DuplicateNotePrompt: true,
+				}, http.StatusBadRequest)
+				return
+			}
+			existingBytes, err := os.ReadFile(fullPath)
+			if err != nil {
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusInternalServerError)
+				return
+			}
+			existingContent := normalizeLineEndings(string(existingBytes))
+			derivedTitle := index.DeriveTitleFromBody(existingContent)
+			if derivedTitle == "" {
+				derivedTitle = title
+			}
+			existingContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(existingContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+			if err != nil {
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusInternalServerError)
+				return
+			}
+			existingAttrs := index.FrontmatterAttributes(existingContent)
+			existingID := strings.TrimSpace(existingAttrs.ID)
+			if existingID == "" {
+				existingID = uuid.NewString()
+				if updated, err := index.SetFrontmatterID(existingContent, existingID); err == nil {
+					existingContent = updated
+				}
+			}
+			tempID := ""
+			if frontmatter != "" {
+				tempID = index.FrontmatterAttributes(frontmatter).ID
+			}
+			if tempID != "" {
+				appendBody = strings.ReplaceAll(appendBody, "/attachments/"+tempID+"/", "/attachments/"+existingID+"/")
+				appendBody = strings.ReplaceAll(appendBody, "attachments/"+tempID+"/", "attachments/"+existingID+"/")
+			}
+			if isTempNoteID(tempID) {
+				if err := s.mergeTempAttachments(ownerName, tempID, existingID, &appendBody); err != nil {
+					ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+					s.renderEditError(w, r, ViewData{
+						Title:            "New note",
+						ContentTemplate:  "edit",
+						RawContent:       content,
+						FrontmatterBlock: frontmatter,
+						OwnerOptions:     ownerOptions,
+						SelectedOwner:    ownerName,
+						SaveAction:       "/notes/new",
+						UploadToken:      uploadToken,
+						Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+						AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+						ErrorMessage:     err.Error(),
+						ErrorReturnURL:   "/notes/new",
+					}, http.StatusInternalServerError)
+					return
+				}
+			}
+			updatedContent := strings.TrimRight(existingContent, "\n") + "\n\n***\n\n" + appendBody + "\n"
+			updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+			if err != nil {
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusInternalServerError)
+				return
+			}
+			unlock := s.locker.Lock(notePath)
+			if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
+				unlock()
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusInternalServerError)
+				return
+			}
+			unlock()
+			if info, err := os.Stat(fullPath); err == nil {
+				_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
+			}
+			s.commitOwnerRepoAsync(ownerName, "append "+notePath)
+			s.addToast(r, Toast{
+				ID:              uuid.NewString(),
+				Message:         "Note appended.",
+				Kind:            "success",
+				DurationSeconds: 3,
+				CreatedAt:       time.Now(),
+			})
+			targetURL := "/notes/" + notePath
+			if isHTMX(r) {
+				w.Header().Set("HX-Redirect", targetURL)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			http.Redirect(w, r, targetURL, http.StatusSeeOther)
+			return
+		}
 		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+		displayFolder, displayName := duplicateDefaults(ownerName, notePath)
+		if duplicateFolder == "" {
+			duplicateFolder = displayFolder
+		}
+		if duplicateName == "" {
+			duplicateName = displayName
+		}
 		s.renderEditError(w, r, ViewData{
-			Title:            "New note",
-			ContentTemplate:  "edit",
-			RawContent:       content,
-			FrontmatterBlock: frontmatter,
-			OwnerOptions:     ownerOptions,
-			SelectedOwner:    ownerName,
-			SaveAction:       "/notes/new",
-			UploadToken:      uploadToken,
-			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
-			ErrorMessage:     "note already exists",
-			ErrorReturnURL:   "/notes/new",
+			Title:               "New note",
+			ContentTemplate:     "edit",
+			RawContent:          content,
+			FrontmatterBlock:    frontmatter,
+			OwnerOptions:        ownerOptions,
+			SelectedOwner:       ownerName,
+			SaveAction:          "/notes/new",
+			UploadToken:         uploadToken,
+			Attachments:         attachments,
+			AttachmentBase:      attachmentBase,
+			ErrorReturnURL:      "/notes/new",
+			DuplicateNotePrompt: true,
+			DuplicateFromPath:   notePath,
+			DuplicateFolder:     duplicateFolder,
+			DuplicateFilename:   duplicateName,
 		}, http.StatusConflict)
 		return
 	}
@@ -11955,6 +12276,20 @@ func mergeGitRemoteCreds(remotes []GitRemoteCred, creds []gitCredentialEntry) []
 }
 
 func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data ViewData, status int) {
+	if data.DuplicateNotePrompt && isHTMX(r) {
+		w.Header().Set("HX-Retarget", "#note-edit-shell")
+		w.Header().Set("HX-Reswap", "outerHTML")
+		w.WriteHeader(http.StatusOK)
+		if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
+			data.NoteMeta = index.FrontmatterAttributes(data.FrontmatterBlock)
+		}
+		if data.ContentTemplate == "edit" && data.FolderOptions == nil {
+			data.FolderOptions = s.folderOptions(r.Context())
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "edit", data)
+		return
+	}
 	if status >= http.StatusInternalServerError || data.ErrorMessage != "" {
 		slog.Error(
 			"edit error",
