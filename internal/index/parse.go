@@ -36,6 +36,7 @@ var (
 	wikiLinkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	mdLinkRe   = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 	tagRe      = regexp.MustCompile(`(?:^|\s)#([A-Za-z0-9_/-]+!?)`)
+	mentionRe  = regexp.MustCompile(`(?:^|\s)@([A-Za-z0-9_/-]+)`)
 	taskRe     = regexp.MustCompile(`^\s*- \[( |x|X)\] (.+)$`)
 	dueRe      = regexp.MustCompile(`(?i)(?:@due\((\d{4}-\d{2}-\d{2})\)|due:(\d{4}-\d{2}-\d{2}))`)
 )
@@ -56,6 +57,9 @@ func ParseContent(input string) Metadata {
 			for _, tag := range expandTagPrefixes(m[1]) {
 				tags[tag] = struct{}{}
 			}
+		}
+		for _, m := range mentionRe.FindAllStringSubmatch(line, -1) {
+			tags["@"+m[1]] = struct{}{}
 		}
 	}
 	for t := range tags {
@@ -340,6 +344,9 @@ func extractTaskTags(lines []string, start int) []string {
 			for _, tag := range expandTagPrefixes(m[1]) {
 				tags[tag] = struct{}{}
 			}
+		}
+		for _, m := range mentionRe.FindAllStringSubmatch(line, -1) {
+			tags["@"+m[1]] = struct{}{}
 		}
 	}
 	if len(tags) == 0 {

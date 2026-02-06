@@ -14,6 +14,7 @@ func TestParseContent(t *testing.T) {
 		"# Ignored Title",
 		"",
 		"Some text with #inline tag, #travel/food and a link [[Wiki Note]].",
+		"Ping @dev and user@domain.com",
 		"",
 		"- [ ] Task one @due(2024-01-01)",
 		"- [x] Done task due:2024-02-02",
@@ -44,6 +45,21 @@ func TestParseContent(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("expected tag %q, got %v", tag, meta.Tags)
+		}
+	}
+	found := false
+	for _, existing := range meta.Tags {
+		if existing == "@dev" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected mention tag %q, got %v", "@dev", meta.Tags)
+	}
+	for _, existing := range meta.Tags {
+		if existing == "@domain" || existing == "@user@domain.com" {
+			t.Fatalf("unexpected mention tag from email, got %v", meta.Tags)
 		}
 	}
 	if len(meta.Links) != 2 {
@@ -133,6 +149,7 @@ func TestParseTaskTags(t *testing.T) {
 		"- [ ] task one #alpha",
 		"",
 		"  details with #beta and #work/btn",
+		"  ping @dev and user@domain.com",
 		"",
 		"  ```",
 		"  #codeblock",
@@ -159,6 +176,12 @@ func TestParseTaskTags(t *testing.T) {
 		if _, ok := tagSet[want]; !ok {
 			t.Fatalf("expected task tag %q, got %v", want, first.Tags)
 		}
+	}
+	if _, ok := tagSet["@dev"]; !ok {
+		t.Fatalf("expected mention tag %q, got %v", "@dev", first.Tags)
+	}
+	if _, ok := tagSet["@domain"]; ok {
+		t.Fatalf("unexpected mention tag from email, got %v", first.Tags)
 	}
 	second := meta.Tasks[1]
 	if len(second.Tags) != 0 {

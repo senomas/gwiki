@@ -1,8 +1,10 @@
 {{define "tag_suggest"}}
 {{if .TagSuggestions}}
+{{ $prefix := .SuggestPrefix }}
+{{if not $prefix}}{{ $prefix = "#" }}{{end}}
 <div class="flex flex-wrap gap-2 rounded-xl border border-slate-700/80 bg-[#1a2330] px-3 py-2 text-xs text-slate-100 shadow-[0_12px_30px_-20px_rgba(15,23,42,0.9)]">
   {{range .TagSuggestions}}
-    <button class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-xs text-slate-200 hover:border-slate-500" type="button" data-tag="{{.}}">#{{.}}</button>
+    <button class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-xs text-slate-200 hover:border-slate-500" type="button" data-tag="{{.}}">{{$prefix}}{{.}}</button>
   {{end}}
 </div>
 {{end}}

@@ -56,6 +56,16 @@ func MustParseTemplates() *Templates {
 			}
 			return out
 		},
+		"tagLabel": func(tag string) string {
+			tag = strings.TrimSpace(tag)
+			if tag == "" {
+				return ""
+			}
+			if strings.HasPrefix(tag, "@") {
+				return tag
+			}
+			return "#" + tag
+		},
 	})
 	t = template.Must(t.ParseGlob(glob))
 	return &Templates{all: t}

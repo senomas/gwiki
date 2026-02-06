@@ -983,19 +983,30 @@
       return;
     }
     var lastQuery = "";
+    var lastPrefix = "";
+    function findTokenStart(value, caret, prefix) {
+      var idx = value.lastIndexOf(prefix, caret - 1);
+      while (idx !== -1) {
+        if (idx === 0 || /\s/.test(value.charAt(idx - 1))) {
+          return idx;
+        }
+        idx = value.lastIndexOf(prefix, idx - 1);
+      }
+      return -1;
+    }
     function currentTagQuery(value, caret) {
-      var hash = value.lastIndexOf("#", caret - 1);
-      if (hash === -1) {
+      var hash = findTokenStart(value, caret, "#");
+      var at = findTokenStart(value, caret, "@");
+      var start = Math.max(hash, at);
+      if (start === -1) {
         return null;
       }
-      if (hash > 0 && !/\s/.test(value.charAt(hash - 1))) {
-        return null;
-      }
-      var term = value.slice(hash + 1, caret);
+      var prefix = start === at ? "@" : "#";
+      var term = value.slice(start + 1, caret);
       if (term.indexOf(" ") !== -1 || term.indexOf("\n") !== -1) {
         return null;
       }
-      return { term: term, start: hash, end: caret };
+      return { term: term, start: start, end: caret, prefix: prefix };
     }
     function buildMirror(textarea) {
       var div = document.createElement("div");
@@ -1067,20 +1078,25 @@
       var current = currentTagQuery(value, caret);
       if (!current) {
         lastQuery = "";
+        lastPrefix = "";
         suggest.innerHTML = "";
         suggest.classList.add("hidden");
         suggest.removeAttribute("data-tag-start");
         suggest.removeAttribute("data-tag-end");
+        suggest.removeAttribute("data-tag-prefix");
         return;
       }
-      if (current.term === lastQuery && current.term !== "") {
+      if (current.term === lastQuery && current.prefix === lastPrefix && current.term !== "") {
         return;
       }
       lastQuery = current.term;
+      lastPrefix = current.prefix;
       suggest.dataset.tagStart = String(current.start);
       suggest.dataset.tagEnd = String(current.end);
+      suggest.dataset.tagPrefix = current.prefix;
       positionSuggest();
-      htmx.ajax("GET", "/tags/suggest?q=" + encodeURIComponent(current.term), "#tag-suggest");
+      var endpoint = current.prefix === "@" ? "/users/suggest?q=" : "/tags/suggest?q=";
+      htmx.ajax("GET", endpoint + encodeURIComponent(current.term), "#tag-suggest");
     }
     textarea.addEventListener("input", updateSuggest);
     textarea.addEventListener("click", updateSuggest);
@@ -1100,6 +1116,7 @@
       var tag = first.getAttribute("data-tag");
       var start = Number(suggest.dataset.tagStart || "0");
       var end = Number(suggest.dataset.tagEnd || "0");
+      var prefix = suggest.dataset.tagPrefix || "#";
       var insert = tag;
       var nextChar = textarea.value.charAt(end);
       if (!nextChar || !/\s/.test(nextChar)) {
@@ -1107,6 +1124,7 @@
       }
       textarea.setRangeText(insert, start + 1, end, "end");
       lastQuery = "";
+      lastPrefix = prefix;
       suggest.innerHTML = "";
       suggest.classList.add("hidden");
     });
@@ -1118,6 +1136,7 @@
       var tag = target.getAttribute("data-tag");
       var start = Number(suggest.dataset.tagStart || "0");
       var end = Number(suggest.dataset.tagEnd || "0");
+      var prefix = suggest.dataset.tagPrefix || "#";
       var insert = tag;
       var nextChar = textarea.value.charAt(end);
       if (!nextChar || !/\s/.test(nextChar)) {
@@ -1126,6 +1145,7 @@
       textarea.setRangeText(insert, start + 1, end, "end");
       textarea.focus();
       lastQuery = "";
+      lastPrefix = prefix;
       suggest.innerHTML = "";
       suggest.classList.add("hidden");
     });

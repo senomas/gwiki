@@ -86,6 +86,7 @@ type ViewData struct {
 	OwnerOptions         []OwnerOption
 	SelectedOwner        string
 	TagSuggestions       []string
+	SuggestPrefix        string
 	DailyDate            string
 	DailyJournal         *NoteCard
 	DailyNotes           []NoteCard

@@ -1485,6 +1485,17 @@ func appendJournalTagLink(links []TagLink, activeJournal bool, journalCount int,
 	return append([]TagLink{link}, links...)
 }
 
+func formatTagLabel(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ""
+	}
+	if strings.HasPrefix(tag, "@") {
+		return tag
+	}
+	return "#" + tag
+}
+
 func buildTagsQuery(tags []string) string {
 	if len(tags) == 0 {
 		return ""
@@ -6128,6 +6139,9 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		nameLower := strings.ToLower(tag.Name)
+		if strings.HasPrefix(tag.Name, "@") {
+			continue
+		}
 		if !fuzzyMatchTag(queryNormalized, nameLower) {
 			continue
 		}
@@ -6143,7 +6157,47 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 			suggestions = append(suggestions, journalTagName)
 		}
 	}
-	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions})
+	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions, SuggestPrefix: "#"})
+}
+
+func (s *Server) handleUserSuggest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	users, err := s.idx.ListUsers(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	queryLower := strings.ToLower(query)
+	queryNormalized := normalizeFuzzyTerm(queryLower)
+	const maxSuggestions = 10
+	suggestions := make([]string, 0, maxSuggestions)
+	seen := map[string]struct{}{}
+	for _, user := range users {
+		name := strings.TrimSpace(user)
+		if name == "" || name == "system" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		nameLower := strings.ToLower(name)
+		if !fuzzyMatchTag(queryNormalized, nameLower) {
+			continue
+		}
+		seen[name] = struct{}{}
+		suggestions = append(suggestions, name)
+		if len(suggestions) >= maxSuggestions {
+			break
+		}
+	}
+	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions, SuggestPrefix: "@"})
 }
 
 func (s *Server) handleQuickNotes(w http.ResponseWriter, r *http.Request) {
@@ -6369,7 +6423,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		tagHref := toggleTagURL(currentURL.String(), tag.Name)
 		entries = append(entries, QuickLauncherEntry{
 			Kind:  "tag",
-			Label: "#" + tag.Name,
+			Label: formatTagLabel(tag.Name),
 			Hint:  "Tag",
 			Icon:  "#",
 			Href:  tagHref,
@@ -6381,7 +6435,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		tagHref := toggleTagURL(currentURL.String(), journalTagName)
 		entries = append(entries, QuickLauncherEntry{
 			Kind:  "tag",
-			Label: "#" + journalTagName,
+			Label: formatTagLabel(journalTagName),
 			Hint:  "Tag",
 			Icon:  "#",
 			Href:  tagHref,
@@ -6473,7 +6527,7 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 		}
 		entries = append(entries, QuickLauncherEntry{
 			Kind:  "tag",
-			Label: "#" + tag.Name,
+			Label: formatTagLabel(tag.Name),
 			Hint:  "Tag",
 			Icon:  "#",
 			Tag:   tag.Name,
@@ -6483,7 +6537,7 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 	if fuzzyMatchTag(normalized, journalLower) {
 		entries = append(entries, QuickLauncherEntry{
 			Kind:  "tag",
-			Label: "#" + journalTagName,
+			Label: formatTagLabel(journalTagName),
 			Hint:  "Tag",
 			Icon:  "#",
 			Tag:   journalTagName,
