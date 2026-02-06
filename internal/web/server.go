@@ -173,6 +173,12 @@ func (s *Server) debugLogMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const maxBodySize = 1024
 		start := time.Now()
+		slog.Debug(
+			"http request start",
+			"method", r.Method,
+			"url", r.URL.String(),
+			"headers", r.Header,
+		)
 		var bodyPreview []byte
 		if r.Body != nil && r.Body != http.NoBody {
 			limited := io.LimitReader(r.Body, maxBodySize)

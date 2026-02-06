@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"strings"
 	"time"
@@ -134,19 +135,19 @@ func (i *Index) CanWritePath(ctx context.Context, ownerName, relPath, userName s
 	if ownerName == userName {
 		return true, nil
 	}
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "can-write-path")
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
-	userID, err := i.userIDByName(ctx, userName)
+	defer i.rollbackTx(tx, "can-write-path", txStart)
+	userID, err := i.userIDByNameTx(ctx, tx, userName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	ownerID, err := i.userIDByName(ctx, ownerName)
+	ownerID, err := i.userIDByNameTx(ctx, tx, ownerName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -291,11 +292,11 @@ func (i *Index) SyncPathAccessWithStats(ctx context.Context, access map[string][
 		}
 	}
 
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "sync-path-access")
 	if err != nil {
 		return stats, err
 	}
-	defer tx.Rollback()
+	defer i.rollbackTx(tx, "sync-path-access", txStart)
 
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM path_access"); err != nil {
 		return stats, err
@@ -349,7 +350,7 @@ func (i *Index) SyncPathAccessWithStats(ctx context.Context, access map[string][
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := i.commitTx(tx, "sync-path-access", txStart); err != nil {
 		return stats, err
 	}
 	return stats, nil
@@ -461,10 +462,14 @@ func (i *Index) userIDByName(ctx context.Context, name string) (int, error) {
 func (i *Index) userIDByNameTx(ctx context.Context, tx *sql.Tx, name string) (int, error) {
 	var id int
 	if tx != nil {
+		slog.Debug("user id lookup start", "name", name, "tx", true)
 		err := i.queryRowContextTx(ctx, tx, "SELECT id FROM users WHERE name=?", name).Scan(&id)
+		slog.Debug("user id lookup done", "name", name, "id", id, "tx", true, "err", err)
 		return id, err
 	}
+	slog.Debug("user id lookup start", "name", name, "tx", false)
 	err := i.queryRowContext(ctx, "SELECT id FROM users WHERE name=?", name).Scan(&id)
+	slog.Debug("user id lookup done", "name", name, "id", id, "tx", false, "err", err)
 	return id, err
 }
 

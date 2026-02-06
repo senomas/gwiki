@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type Index struct {
@@ -333,7 +333,7 @@ func slugify(input string) string {
 }
 
 func Open(path string) (*Index, error) {
-	return OpenWithOptions(path, OpenOptions{BusyTimeout: 10 * time.Second})
+	return OpenWithOptions(path, OpenOptions{BusyTimeout: 3 * time.Second})
 }
 
 func OpenWithOptions(path string, opts OpenOptions) (*Index, error) {
@@ -343,8 +343,8 @@ func OpenWithOptions(path string, opts OpenOptions) (*Index, error) {
 	}
 
 	vals := url.Values{}
-	vals.Add("_pragma", "journal_mode=WAL")
-	vals.Add("_pragma", fmt.Sprintf("busy_timeout=%d", busyTimeout.Milliseconds()))
+	vals.Add("_journal_mode", "WAL")
+	vals.Add("_busy_timeout", fmt.Sprintf("%d", busyTimeout.Milliseconds()))
 
 	dsn := path
 	if strings.Contains(path, "?") {
@@ -353,13 +353,13 @@ func OpenWithOptions(path string, opts OpenOptions) (*Index, error) {
 		dsn = path + "?" + vals.Encode()
 	}
 
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	return &Index{db: db, lockTimeout: 5 * time.Second}, nil
+	return &Index{db: db, lockTimeout: 3 * time.Second}, nil
 }
 
 func (i *Index) SetLockTimeout(timeout time.Duration) {
@@ -388,11 +388,11 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 		}
 		return err
 	}
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "remove-note")
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer i.rollbackTx(tx, "remove-note", txStart)
 
 	var id int
 	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
@@ -430,7 +430,7 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return i.commitTx(tx, "remove-note", txStart)
 }
 
 func (i *Index) Init(ctx context.Context, repoPath string) error {
@@ -1264,11 +1264,11 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		updatedAt = attrs.Updated.UTC().Unix()
 	}
 
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "index-note")
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer i.rollbackTx(tx, "index-note", txStart)
 
 	var existingID int
 	var createdAt int64
@@ -1463,7 +1463,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		return err
 	}
 
-	return tx.Commit()
+	return i.commitTx(tx, "index-note", txStart)
 }
 
 func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
@@ -4751,11 +4751,11 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		return 0, nil
 	}
 
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "remove-missing-records")
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer i.rollbackTx(tx, "remove-missing-records", txStart)
 
 	for _, row := range missingRows {
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_tags WHERE file_id=?", row.id); err != nil {
@@ -4786,7 +4786,7 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := i.commitTx(tx, "remove-missing-records", txStart); err != nil {
 		return 0, err
 	}
 	return len(missingRows), nil
@@ -4855,11 +4855,11 @@ func (i *Index) replaceFileAccessTx(ctx context.Context, tx *sql.Tx, ownerID int
 }
 
 func (i *Index) rebuildFileAccessAll(ctx context.Context) error {
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "rebuild-file-access")
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer i.rollbackTx(tx, "rebuild-file-access", txStart)
 
 	rows, err := i.queryContextTx(ctx, tx, `
 		SELECT id, user_id, path
@@ -4889,7 +4889,7 @@ func (i *Index) rebuildFileAccessAll(ctx context.Context) error {
 	}
 	rows.Close()
 
-	if err := tx.Commit(); err != nil {
+	if err := i.commitTx(tx, "rebuild-file-access", txStart); err != nil {
 		return err
 	}
 	return nil

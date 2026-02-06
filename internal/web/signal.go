@@ -381,7 +381,7 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 		Frontmatter: frontmatter,
 	})
 	if apiErr != nil {
-		return fmt.Errorf(apiErr.message)
+		return fmt.Errorf("%s", apiErr.message)
 	}
 	return nil
 }

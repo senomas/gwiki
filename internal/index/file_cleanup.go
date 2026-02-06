@@ -30,13 +30,13 @@ func (i *Index) EnqueueFileCleanup(ctx context.Context, ownerName string, paths 
 	if len(unique) == 0 {
 		return 0, nil
 	}
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "file-cleanup-enqueue")
 	if err != nil {
 		return 0, err
 	}
 	defer func() {
 		if tx != nil {
-			_ = tx.Rollback()
+			i.rollbackTx(tx, "file-cleanup-enqueue", txStart)
 		}
 	}()
 	query := `
@@ -50,7 +50,7 @@ func (i *Index) EnqueueFileCleanup(ctx context.Context, ownerName string, paths 
 		}
 		count++
 	}
-	if err := tx.Commit(); err != nil {
+	if err := i.commitTx(tx, "file-cleanup-enqueue", txStart); err != nil {
 		return 0, err
 	}
 	tx = nil

@@ -6,8 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 type CollapsedSection struct {
@@ -21,7 +20,7 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 	}
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
-		tx, err := i.db.BeginTx(ctx, nil)
+		tx, txStart, err := i.beginTx(ctx, "collapsed-sections")
 		if err != nil {
 			if isSQLiteBusy(err) {
 				lastErr = err
@@ -32,7 +31,7 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 		}
 
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM collapsed_sections WHERE note_id=?", noteID); err != nil {
-			_ = tx.Rollback()
+			i.rollbackTx(tx, "collapsed-sections", txStart)
 			if isSQLiteBusy(err) {
 				lastErr = err
 				time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
@@ -48,7 +47,7 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 				INSERT INTO collapsed_sections(note_id, line_no)
 				VALUES(?, ?)
 			`, noteID, section.LineNo); err != nil {
-				_ = tx.Rollback()
+				i.rollbackTx(tx, "collapsed-sections", txStart)
 				if isSQLiteBusy(err) {
 					lastErr = err
 					time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
@@ -57,8 +56,8 @@ func (i *Index) SetCollapsedSections(ctx context.Context, noteID string, section
 				return err
 			}
 		}
-		if err := tx.Commit(); err != nil {
-			_ = tx.Rollback()
+		if err := i.commitTx(tx, "collapsed-sections", txStart); err != nil {
+			i.rollbackTx(tx, "collapsed-sections", txStart)
 			if isSQLiteBusy(err) {
 				lastErr = err
 				time.Sleep(time.Duration(attempt+1) * 40 * time.Millisecond)
@@ -105,9 +104,9 @@ func (i *Index) CollapsedSections(ctx context.Context, noteID string) ([]Collaps
 }
 
 func isSQLiteBusy(err error) bool {
-	var se *sqlite.Error
+	var se sqlite3.Error
 	if errors.As(err, &se) {
-		if se.Code() == sqlite3.SQLITE_BUSY || se.Code() == sqlite3.SQLITE_LOCKED {
+		if se.Code == sqlite3.ErrBusy || se.Code == sqlite3.ErrLocked {
 			return true
 		}
 	}

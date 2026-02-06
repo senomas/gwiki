@@ -1,19 +1,21 @@
 ARG NODE_VERSION=20-alpine
-ARG GO_VERSION=1.25.5-alpine
-ARG ALPINE_VERSION=3.19
+ARG GO_VERSION=1.25.6-alpine
+ARG ALPINE_VERSION=3.22
+ARG TAILWIND_VERSION=3.4.17
 
 FROM node:${NODE_VERSION} AS assets
 
 WORKDIR /app
 ARG HTMX_VERSION=1.9.12
 RUN apk add --no-cache curl
+RUN npm install -g tailwindcss@${TAILWIND_VERSION}
 RUN mkdir -p /app/static/css /app/static/js
 RUN curl -fsSL -o /app/static/js/htmx.min.js https://unpkg.com/htmx.org@${HTMX_VERSION}/dist/htmx.min.js
 COPY assets/tailwind.css /app/assets/tailwind.css
 COPY tailwind.config.js /app/tailwind.config.js
 COPY templates /app/templates
 COPY internal /app/internal
-RUN BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwindcss \
+RUN tailwindcss \
   -c /app/tailwind.config.js \
   -i /app/assets/tailwind.css \
   -o /app/static/css/app.css
@@ -21,12 +23,13 @@ RUN BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --package tailwindcss@3.4.17 tailwi
 FROM golang:${GO_VERSION} AS build
 
 WORKDIR /src
+RUN apk add --no-cache gcc musl-dev
 COPY go.mod go.sum ./
 RUN go mod download
 ARG BUILD_TAG=dev
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_TAG}" -o /out/wiki ./cmd/wiki
-RUN CGO_ENABLED=0 go build -o /out/user ./cmd/user
+RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_TAG}" -o /out/wiki ./cmd/wiki
+RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -o /out/user ./cmd/user
 
 FROM alpine:${ALPINE_VERSION}
 

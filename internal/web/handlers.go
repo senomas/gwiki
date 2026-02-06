@@ -449,6 +449,7 @@ func (s *Server) requireWriteAccess(w http.ResponseWriter, r *http.Request, owne
 	}
 	canWrite, err := s.idx.CanWriteOwner(r.Context(), ownerName, userName)
 	if err != nil {
+		slog.Error("owner write access check failed", "owner", ownerName, "user", userName, "err", err)
 		if isHTMX(r) {
 			s.renderToastError(w, r, err.Error())
 		} else {
@@ -457,6 +458,7 @@ func (s *Server) requireWriteAccess(w http.ResponseWriter, r *http.Request, owne
 		return false
 	}
 	if !canWrite {
+		slog.Warn("owner write access forbidden", "owner", ownerName, "user", userName)
 		if isHTMX(r) {
 			s.renderToastError(w, r, "forbidden")
 		} else {
@@ -470,11 +472,13 @@ func (s *Server) requireWriteAccess(w http.ResponseWriter, r *http.Request, owne
 func (s *Server) requireWriteAccessForPath(w http.ResponseWriter, r *http.Request, notePath string) bool {
 	owner, _, err := s.ownerFromNotePath(notePath)
 	if err != nil {
+		slog.Warn("write access owner parse failed", "path", notePath, "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
 	_, relPath, err := fs.SplitOwnerNotePath(notePath)
 	if err != nil {
+		slog.Warn("write access path split failed", "path", notePath, "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
@@ -487,11 +491,13 @@ func (s *Server) requireWriteAccessForRelPath(w http.ResponseWriter, r *http.Req
 	}
 	userName := currentUserName(r.Context())
 	if userName == "" {
+		slog.Warn("write access missing user", "owner", ownerName, "path", relPath)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	canWrite, err := s.idx.CanWritePath(r.Context(), ownerName, relPath, userName)
 	if err != nil {
+		slog.Error("write access check failed", "owner", ownerName, "path", relPath, "user", userName, "err", err)
 		if isHTMX(r) {
 			s.renderToastError(w, r, err.Error())
 		} else {
@@ -500,6 +506,7 @@ func (s *Server) requireWriteAccessForRelPath(w http.ResponseWriter, r *http.Req
 		return false
 	}
 	if !canWrite {
+		slog.Warn("write access forbidden", "owner", ownerName, "path", relPath, "user", userName)
 		if isHTMX(r) {
 			s.renderToastError(w, r, "forbidden")
 		} else {
@@ -9949,6 +9956,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
+	slog.Debug("notes handler start", "path", r.URL.Path, "method", r.Method)
 	pathPart := strings.TrimPrefix(r.URL.Path, "/notes/")
 	pathPart = strings.TrimSuffix(pathPart, "/")
 	if pathPart == "" {
@@ -9977,9 +9985,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/edit")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleEditNote(w, r, resolved)
 		return
 	}
@@ -9987,9 +9997,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/save")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleSaveNote(w, r, resolved)
 		return
 	}
@@ -9997,9 +10009,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/upload")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleUploadAttachment(w, r, resolved)
 		return
 	}
@@ -10007,9 +10021,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/attachments/delete")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleDeleteAttachment(w, r, resolved)
 		return
 	}
@@ -10017,9 +10033,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/delete")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleDeleteNote(w, r, resolved)
 		return
 	}
@@ -10027,9 +10045,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/wikilink")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleUpdateWikiLink(w, r, resolved)
 		return
 	}
@@ -10037,9 +10057,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/collapsed")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleCollapsedSections(w, r, resolved)
 		return
 	}
@@ -10047,9 +10069,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/preview")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handlePreview(w, r, resolved)
 		return
 	}
@@ -10057,9 +10081,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/card")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleNoteCardFragment(w, r, resolved)
 		return
 	}
@@ -10067,9 +10093,11 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/detail")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleNoteDetailFragment(w, r, resolved)
 		return
 	}
@@ -10077,18 +10105,22 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		base := strings.TrimSuffix(pathPart, "/backlinks")
 		resolved, err := s.resolveNotePath(r.Context(), base)
 		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", base, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleNoteBacklinksFragment(w, r, resolved)
 		return
 	}
 
 	resolved, err := s.resolveNotePath(r.Context(), pathPart)
 	if err != nil {
+		slog.Warn("notes handler resolve failed", "path", pathPart, "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	slog.Debug("notes handler resolved", "path", pathPart, "resolved", resolved)
 	s.handleViewNote(w, r, resolved)
 }
 
@@ -10253,6 +10285,8 @@ func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, erro
 }
 
 func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody bool) (ViewData, int, error) {
+	start := time.Now()
+	slog.Debug("note view data start", "path", notePath, "render_body", renderBody)
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		return ViewData{}, http.StatusBadRequest, err
@@ -10292,6 +10326,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 			return ViewData{}, http.StatusInternalServerError, err
 		}
 	}
+	slog.Debug("note view data file ready", "path", notePath, "duration_ms", time.Since(start).Milliseconds())
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
@@ -10302,6 +10337,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	htmlStr := ""
 	if renderBody {
+		renderStart := time.Now()
 		renderCtx := r.Context()
 		sections, err := s.idx.CollapsedSections(renderCtx, noteMeta.ID)
 		if err != nil {
@@ -10324,6 +10360,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 			rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks)
 		}
 		htmlStr = rendered
+		slog.Debug("note view data rendered", "path", notePath, "duration_ms", time.Since(renderStart).Milliseconds())
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -10342,10 +10379,12 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	if activeJournal {
 		urlTags = append(urlTags, journalTagName)
 	}
+	tagsStart := time.Now()
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal, "")
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
+	slog.Debug("note view data tags", "path", notePath, "count", len(tags), "duration_ms", time.Since(tagsStart).Milliseconds())
 	allowed := map[string]struct{}{}
 	todoCount := 0
 	dueCount := 0
@@ -10366,22 +10405,28 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		_ = dueCount
 	}
 	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
+	journalStart := time.Now()
 	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot, "")
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
+	slog.Debug("note view data journal count", "path", notePath, "count", journalCount, "duration_ms", time.Since(journalStart).Milliseconds())
 	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, baseURL, noteTags)
+	updatesStart := time.Now()
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
+	slog.Debug("note view data update days", "path", notePath, "count", len(updateDays), "duration_ms", time.Since(updatesStart).Milliseconds())
 	tagQuery := buildTagsQuery(urlTags)
 	filterQuery := queryWithout(baseURL, "d")
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
+	backlinksStart := time.Now()
 	backlinks, err := s.idx.Backlinks(r.Context(), notePath, meta.Title, noteMeta.ID)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
+	slog.Debug("note view data backlinks", "path", notePath, "count", len(backlinks), "duration_ms", time.Since(backlinksStart).Milliseconds())
 	backlinkViews := make([]BacklinkView, 0, len(backlinks))
 	for _, link := range backlinks {
 		lineHTML, err := s.renderLineMarkdown(r.Context(), link.Line)
@@ -10396,15 +10441,19 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		})
 	}
 
+	foldersStart := time.Now()
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), "")
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
+	slog.Debug("note view data folders", "path", notePath, "count", len(folders), "duration_ms", time.Since(foldersStart).Milliseconds())
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
+	journalSidebarStart := time.Now()
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now(), "")
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
+	slog.Debug("note view data journal sidebar", "path", notePath, "duration_ms", time.Since(journalSidebarStart).Milliseconds())
 	data := ViewData{
 		Title:            meta.Title,
 		ContentTemplate:  "view",
@@ -10435,10 +10484,13 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		JournalSidebar:   journalSidebar,
 	}
 	applyCalendarLinks(&data, baseURL)
+	slog.Debug("note view data done", "path", notePath, "duration_ms", time.Since(start).Milliseconds())
 	return data, http.StatusOK, nil
 }
 
 func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideCompleted bool) (ViewData, int, error) {
+	start := time.Now()
+	slog.Debug("note card data start", "path", notePath, "hide_completed", hideCompleted)
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		return ViewData{}, http.StatusBadRequest, err
@@ -10479,6 +10531,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 			return ViewData{}, http.StatusInternalServerError, err
 		}
 	}
+	slog.Debug("note card data file ready", "path", notePath, "duration_ms", time.Since(start).Milliseconds())
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
@@ -10548,6 +10601,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		CompletedTaskCount:   completedCount,
 		ShowCompletedSummary: hideCompleted,
 	}
+	slog.Debug("note card data done", "path", notePath, "duration_ms", time.Since(start).Milliseconds())
 	return data, http.StatusOK, nil
 }
 
@@ -10556,20 +10610,26 @@ func (s *Server) resolveNotePath(ctx context.Context, noteRef string) (string, e
 	if noteRef == "" {
 		return noteRef, nil
 	}
+	slog.Debug("resolve note path start", "ref", noteRef)
 	exists, err := s.idx.NoteExists(ctx, noteRef)
 	if err != nil {
+		slog.Warn("resolve note path exists check failed", "ref", noteRef, "err", err)
 		return "", err
 	}
 	if exists {
+		slog.Debug("resolve note path exists", "ref", noteRef)
 		return noteRef, nil
 	}
 	path, err := s.idx.PathByUID(ctx, noteRef)
 	if errors.Is(err, sql.ErrNoRows) {
+		slog.Debug("resolve note path no uid match", "ref", noteRef)
 		return noteRef, nil
 	}
 	if err != nil {
+		slog.Warn("resolve note path uid lookup failed", "ref", noteRef, "err", err)
 		return "", err
 	}
+	slog.Debug("resolve note path uid match", "ref", noteRef, "path", path)
 	return path, nil
 }
 
@@ -10578,25 +10638,30 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	slog.Debug("edit note start", "path", notePath)
 	if !s.requireWriteAccessForPath(w, r, notePath) {
 		return
 	}
 	ownerName, _, err := s.ownerFromNotePath(notePath)
 	if err != nil {
+		slog.Warn("edit note owner parse failed", "path", notePath, "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
+		slog.Warn("edit note path resolve failed", "path", notePath, "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			slog.Warn("edit note missing file", "path", notePath)
 			http.NotFound(w, r)
 			return
 		}
+		slog.Error("edit note read failed", "path", notePath, "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -10607,23 +10672,28 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 		updated, err := index.EnsureFrontmatterWithTitleAndUser(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 		if err != nil {
+			slog.Error("edit note frontmatter ensure failed", "path", notePath, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		unlock := s.locker.Lock(notePath)
 		if err := fs.WriteFileAtomic(fullPath, []byte(updated), 0o644); err != nil {
 			unlock()
+			slog.Error("edit note frontmatter write failed", "path", notePath, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		unlock()
 		content = []byte(updated)
 		if info, err := os.Stat(fullPath); err == nil {
-			_ = s.idx.IndexNote(r.Context(), notePath, content, info.ModTime(), info.Size())
+			if err := s.idx.IndexNote(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
+				slog.Warn("edit note index after frontmatter failed", "path", notePath, "err", err)
+			}
 		}
 	}
 	if info, err := os.Stat(fullPath); err == nil {
 		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
+			slog.Error("edit note index refresh failed", "path", notePath, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -10646,6 +10716,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 	ownerOptions, defaultOwner, err := s.ownerOptionsForUser(r.Context())
 	if err != nil {
+		slog.Error("edit note owner options failed", "path", notePath, "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

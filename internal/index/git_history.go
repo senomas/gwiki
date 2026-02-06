@@ -107,11 +107,11 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 		currentTime int64
 		maxTime     = lastSync
 	)
-	tx, err := i.db.BeginTx(ctx, nil)
+	tx, txStart, err := i.beginTx(ctx, "git-history")
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer i.rollbackTx(tx, "git-history", txStart)
 	inserted := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -176,7 +176,7 @@ func (i *Index) SyncGitHistory(ctx context.Context, ownerName, repoDir string) (
 			return 0, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := i.commitTx(tx, "git-history", txStart); err != nil {
 		return 0, err
 	}
 	slog.Debug("git history sync done", "owner", ownerName, "inserted", inserted, "last_sync", maxTime)
