@@ -8637,8 +8637,38 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if strings.Contains(currentURL, "/todo") {
-		noteTags, activeDue, dueDate, activeFolder, activeRoot, activeJournal := todoFiltersFromURL(currentURL)
-		tasks, err := s.idx.OpenTasks(renderCtx, noteTags, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
+		activeTags := []string{}
+		activeFolder, activeRoot := "", false
+		activeJournal := false
+		activeDue := false
+		dueDate := ""
+		noteTags := []string{}
+		mentionTagsActive := []string{}
+		if parsed, err := url.Parse(currentURL); err == nil {
+			activeTags = parseTagsParam(parsed.Query().Get("t"))
+			activeFolder, activeRoot = parseFolderParam(parsed.Query().Get("f"))
+			_, activeDue, activeJournal, noteTags = splitSpecialTags(activeTags)
+			if activeDue {
+				dueDate = time.Now().Format("2006-01-02")
+			}
+			mentionTagsActive, noteTags = splitMentionTags(noteTags)
+		}
+		currentUser := currentUserName(r.Context())
+		mentionTagsFilter := append([]string{}, mentionTagsActive...)
+		if currentUser != "" {
+			currentMention := "@" + currentUser
+			found := false
+			for _, tag := range mentionTagsFilter {
+				if tag == currentMention {
+					found = true
+					break
+				}
+			}
+			if !found {
+				mentionTagsFilter = append(mentionTagsFilter, currentMention)
+			}
+		}
+		tasks, err := s.idx.OpenTasksWithMentions(renderCtx, noteTags, mentionTagsFilter, currentUser, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
 		if err == nil {
 			tasksByNote := make(map[string][]index.TaskItem)
 			for _, task := range tasks {
@@ -8653,6 +8683,9 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 				snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
 				renderSource = snippet
 				tasksForNote = checkboxTasks
+			} else {
+				renderSource = ""
+				tasksForNote = nil
 			}
 		}
 	} else if isIndex {
