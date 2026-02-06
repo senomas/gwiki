@@ -10,3 +10,4 @@ static/css/app.css
 static/js/htmx.min.js
 static/fonts/ttf/
 truenas.sh
+*.log

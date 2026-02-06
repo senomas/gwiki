@@ -142,6 +142,15 @@ func parseLogLevel(raw string) slog.Leveler {
 }
 
 func selectLogWriter() (io.Writer, io.Closer) {
+	if strings.TrimSpace(os.Getenv("DEBUG")) != "" {
+		file, err := os.Create("dev.log")
+		if err != nil {
+			slog.Error("open log file", "path", "dev.log", "err", err)
+			return os.Stdout, nil
+		}
+		_, _ = fmt.Fprintf(file, "=== gwiki dev log start %s ===\n", time.Now().Format(time.RFC3339))
+		return io.MultiWriter(os.Stdout, file), file
+	}
 	path := strings.TrimSpace(os.Getenv("LOG_FILE"))
 	if path == "" {
 		return os.Stdout, nil
