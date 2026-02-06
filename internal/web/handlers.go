@@ -1376,6 +1376,22 @@ func splitSpecialTags(tags []string) (bool, bool, bool, []string) {
 	return activeTodo, activeDue, activeJournal, out
 }
 
+func splitMentionTags(tags []string) ([]string, []string) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	mentions := make([]string, 0, len(tags))
+	rest := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "@") {
+			mentions = append(mentions, tag)
+			continue
+		}
+		rest = append(rest, tag)
+	}
+	return mentions, rest
+}
+
 const taskIDPrefix = "task-"
 
 func taskCheckboxID(fileID, lineNo int, hash string) string {
@@ -1921,7 +1937,7 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, ownerFilter)
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, ownerFilter)
 		if err != nil {
 			return err
 		}
@@ -2042,11 +2058,12 @@ func buildUserLinks(users []string, counts map[string]int) []UserLink {
 	return out
 }
 
-func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool, ownerName string) (int, int, error) {
+func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, mentionTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool, ownerName string) (int, int, error) {
 	_ = activeTodo
 	_ = activeDue
 	todoCount, err := s.idx.CountTasks(r.Context(), index.TaskCountFilter{
 		Tags:        noteTags,
+		MentionTags: mentionTags,
 		Date:        activeDate,
 		Folder:      folder,
 		Root:        rootOnly,
@@ -2058,6 +2075,7 @@ func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, active
 	}
 	dueCount, err := s.idx.CountTasks(r.Context(), index.TaskCountFilter{
 		Tags:        noteTags,
+		MentionTags: mentionTags,
 		Date:        activeDate,
 		Folder:      folder,
 		Root:        rootOnly,
@@ -5461,7 +5479,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, ownerName)
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, ownerName)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -5624,7 +5642,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -6049,7 +6067,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -7099,7 +7117,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -7198,12 +7216,29 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	if activeDue {
 		dueDate = time.Now().Format("2006-01-02")
 	}
-	tasks, err := s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
+	mentionTagsActive, noteTags := splitMentionTags(noteTags)
+	currentUser := currentUserName(r.Context())
+	mentionTagsFilter := append([]string{}, mentionTagsActive...)
+	if currentUser != "" {
+		currentMention := "@" + currentUser
+		found := false
+		for _, tag := range mentionTagsFilter {
+			if tag == currentMention {
+				found = true
+				break
+			}
+		}
+		if !found {
+			mentionTagsFilter = append(mentionTagsFilter, currentMention)
+		}
+	}
+	tasks, err := s.idx.OpenTasksWithMentions(r.Context(), noteTags, mentionTagsFilter, currentUser, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	urlTags := append([]string{}, noteTags...)
+	urlTags = append(urlTags, mentionTagsActive...)
 	if activeJournal {
 		urlTags = append(urlTags, journalTagName)
 	}
@@ -7213,7 +7248,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := map[string]struct{}{}
-	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, mentionTagsFilter, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, currentUser)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -10315,7 +10350,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	todoCount := 0
 	dueCount := 0
 	if isAuth {
-		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
 			return ViewData{}, http.StatusInternalServerError, err
 		}

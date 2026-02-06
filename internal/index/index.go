@@ -83,6 +83,7 @@ type UpdateDaySummary struct {
 
 type TaskCountFilter struct {
 	Tags        []string
+	MentionTags []string
 	Date        string
 	Folder      string
 	Root        bool
@@ -1865,6 +1866,197 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 		}
 		args = append(args, exclusiveArgs...)
 		args = append(args, accessArgs...)
+		args = append(args, folderArgs...)
+		if dueOnly {
+			args = append(args, dueDate)
+		}
+		args = append(args, len(tags), limit)
+		rows, err = i.queryContext(ctx, query, args...)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []TaskItem
+	for rows.Next() {
+		var item TaskItem
+		var due sql.NullString
+		var updatedUnix int64
+		var fileUpdatedUnix int64
+		var isJournal int
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &item.Title, &item.LineNo, &item.Text, &item.Hash, &due, &updatedUnix, &item.FileID, &fileUpdatedUnix, &isJournal, &ownerName); err != nil {
+			return nil, err
+		}
+		item.Path = joinOwnerPath(ownerName, relPath)
+		if due.Valid {
+			item.DueDate = due.String
+		} else if isJournal == 1 {
+			if _, rel, err := splitOwnerPath(item.Path); err == nil {
+				if journalDate, ok := journalDateForPath(rel); ok {
+					item.DueDate = journalDate
+				}
+			}
+		}
+		if item.DueDate == "" {
+			item.DueDate = time.Unix(fileUpdatedUnix, 0).In(time.Local).Format("2006-01-02")
+		}
+		item.UpdatedAt = time.Unix(updatedUnix, 0).Local()
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (i *Index) OpenTasksWithMentions(ctx context.Context, tags []string, mentionTags []string, ownerName string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool, journalOnly bool) ([]TaskItem, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if dueOnly && dueDate == "" {
+		return nil, fmt.Errorf("due date required for due-only tasks")
+	}
+
+	ownerID := 0
+	if strings.TrimSpace(ownerName) != "" {
+		id, err := i.userIDByName(ctx, ownerName)
+		if err != nil {
+			return nil, err
+		}
+		ownerID = id
+	}
+	ownerClause := ""
+	ownerArgs := []interface{}{}
+	if ownerID > 0 {
+		ownerClause = "files.user_id = ?"
+		ownerArgs = append(ownerArgs, ownerID)
+	}
+
+	mentionClause := ""
+	mentionArgs := []interface{}{}
+	if len(mentionTags) > 0 {
+		placeholders := strings.Repeat("?,", len(mentionTags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		mentionClause = `
+			EXISTS (
+				SELECT 1
+				FROM task_tags mt
+				JOIN tags mtags ON mtags.id = mt.tag_id
+				WHERE mt.task_id = tasks.id AND mtags.name IN (` + placeholders + `)
+			)`
+		for _, tag := range mentionTags {
+			mentionArgs = append(mentionArgs, tag)
+		}
+	}
+
+	ownerMentionClause := ""
+	switch {
+	case ownerClause != "" && mentionClause != "":
+		ownerMentionClause = "(" + ownerClause + " OR " + mentionClause + ")"
+	case ownerClause != "":
+		ownerMentionClause = ownerClause
+	case mentionClause != "":
+		ownerMentionClause = mentionClause
+	}
+
+	folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
+	accessClauses := []string{}
+	accessArgs := []interface{}{}
+	applyAccessFilter(ctx, &accessClauses, &accessArgs, "files")
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if len(tags) == 0 {
+		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(nil, "files")
+		query := fmt.Sprintf(`
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
+			FROM tasks
+			JOIN files ON files.id = tasks.file_id
+			%s
+			WHERE tasks.checked = 0
+		`, ownerNameExpr(), ownerJoins("files"))
+		args := []interface{}{}
+		query += " AND " + exclusiveClause
+		args = append(args, exclusiveArgs...)
+		if len(accessClauses) > 0 {
+			query += " AND " + strings.Join(accessClauses, " AND ")
+			args = append(args, accessArgs...)
+		}
+		if ownerMentionClause != "" {
+			query += " AND " + ownerMentionClause
+			args = append(args, ownerArgs...)
+			args = append(args, mentionArgs...)
+		}
+		if journalOnly {
+			query += " AND files.is_journal = 1"
+		}
+		if folderClause != "" {
+			query += " AND " + folderClause
+			args = append(args, folderArgs...)
+		}
+		if dueOnly {
+			query += " AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?"
+			args = append(args, dueDate)
+		}
+		query += `
+			ORDER BY ` + func() string {
+			if dueOnly {
+				return "tasks.due_date ASC, tasks.updated_at DESC"
+			}
+			return "(tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC"
+		}() + `
+			LIMIT ?`
+		args = append(args, limit)
+		rows, err = i.queryContext(ctx, query, args...)
+	} else {
+		placeholders := strings.Repeat("?,", len(tags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		base := fmt.Sprintf(`
+			SELECT files.path, files.title, tasks.line_no, tasks.text, tasks.hash, tasks.due_date, tasks.updated_at, files.id, files.updated_at, files.is_journal, %s
+			FROM tasks
+			JOIN files ON files.id = tasks.file_id
+			JOIN task_tags ON tasks.id = task_tags.task_id
+			JOIN tags ON tags.id = task_tags.tag_id
+			%s
+			WHERE tasks.checked = 0 AND tags.name IN (`+placeholders+`)
+		`, ownerNameExpr(), ownerJoins("files"))
+		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
+		base += " AND " + exclusiveClause
+		if len(accessClauses) > 0 {
+			base += " AND " + strings.Join(accessClauses, " AND ")
+		}
+		if ownerMentionClause != "" {
+			base += " AND " + ownerMentionClause
+		}
+		if journalOnly {
+			base += " AND files.is_journal = 1"
+		}
+		if folderClause != "" {
+			base += " AND " + folderClause
+		}
+		if dueOnly {
+			base += ` AND tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?`
+		}
+		query := base + `
+			GROUP BY tasks.id
+			HAVING COUNT(DISTINCT tags.name) = ?
+			ORDER BY ` + func() string {
+			if dueOnly {
+				return "tasks.due_date ASC, tasks.updated_at DESC"
+			}
+			return "(tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC"
+		}() + `
+			LIMIT ?`
+		args := make([]interface{}, 0, len(tags)+len(exclusiveArgs)+len(accessArgs)+len(ownerArgs)+len(mentionArgs)+len(folderArgs)+3)
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+		args = append(args, exclusiveArgs...)
+		args = append(args, accessArgs...)
+		args = append(args, ownerArgs...)
+		args = append(args, mentionArgs...)
 		args = append(args, folderArgs...)
 		if dueOnly {
 			args = append(args, dueDate)
@@ -4100,14 +4292,44 @@ func (i *Index) CountTasks(ctx context.Context, filter TaskCountFilter) (int, er
 		clauses = append(clauses, folderClause)
 		args = append(args, folderArgs...)
 	}
+	ownerClause := ""
+	ownerArgs := []interface{}{}
 	if strings.TrimSpace(filter.OwnerName) != "" {
-		ownerClause, ownerArgs, err := i.ownerClauseForName(ctx, filter.OwnerName, "files")
+		clause, clauseArgs, err := i.ownerClauseForName(ctx, filter.OwnerName, "files")
 		if err != nil {
 			return 0, err
 		}
-		if ownerClause != "" {
+		ownerClause = clause
+		ownerArgs = append(ownerArgs, clauseArgs...)
+	}
+	mentionClause := ""
+	mentionArgs := []interface{}{}
+	if len(filter.MentionTags) > 0 {
+		placeholders := strings.Repeat("?,", len(filter.MentionTags))
+		placeholders = strings.TrimRight(placeholders, ",")
+		mentionClause = `
+			EXISTS (
+				SELECT 1
+				FROM task_tags mt
+				JOIN tags mtags ON mtags.id = mt.tag_id
+				WHERE mt.task_id = tasks.id AND mtags.name IN (` + placeholders + `)
+			)`
+		for _, tag := range filter.MentionTags {
+			mentionArgs = append(mentionArgs, tag)
+		}
+	}
+	if ownerClause != "" || mentionClause != "" {
+		switch {
+		case ownerClause != "" && mentionClause != "":
+			clauses = append(clauses, "("+ownerClause+" OR "+mentionClause+")")
+			args = append(args, ownerArgs...)
+			args = append(args, mentionArgs...)
+		case ownerClause != "":
 			clauses = append(clauses, ownerClause)
 			args = append(args, ownerArgs...)
+		case mentionClause != "":
+			clauses = append(clauses, mentionClause)
+			args = append(args, mentionArgs...)
 		}
 	}
 
