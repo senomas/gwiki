@@ -11816,7 +11816,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		slog.Debug("save note redirect owner", "note_path", notePath, "target_owner", targetOwner, "target_path", targetPath)
 	}
 	targetURL := "/notes/" + targetPath
-	if returnURL != "" && targetOwner == ownerName {
+	if returnURL != "" && targetOwner == ownerName && !saveResult.Moved && targetPath == notePath {
 		targetURL = returnURL
 	}
 	if isHTMX(r) {
