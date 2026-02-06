@@ -551,6 +551,27 @@
       width: 100%;
       height: auto;
     }
+    @media (max-width: 640px) {
+      .note-body .youtube-card,
+      .note-body .tiktok-card,
+      .note-body .instagram-card,
+      .note-body .video-card {
+        flex-direction: column;
+      }
+      .note-body .youtube-card__thumb,
+      .note-body .tiktok-card__thumb,
+      .note-body .instagram-card__thumb,
+      .note-body .video-card__thumb {
+        width: 100%;
+        order: 2;
+      }
+      .note-body .youtube-card__meta,
+      .note-body .tiktok-card__meta,
+      .note-body .instagram-card__meta,
+      .note-body .video-card__meta {
+        order: 1;
+      }
+    }
     .note-body .video-card__meta {
       display: flex;
       flex-direction: column;
