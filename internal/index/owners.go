@@ -134,6 +134,11 @@ func (i *Index) CanWritePath(ctx context.Context, ownerName, relPath, userName s
 	if ownerName == userName {
 		return true, nil
 	}
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
 	userID, err := i.userIDByName(ctx, userName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -148,7 +153,7 @@ func (i *Index) CanWritePath(ctx context.Context, ownerName, relPath, userName s
 	if err != nil {
 		return false, err
 	}
-	boundary, ok, err := i.accessBoundaryPath(ctx, ownerID, relPath)
+	boundary, ok, err := i.accessBoundaryPathTx(ctx, tx, ownerID, relPath)
 	if err != nil {
 		return false, err
 	}
@@ -156,7 +161,7 @@ func (i *Index) CanWritePath(ctx context.Context, ownerName, relPath, userName s
 		return false, nil
 	}
 	var access string
-	err = i.queryRowContext(ctx, `
+	err = i.queryRowContextTx(ctx, tx, `
 		SELECT access
 		FROM path_access
 		WHERE owner_user_id=? AND path=? AND grantee_user_id=?
