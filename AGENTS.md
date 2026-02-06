@@ -33,13 +33,16 @@ Non-goals (v1)
 5. **Testing discipline**
    - After completing any planned work, run the full test suite (e.g., `go test ./...`) before reporting.
    - Always run tests before any commit.
-6. **Workflow**
+6. **Logging discipline**
+   - Add `WARN`/`ERROR` logs for unexpected results (e.g., failure to open files, database errors, external command failures).
+   - Include the relevant path, SQL query, or operation context in the log message.
+7. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
    - After finishing work and committing, check `git status -sb` to confirm a clean tree.
    - Always propose a commit message when the user asks to commit; derive it from the current git diff.
-7. **Response structure**
+8. **Response structure**
    - Always provide a deep-dive analysis, an implementation plan, and test cases for the requested change.
-8. **Dev server rebuild trigger**
+9. **Dev server rebuild trigger**
    - `make dev` runs the server under `reflex` and restarts when `tmp/main` changes.
    - After finishing code updates, always run `make dev-build` to rebuild `tmp/main` and trigger a restart before manual testing (and before committing).
 
