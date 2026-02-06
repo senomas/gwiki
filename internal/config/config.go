@@ -12,6 +12,7 @@ type Config struct {
 	RepoPath             string
 	DataPath             string
 	ListenAddr           string
+	BaseURL              string
 	AuthUser             string
 	AuthPass             string
 	AuthFile             string
@@ -37,6 +38,7 @@ func Load() Config {
 		RepoPath:     os.Getenv("WIKI_REPO_PATH"),
 		DataPath:     os.Getenv("WIKI_DATA_PATH"),
 		ListenAddr:   envOr("WIKI_LISTEN_ADDR", "127.0.0.1:8080"),
+		BaseURL:      envOr("WIKI_BASE_URL", "/"),
 		AuthUser:     os.Getenv("WIKI_AUTH_USER"),
 		AuthPass:     os.Getenv("WIKI_AUTH_PASS"),
 		AuthFile:     os.Getenv("WIKI_AUTH_FILE"),
@@ -45,6 +47,7 @@ func Load() Config {
 		SignalOwner:  strings.TrimSpace(os.Getenv("WIKI_SIGNAL_OWNER")),
 		SignalGroup:  envOr("WIKI_SIGNAL_GROUP", "gwiki"),
 	}
+	cfg.BaseURL = normalizeBaseURL(cfg.BaseURL)
 	if cfg.DataPath == "" && cfg.RepoPath != "" {
 		cfg.DataPath = filepath.Join(cfg.RepoPath, ".wiki")
 	}
@@ -63,6 +66,23 @@ func Load() Config {
 	cfg.DBBusyTimeout = time.Duration(parseIntOr("WIKI_DB_BUSY_TIMEOUT_MS", 10000)) * time.Millisecond
 	cfg.PasswordExpiryMonths = parseExpiryMonthsOr("WIKI_PASSWORD_EXPIRY", 6)
 	return cfg
+}
+
+func normalizeBaseURL(value string) string {
+	base := strings.TrimSpace(value)
+	if base == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	if len(base) > 1 {
+		base = strings.TrimSuffix(base, "/")
+	}
+	if base == "" {
+		return "/"
+	}
+	return base
 }
 
 func envOr(key, fallback string) string {

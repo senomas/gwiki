@@ -30,7 +30,7 @@ func TestFilterFutureJournalTasks(t *testing.T) {
 
 func TestApplyRenderReplacementsDue(t *testing.T) {
 	input := `<p>Pay rent due:2026-02-05 and call @due(2026-02-07).</p>`
-	out := applyRenderReplacements(input)
+	out := applyRenderReplacements(input, "/")
 	if !strings.Contains(out, "Due 5 Feb 2026") {
 		t.Fatalf("expected formatted due date, got %q", out)
 	}

@@ -2,7 +2,7 @@
 <section class="space-y-6">
   <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
     <div
-      hx-get="/notes/{{.NotePath}}/detail"
+      hx-get="{{.BasePath}}/notes/{{.NotePath}}/detail"
       hx-trigger="revealed, task-toggled from:body"
       hx-swap="outerHTML"
     >
@@ -10,7 +10,7 @@
     </div>
   </article>
   <div
-    hx-get="/notes/{{.NotePath}}/backlinks"
+    hx-get="{{.BasePath}}/notes/{{.NotePath}}/backlinks"
     hx-trigger="revealed, task-toggled from:body"
     hx-swap="outerHTML"
   >

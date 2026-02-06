@@ -27,14 +27,14 @@
               to <span class="font-semibold text-slate-800">{{.RenameToPath}}</span>?
             </div>
             <div class="mt-4 flex flex-wrap justify-end gap-2">
-              <form action="/notes/{{.NotePath}}/save" method="post" data-edit-save hx-post="/notes/{{.NotePath}}/save" hx-swap="none">
+              <form action="{{$.BasePath}}/notes/{{.NotePath}}/save" method="post" data-edit-save hx-post="{{$.BasePath}}/notes/{{.NotePath}}/save" hx-swap="none">
                 <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
                 <textarea class="hidden" name="content">{{.RawContent}}</textarea>
                 <input type="hidden" name="return_url" value="{{.ReturnURL}}">
                 <input type="hidden" name="rename_decision" value="cancel">
                 <button class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="submit">Keep name</button>
               </form>
-              <form action="/notes/{{.NotePath}}/save" method="post" data-edit-save hx-post="/notes/{{.NotePath}}/save" hx-swap="none">
+              <form action="{{$.BasePath}}/notes/{{.NotePath}}/save" method="post" data-edit-save hx-post="{{$.BasePath}}/notes/{{.NotePath}}/save" hx-swap="none">
                 <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
                 <textarea class="hidden" name="content">{{.RawContent}}</textarea>
                 <input type="hidden" name="return_url" value="{{.ReturnURL}}">
@@ -55,7 +55,7 @@
             <div class="mt-2 text-sm text-slate-400">
               File <span class="font-semibold text-slate-200">{{.DuplicateFromPath}}</span> already exists. Rename or append?
             </div>
-            <form class="mt-4 space-y-3" action="/notes/new" method="post" data-edit-save hx-post="/notes/new" hx-swap="none">
+            <form class="mt-4 space-y-3" action="{{$.BasePath}}/notes/new" method="post" data-edit-save hx-post="{{$.BasePath}}/notes/new" hx-swap="none">
               <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
               <textarea class="hidden" name="content">{{.RawContent}}</textarea>
               <input type="hidden" name="return_url" value="{{.ReturnURL}}">
@@ -81,7 +81,7 @@
         </div>
       </div>
       {{end}}
-      <form id="note-edit-form" class="mt-6 space-y-4" action="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" method="post" data-edit-save hx-post="{{if .SaveAction}}{{.SaveAction}}{{else}}/notes/{{.NotePath}}/save{{end}}" hx-swap="none">
+      <form id="note-edit-form" class="mt-6 space-y-4" action="{{if .SaveAction}}{{.BasePath}}{{.SaveAction}}{{else}}{{$.BasePath}}/notes/{{.NotePath}}/save{{end}}" method="post" data-edit-save hx-post="{{if .SaveAction}}{{.BasePath}}{{.SaveAction}}{{else}}{{$.BasePath}}/notes/{{.NotePath}}/save{{end}}" hx-swap="none">
         <textarea class="hidden" name="frontmatter">{{.FrontmatterBlock}}</textarea>
         <input type="hidden" name="return_url" value="{{.ReturnURL}}">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
@@ -141,7 +141,7 @@
           </button>
         </div>
   </form>
-  <form id="note-upload-form" class="mt-4 space-y-3" action="{{if .NotePath}}/notes/{{.NotePath}}/upload{{else}}/notes/new/upload{{end}}" method="post" enctype="multipart/form-data" hx-post="{{if .NotePath}}/notes/{{.NotePath}}/upload{{else}}/notes/new/upload{{end}}" hx-target="#attachments-list" hx-swap="outerHTML" hx-encoding="multipart/form-data">
+  <form id="note-upload-form" class="mt-4 space-y-3" action="{{if .NotePath}}{{$.BasePath}}/notes/{{.NotePath}}/upload{{else}}{{$.BasePath}}/notes/new/upload{{end}}" method="post" enctype="multipart/form-data" hx-post="{{if .NotePath}}{{$.BasePath}}/notes/{{.NotePath}}/upload{{else}}{{$.BasePath}}/notes/new/upload{{end}}" hx-target="#attachments-list" hx-swap="outerHTML" hx-encoding="multipart/form-data">
         {{if .UploadToken}}<input type="hidden" name="upload_token" value="{{.UploadToken}}">{{end}}
         {{if .OwnerOptions}}<input data-owner-input type="hidden" name="owner" value="{{.SelectedOwner}}">{{end}}
         <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Attachments</label>
@@ -739,7 +739,7 @@
         return;
       }
       filterDefaultActions(value);
-      htmx.ajax("GET", "/quick/edit-actions?q=" + encodeURIComponent(value), "#note-edit-actions-dynamic");
+      htmx.ajax("GET", window.wikiWithBase("/quick/edit-actions?q=" + encodeURIComponent(value)), "#note-edit-actions-dynamic");
     });
 
     document.body.addEventListener("htmx:afterSwap", function (event) {
@@ -1080,7 +1080,7 @@
       suggest.dataset.tagStart = String(current.start);
       suggest.dataset.tagEnd = String(current.end);
       positionSuggest();
-      htmx.ajax("GET", "/tags/suggest?q=" + encodeURIComponent(current.term), "#tag-suggest");
+      htmx.ajax("GET", window.wikiWithBase("/tags/suggest?q=" + encodeURIComponent(current.term)), "#tag-suggest");
     }
     textarea.addEventListener("input", updateSuggest);
     textarea.addEventListener("click", updateSuggest);
@@ -1161,7 +1161,7 @@
           {{if $.AttachmentBase}}
           <button class="attachment-preview rounded-md border border-slate-600/70 bg-slate-900/40 px-2 py-1 text-xs font-semibold text-slate-100 transition hover:border-slate-400 hover:bg-slate-900/70" type="button" data-attachment-path="{{$.AttachmentBase}}/{{.}}" data-attachment-name="{{.}}">View</button>
           {{end}}
-          <form action="{{if $.NotePath}}/notes/{{$.NotePath}}/attachments/delete{{else}}/notes/new/attachments/delete{{end}}" method="post">
+          <form action="{{if $.NotePath}}{{$.BasePath}}/notes/{{$.NotePath}}/attachments/delete{{else}}{{$.BasePath}}/notes/new/attachments/delete{{end}}" method="post">
             <input type="hidden" name="file" value="{{.}}">
             {{if $.UploadToken}}<input type="hidden" name="upload_token" value="{{$.UploadToken}}">{{end}}
             {{if $.OwnerOptions}}<input data-owner-input type="hidden" name="owner" value="{{$.SelectedOwner}}">{{end}}

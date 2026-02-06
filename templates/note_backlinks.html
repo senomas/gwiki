@@ -6,7 +6,7 @@
         {{range .Backlinks}}
           <div class="rounded-xl border border-slate-800/70 bg-[#111418]/70 p-3">
             <div class="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
-              <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.FromPath}}">{{.FromTitle}}</a>
+              <a class="text-sky-300 hover:text-sky-200" href="{{$.BasePath}}/notes/{{.FromPath}}">{{.FromTitle}}</a>
               <span>Line {{.LineNo}}</span>
             </div>
             <div class="note-body text-sm leading-relaxed text-slate-200">{{.LineHTML}}</div>

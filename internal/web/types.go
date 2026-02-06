@@ -14,6 +14,7 @@ type ViewData struct {
 	IsAuthenticated      bool
 	IsAdmin              bool
 	CurrentUser          User
+	BasePath             string
 	NotePath             string
 	NoteTitle            string
 	NoteFileName         string

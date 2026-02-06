@@ -80,7 +80,7 @@
     <ul class="mt-3 list-disc space-y-1 pl-4 text-xs text-slate-300">
       {{range .Users}}
         <li>
-          <a class="transition hover:text-slate-100" href="/{{.Name}}">{{.Name}} {{if gt .Count 0}}({{.Count}}){{end}}</a>
+          <a class="transition hover:text-slate-100" href="{{$.BasePath}}/{{.Name}}">{{.Name}} {{if gt .Count 0}}({{.Count}}){{end}}</a>
         </li>
       {{end}}
     </ul>
@@ -92,7 +92,7 @@
 {{define "sidebar_brand_button"}}
   <div class="flex w-full items-center gap-3 text-left">
     <button type="button" data-quick-launcher="true" class="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216]" aria-label="Quick launcher">
-      <img class="h-9 w-9 object-contain" src="/static/scroll.png" alt="Gwiki">
+      <img class="h-9 w-9 object-contain" src="{{$.BasePath}}/static/scroll.png" alt="Gwiki">
     </button>
     <button type="button" class="js-sidebar-toggle text-left lg:pointer-events-none" aria-label="Toggle sidebar">
       {{template "sidebar_brand_text" .}}
@@ -103,7 +103,7 @@
 {{define "sidebar_brand_display"}}
   <div class="flex w-full items-center gap-3 text-left">
     <button type="button" data-quick-launcher="true" class="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#0f1216]" aria-label="Quick launcher">
-      <img class="h-9 w-9 object-contain" src="/static/scroll.png" alt="Gwiki">
+      <img class="h-9 w-9 object-contain" src="{{$.BasePath}}/static/scroll.png" alt="Gwiki">
     </button>
     {{template "sidebar_brand_text" .}}
   </div>
@@ -121,17 +121,17 @@
     {{if and .AuthEnabled .IsAuthenticated}}
       <span class="text-xs text-slate-200">{{.CurrentUser.Name}}</span>
       <div class="flex items-center gap-2">
-        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/" aria-label="Home">
+        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="{{$.BasePath}}/" aria-label="Home">
           <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
             <path d="M10 3.4 3.7 8.6a.75.75 0 1 0 .96 1.15l.84-.7v6.04c0 .41.34.75.75.75h2.8a.75.75 0 0 0 .75-.75v-3.4h1.4v3.4c0 .41.34.75.75.75h2.8c.41 0 .75-.34.75-.75V9.2l.84.7a.75.75 0 0 0 .96-1.15L10.48 3.4a.75.75 0 0 0-.96 0Z"/>
           </svg>
         </a>
-        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/settings" aria-label="Settings">
+        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="{{$.BasePath}}/settings" aria-label="Settings">
           <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
             <path d="M10 6.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2ZM3.9 10c0-.27.02-.54.05-.8l-1.9-1.11a.75.75 0 0 1-.28-1.02l1.8-3.12a.75.75 0 0 1 .98-.32l2.1.88c.43-.34.9-.62 1.4-.83l.32-2.25A.75.75 0 0 1 9.12 1h1.76a.75.75 0 0 1 .74.64l.32 2.25c.5.21.97.49 1.4.83l2.1-.88a.75.75 0 0 1 .98.32l1.8 3.12a.75.75 0 0 1-.28 1.02l-1.9 1.11c.03.26.05.53.05.8s-.02.54-.05.8l1.9 1.11a.75.75 0 0 1 .28 1.02l-1.8 3.12a.75.75 0 0 1-.98.32l-2.1-.88c-.43.34-.9.62-1.4.83l-.32 2.25a.75.75 0 0 1-.74.64H9.12a.75.75 0 0 1-.74-.64l-.32-2.25a6.4 6.4 0 0 1-1.4-.83l-2.1.88a.75.75 0 0 1-.98-.32l-1.8-3.12a.75.75 0 0 1 .28-1.02l1.9-1.11c-.03-.26-.05-.53-.05-.8Zm2.1 0a4 4 0 0 1 8 0 4 4 0 0 1-8 0Z"/>
           </svg>
         </a>
-        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="/logout" aria-label="Logout">
+        <a class="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-slate-800/80 bg-[#15181c] text-slate-300 transition hover:text-slate-100" href="{{$.BasePath}}/logout" aria-label="Logout">
           <svg viewBox="0 0 20 20" aria-hidden="true" class="h-4 w-4 fill-current">
             <path d="M8.5 3.5h-3a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3v-1.5h-3a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h3V3.5z"/>
             <path d="M12.94 6.44a.75.75 0 0 1 1.06 0l2.25 2.25c.29.3.29.77 0 1.06L14 12a.75.75 0 1 1-1.06-1.06l.97-.97H8.5a.75.75 0 0 1 0-1.5h5.41l-.97-.97a.75.75 0 0 1 0-1.06z"/>
@@ -139,7 +139,7 @@
         </a>
       </div>
     {{else if .AuthEnabled}}
-      <a class="text-xs text-slate-200 transition hover:text-slate-100" href="/login">Login</a>
+      <a class="text-xs text-slate-200 transition hover:text-slate-100" href="{{$.BasePath}}/login">Login</a>
     {{else}}
       <span class="text-slate-600">—</span>
     {{end}}
@@ -190,7 +190,7 @@
   <details class="space-y-2" {{if .Expanded}}open{{end}}>
     <summary
       class="journal-tree__summary cursor-pointer list-none text-slate-300 transition hover:text-slate-100"
-      hx-get="/journal/month/{{printf "%04d-%02d" .Year .Month}}{{if $.RawQuery}}?{{$.RawQuery}}{{end}}"
+      hx-get="{{$.BasePath}}/journal/month/{{printf "%04d-%02d" .Year .Month}}{{if $.RawQuery}}?{{$.RawQuery}}{{end}}"
       hx-target="#journal-month-{{printf "%04d-%02d" .Year .Month}}"
       hx-swap="innerHTML"
       hx-trigger="click once"
@@ -300,7 +300,7 @@
   id="sidebar-calendar"
   class="calendar-panel"
   data-calendar
-  hx-get="/calendar"
+  hx-get="{{$.BasePath}}/calendar"
   hx-trigger="load delay:500ms"
   hx-swap="outerHTML"
 >

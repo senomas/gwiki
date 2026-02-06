@@ -130,12 +130,19 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 		}
 		if user, ok := a.tokenUser(r); ok {
 			if a.isExpired(user, time.Now()) && !allowExpiredPath(r) {
+				base := a.cfg.BaseURL
+				if base != "" && base != "/" {
+					base = strings.TrimSuffix(base, "/")
+				} else {
+					base = ""
+				}
+				target := base + "/password/change"
 				if isHTMXRequest(r) {
-					w.Header().Set("HX-Redirect", "/password/change")
+					w.Header().Set("HX-Redirect", target)
 					w.WriteHeader(http.StatusNoContent)
 					return
 				}
-				http.Redirect(w, r, "/password/change", http.StatusSeeOther)
+				http.Redirect(w, r, target, http.StatusSeeOther)
 				return
 			}
 			ctx := WithUser(r.Context(), User{Name: user, Authenticated: true, Roles: a.rolesForUser(user)})

@@ -4,9 +4,9 @@
     <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Search</div>
     <form
       class="mt-3"
-      action="/search"
+      action="{{.BasePath}}/search"
       method="get"
-      hx-get="/search"
+      hx-get="{{.BasePath}}/search"
       hx-trigger="keyup changed delay:220ms from:input[name='q']"
       hx-target="#search-results"
       hx-replace-url="true"

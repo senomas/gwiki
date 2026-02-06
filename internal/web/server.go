@@ -65,7 +65,38 @@ func (s *Server) Handler() http.Handler {
 			base.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-	return s.debugLogMiddleware(handler)
+	return s.debugLogMiddleware(s.basePathMiddleware(handler))
+}
+
+func (s *Server) basePathMiddleware(next http.Handler) http.Handler {
+	base := s.cfg.BaseURL
+	if base == "" || base == "/" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == base {
+			http.Redirect(w, r, base+"/", http.StatusMovedPermanently)
+			return
+		}
+		if !strings.HasPrefix(path, base+"/") {
+			http.NotFound(w, r)
+			return
+		}
+		trimmed := strings.TrimPrefix(path, base)
+		if trimmed == "" {
+			trimmed = "/"
+		}
+		r.URL.Path = trimmed
+		if r.URL.RawPath != "" && strings.HasPrefix(r.URL.RawPath, base) {
+			rawTrimmed := strings.TrimPrefix(r.URL.RawPath, base)
+			if rawTrimmed == "" {
+				rawTrimmed = "/"
+			}
+			r.URL.RawPath = rawTrimmed
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) accessContextMiddleware(next http.Handler) http.Handler {

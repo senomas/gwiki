@@ -287,7 +287,7 @@ func TestCleanupUnusedAttachments(t *testing.T) {
 		"![](/attachments/" + noteID + "/dir/keep2.png)",
 		"",
 	}, "\n")
-	if err := srv.cleanupUnusedAttachments(context.Background(), owner, noteID, content); err != nil {
+	if err := srv.cleanupUnusedAttachments(context.Background(), owner, noteID, content, "/"); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
 	if _, err := os.Stat(keep); err != nil {

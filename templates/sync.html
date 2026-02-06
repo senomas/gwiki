@@ -7,7 +7,7 @@
 
   <div
     id="sync-result"
-    hx-get="/sync/{{.SyncOwner}}/run"
+    hx-get="{{.BasePath}}/sync/{{.SyncOwner}}/run"
     hx-trigger="load"
     hx-swap="outerHTML"
     class="rounded-2xl border border-slate-800/70 bg-[#121417]/85 p-6 text-sm text-slate-300"

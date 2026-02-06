@@ -12,9 +12,9 @@
     {{end}}
     {{range .TodoNotes}}
       <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
-        {{ $noteURL := printf "/notes/%s" .Path }}
-        {{ if $.RawQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.RawQuery }}{{ end }}
-        {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "NotePath" .Path "NoteURL" $noteURL "RenderedHTML" .RenderedHTML "Short" $.CompactNoteList)}}
+        {{ $noteURL := printf "%s/notes/%s" $.BasePath .Path }}
+        {{ if $.RawQuery }}{{ $noteURL = printf "%s/notes/%s?%s" $.BasePath .Path $.RawQuery }}{{ end }}
+        {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "NotePath" .Path "NoteURL" $noteURL "RenderedHTML" .RenderedHTML "Short" $.CompactNoteList "BasePath" $.BasePath)}}
       </article>
     {{end}}
   </div>

@@ -5,7 +5,7 @@
       {{if .NoteURL}}
         <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}">{{.NoteTitle}}</a>
       {{else}}
-        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="/notes/{{.NotePath}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="/notes/{{.NotePath}}">{{.NoteTitle}}</a>
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{$.BasePath}}/notes/{{.NotePath}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{$.BasePath}}/notes/{{.NotePath}}">{{.NoteTitle}}</a>
       {{end}}
     </h1>
   {{else}}
@@ -68,7 +68,7 @@
           {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
         </a>
       {{else}}
-      <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="/notes/{{.NotePath}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="/notes/{{.NotePath}}">
+      <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{$.BasePath}}/notes/{{.NotePath}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{$.BasePath}}/notes/{{.NotePath}}">
         {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
       </a>
       {{end}}

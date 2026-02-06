@@ -1,7 +1,7 @@
 {{define "quick_notes"}}
 {{if .RecentNotes}}
   {{range .RecentNotes}}
-    <a class="quick-launcher__item" href="/notes/{{.Path}}" data-note-path="{{.Path}}" data-note-title="{{.Title}}">
+    <a class="quick-launcher__item" href="{{$.BasePath}}/notes/{{.Path}}" data-note-path="{{.Path}}" data-note-title="{{.Title}}">
       <span class="quick-launcher__icon">N</span>
       <span class="quick-launcher__meta">
         <span class="quick-launcher__label">{{.Title}}</span>

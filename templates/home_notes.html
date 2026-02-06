@@ -32,14 +32,14 @@
 {{if eq .HomeOffset 0}}
 <div
   class="home-section-loader"
-  hx-get="/notes/section?name=planned{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
+  hx-get="{{.BasePath}}/notes/section?name=planned{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"
 ></div>
 <div
   class="home-section-loader"
-  hx-get="/notes/section?name=rest{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
+  hx-get="{{.BasePath}}/notes/section?name=rest{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"
@@ -56,16 +56,16 @@
       <div class="flex-1">
         {{ $note := .Note }}
         {{ $root := .Root }}
-        {{ $noteURL := printf "/notes/%s" $note.Path }}
-        {{ if $root.RawQuery }}{{ $noteURL = printf "/notes/%s?%s" $note.Path $root.RawQuery }}{{ end }}
-        {{ $cardURL := printf "/notes/%s/card" $note.Path }}
-        {{ if $root.RawQuery }}{{ $cardURL = printf "/notes/%s/card?%s" $note.Path $root.RawQuery }}{{ end }}
+        {{ $noteURL := printf "%s/notes/%s" $root.BasePath $note.Path }}
+        {{ if $root.RawQuery }}{{ $noteURL = printf "%s/notes/%s?%s" $root.BasePath $note.Path $root.RawQuery }}{{ end }}
+        {{ $cardURL := printf "%s/notes/%s/card" $root.BasePath $note.Path }}
+        {{ if $root.RawQuery }}{{ $cardURL = printf "%s/notes/%s/card?%s" $root.BasePath $note.Path $root.RawQuery }}{{ end }}
         <div
           hx-get="{{ $cardURL }}"
           hx-trigger="revealed"
           hx-swap="outerHTML"
         >
-          {{template "note_detail_skeleton" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "NoteFileName" $note.FileName)}}
+          {{template "note_detail_skeleton" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "NoteFileName" $note.FileName "BasePath" $root.BasePath)}}
         </div>
       </div>
       {{if and $root.AuthEnabled $root.IsAuthenticated}}

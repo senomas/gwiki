@@ -22,7 +22,7 @@
         </div>
         <div class="mt-2 text-base text-slate-100">{{.Text}}</div>
         <div class="mt-2 text-sm">
-          <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">Open note</a>
+          <a class="text-sky-300 hover:text-sky-200" href="{{$.BasePath}}/notes/{{.Path}}">Open note</a>
           <span class="text-slate-500">· line {{.LineNo}}</span>
           <span class="text-slate-500">· {{.Title}}</span>
         </div>

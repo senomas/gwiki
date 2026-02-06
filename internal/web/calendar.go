@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/url"
+	"strings"
 	"time"
 
 	"gwiki/internal/index"
@@ -94,7 +95,15 @@ func buildDailyURL(baseURL string, date string) string {
 	if err != nil || u == nil {
 		u = &url.URL{Path: "/"}
 	}
-	u.Path = "/daily/" + date
+	basePath := strings.TrimSuffix(u.Path, "/")
+	if basePath == "" {
+		basePath = "/"
+	}
+	if basePath == "/" {
+		u.Path = "/daily/" + date
+	} else {
+		u.Path = basePath + "/daily/" + date
+	}
 	u.RawPath = ""
 	return u.String()
 }

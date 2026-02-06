@@ -5,10 +5,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{if .Title}}{{.Title}} - {{end}}gwiki</title>
-  <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/static/css/app.css">
-  <link rel="stylesheet" href="/static/fonts/fonts.css">
-  <script src="/static/js/htmx.min.js"></script>
+  <link rel="icon" href="{{.BasePath}}/favicon.ico">
+  <link rel="stylesheet" href="{{.BasePath}}/static/css/app.css">
+  <link rel="stylesheet" href="{{.BasePath}}/static/fonts/fonts.css">
+  <script src="{{.BasePath}}/static/js/htmx.min.js"></script>
+  <script>
+    window.WIKI_BASE = "{{.BasePath}}";
+    window.wikiWithBase = function (path) {
+      var base = window.WIKI_BASE || "";
+      if (!path) {
+        return base || "";
+      }
+      if (!base) {
+        return path;
+      }
+      if (path === "/") {
+        return base + "/";
+      }
+      if (path.indexOf(base + "/") === 0) {
+        return path;
+      }
+      if (path.charAt(0) !== "/") {
+        return base + "/" + path;
+      }
+      return base + path;
+    };
+  </script>
   <style>
     .app-shell {
       font-family: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -887,7 +909,7 @@
 {{else}}
   {{template "layout_sidebar" .}}
 {{end}}
-  <div id="toast-stack" class="toast-stack" hx-get="/toast" hx-trigger="load, toast:refresh from:body" hx-swap="outerHTML"></div>
+  <div id="toast-stack" class="toast-stack" hx-get="{{.BasePath}}/toast" hx-trigger="load, toast:refresh from:body" hx-swap="outerHTML"></div>
   {{template "quick_launcher" .}}
   <div id="note-actions-modal" class="note-actions-modal ui-overlay" aria-hidden="true">
     <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Note actions">
@@ -981,7 +1003,7 @@
         if (wikiLinkNotePath) {
           owner = wikiLinkNotePath.split("/")[0] || "";
         }
-        var createHref = "/notes/new?path=" + encodeURIComponent(targetPath);
+        var createHref = window.wikiWithBase("/notes/new") + "?path=" + encodeURIComponent(targetPath);
         if (owner) {
           createHref += "&owner=" + encodeURIComponent(owner);
         }
@@ -1045,7 +1067,7 @@
       }
 
       function buildNoteURL(path) {
-        return encodeURI("/notes/" + path);
+        return encodeURI(window.wikiWithBase("/notes/" + path));
       }
 
       function noteListView() {
@@ -1266,7 +1288,7 @@
             window.location.href = href;
             return;
           }
-          window.location.href = "/?t=" + encodeURIComponent(tag);
+          window.location.href = window.wikiWithBase("/") + "?t=" + encodeURIComponent(tag);
           return;
         }
         if (target.getAttribute("data-action") === "scroll-top") {
@@ -1296,9 +1318,9 @@
           submenu.setAttribute("aria-hidden", "true");
           return;
         }
-        noteOpen.setAttribute("href", "/notes/" + path);
-        noteEdit.setAttribute("href", "/notes/" + path + "/edit");
-        noteDelete.setAttribute("action", "/notes/" + path + "/delete");
+        noteOpen.setAttribute("href", window.wikiWithBase("/notes/" + path));
+        noteEdit.setAttribute("href", window.wikiWithBase("/notes/" + path + "/edit"));
+        noteDelete.setAttribute("action", window.wikiWithBase("/notes/" + path + "/delete"));
         submenu.classList.add("is-open");
         submenu.setAttribute("aria-hidden", "false");
         activateItem(submenuPanel, 0);
@@ -1438,7 +1460,7 @@
             return;
           }
           event.preventDefault();
-          window.location.href = "/";
+          window.location.href = window.wikiWithBase("/");
           return;
         }
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "h" && event.key !== "l") {
@@ -1607,7 +1629,7 @@
         submenu.setAttribute("aria-hidden", "true");
         clearActive(actionList);
         var uri = encodeURIComponent(window.location.href || "");
-        htmx.ajax("GET", "/quick/launcher?q=" + encodeURIComponent(value) + "&uri=" + uri, "#quick-launcher-actions");
+        htmx.ajax("GET", window.wikiWithBase("/quick/launcher?q=" + encodeURIComponent(value) + "&uri=" + uri), "#quick-launcher-actions");
       });
       actionList.addEventListener("htmx:afterSwap", function (event) {
         if (event.target && event.target.id === "quick-launcher-actions") {
@@ -1649,7 +1671,8 @@
         var target = event.target.closest(".js-wiki-missing");
         var ref = "";
         if (!target) {
-          var link = event.target.closest('a[href^="/__missing__?ref="]');
+        var missingPrefix = window.wikiWithBase("/__missing__?ref=");
+        var link = event.target.closest('a[href^="' + missingPrefix + '"]');
           if (!link) {
             return;
           }
@@ -1700,7 +1723,7 @@
             if (wikiLinkElement) {
               var label = data.title || item.getAttribute("data-note-title") || path;
               wikiLinkElement.textContent = label;
-              wikiLinkElement.setAttribute("href", "/notes/" + data.path);
+              wikiLinkElement.setAttribute("href", window.wikiWithBase("/notes/" + data.path));
               wikiLinkElement.classList.remove("js-wiki-missing");
               wikiLinkElement.removeAttribute("data-wiki-ref");
             }
@@ -1756,9 +1779,9 @@
 
       function openModal(notePath, noteID, noteURL, showOpen) {
         var editTarget = noteID || notePath;
-        openLink.setAttribute("href", noteURL || ("/notes/" + notePath));
-        editLink.setAttribute("href", "/notes/" + editTarget + "/edit");
-        deleteForm.setAttribute("action", "/notes/" + editTarget + "/delete");
+        openLink.setAttribute("href", noteURL || window.wikiWithBase("/notes/" + notePath));
+        editLink.setAttribute("href", window.wikiWithBase("/notes/" + editTarget + "/edit"));
+        deleteForm.setAttribute("action", window.wikiWithBase("/notes/" + editTarget + "/delete"));
         if (showOpen) {
           openLink.classList.remove("hidden");
           defaultAction = openLink;
@@ -2151,7 +2174,7 @@
           clearTimeout(collapseTimer);
         }
         collapseTimer = setTimeout(function () {
-          fetch("/notes/" + notePath + "/collapsed", {
+          fetch(window.wikiWithBase("/notes/" + notePath + "/collapsed"), {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({collapsed: collectCollapsed(noteBody)}),
@@ -2302,6 +2325,10 @@
         }
       }
       function shouldReloadOnRestore(pathname) {
+        var base = window.WIKI_BASE || "";
+        if (base && pathname.indexOf(base) === 0) {
+          pathname = pathname.slice(base.length) || "/";
+        }
         if (pathname === "/login" || pathname === "/settings" || pathname === "/password/change") {
           return false;
         }

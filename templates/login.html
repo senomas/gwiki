@@ -8,7 +8,7 @@
       {{.ErrorMessage}}
     </div>
     {{end}}
-    <form id="login-form" class="mt-6 space-y-4" action="/login" method="post" hx-post="/login" hx-target="#login-panel" hx-select="#login-panel" hx-swap="outerHTML">
+    <form id="login-form" class="mt-6 space-y-4" action="{{.BasePath}}/login" method="post" hx-post="{{.BasePath}}/login" hx-target="#login-panel" hx-select="#login-panel" hx-swap="outerHTML">
       <div class="space-y-2">
         <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Username</label>
         <input id="login-username" class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" type="text" name="username" autocomplete="username" required>

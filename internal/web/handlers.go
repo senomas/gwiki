@@ -147,7 +147,9 @@ func (r *attachmentImageHTMLRenderer) renderImage(
 		return ast.WalkContinue, nil
 	}
 	lowerDest := strings.ToLower(dest)
-	if !strings.HasPrefix(lowerDest, "/attachments/") && !strings.HasPrefix(lowerDest, "attachments/") {
+	if !strings.HasPrefix(lowerDest, "/attachments/") &&
+		!strings.HasPrefix(lowerDest, "attachments/") &&
+		!strings.Contains(lowerDest, "/attachments/") {
 		return ast.WalkContinue, nil
 	}
 	alt := extractTextFromNode(img, source)
@@ -295,6 +297,7 @@ func highlightCodeHTML(code string, lang string) (string, bool) {
 func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	data.AuthEnabled = s.auth != nil
 	data.BuildVersion = BuildVersion
+	data.BasePath = s.basePath()
 	if user, ok := CurrentUser(r.Context()); ok {
 		data.CurrentUser = user
 		data.IsAuthenticated = user.Authenticated
@@ -355,6 +358,27 @@ func syncOwnerFromPath(path string) (string, bool) {
 		return "", false
 	}
 	return owner, true
+}
+
+func (s *Server) basePath() string {
+	if s.cfg.BaseURL == "" || s.cfg.BaseURL == "/" {
+		return ""
+	}
+	return s.cfg.BaseURL
+}
+
+func (s *Server) withBasePath(path string) string {
+	base := s.basePath()
+	if base == "" {
+		return path
+	}
+	if path == "" || path == "/" {
+		return base + "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return base + path
 }
 
 func validEditCommandToken(value string) bool {
@@ -839,9 +863,17 @@ func newTempNoteID() string {
 func (s *Server) tempAttachmentView(ownerName, token string) ([]string, string) {
 	if isTempNoteID(token) {
 		return listAttachmentNames(s.noteAttachmentsDir(ownerName, token)),
-			"/" + filepath.ToSlash(filepath.Join("attachments", token))
+			s.attachmentBase(token)
 	}
 	return listAttachmentNames(s.tempAttachmentsDir(ownerName, token)), ""
+}
+
+func (s *Server) attachmentBase(noteID string) string {
+	noteID = strings.TrimSpace(noteID)
+	if noteID == "" {
+		return ""
+	}
+	return s.withBasePath("/attachments/" + filepath.ToSlash(noteID))
 }
 
 func (s *Server) moveTempAttachments(ownerName, tempID, newID string) error {
@@ -969,7 +1001,7 @@ type attachmentRef struct {
 	prefix string
 }
 
-func (s *Server) cleanupUnusedAttachments(ctx context.Context, owner, noteID, content string) error {
+func (s *Server) cleanupUnusedAttachments(ctx context.Context, owner, noteID, content, basePath string) error {
 	owner = strings.TrimSpace(owner)
 	noteID = strings.TrimSpace(noteID)
 	if owner == "" || noteID == "" {
@@ -982,7 +1014,7 @@ func (s *Server) cleanupUnusedAttachments(ctx context.Context, owner, noteID, co
 		}
 		return err
 	}
-	refs := extractAttachmentRefs(content, noteID)
+	refs := extractAttachmentRefs(content, noteID, basePath)
 	repoBase := s.ownerRepoPath(owner)
 	if repoBase == "" {
 		repoBase = s.cfg.RepoPath
@@ -1041,7 +1073,7 @@ func (s *Server) cleanupUnusedAttachments(ctx context.Context, owner, noteID, co
 	return nil
 }
 
-func extractAttachmentRefs(content, noteID string) map[string]struct{} {
+func extractAttachmentRefs(content, noteID, basePath string) map[string]struct{} {
 	noteID = strings.TrimSpace(noteID)
 	if noteID == "" {
 		return nil
@@ -1050,6 +1082,11 @@ func extractAttachmentRefs(content, noteID string) map[string]struct{} {
 	prefixes := []string{
 		"/attachments/" + noteID + "/",
 		"attachments/" + noteID + "/",
+	}
+	basePath = strings.TrimSpace(basePath)
+	if basePath != "" && basePath != "/" {
+		basePath = strings.TrimSuffix(basePath, "/")
+		prefixes = append(prefixes, basePath+"/attachments/"+noteID+"/")
 	}
 	for _, prefix := range prefixes {
 		offset := 0
@@ -1084,9 +1121,14 @@ func extractAttachmentRefs(content, noteID string) map[string]struct{} {
 	return refs
 }
 
-func scanAttachmentRefs(content string) []attachmentRef {
+func scanAttachmentRefs(content, basePath string) []attachmentRef {
 	refs := make([]attachmentRef, 0, 8)
 	prefixes := []string{"/attachments/", "attachments/"}
+	basePath = strings.TrimSpace(basePath)
+	if basePath != "" && basePath != "/" {
+		basePath = strings.TrimSuffix(basePath, "/")
+		prefixes = append(prefixes, basePath+"/attachments/")
+	}
 	delims := func(r byte) bool {
 		switch r {
 		case ' ', '\n', '\r', '\t', ')', ']', '"', '\'', '<', '>', '(':
@@ -1147,13 +1189,13 @@ func scanAttachmentRefs(content string) []attachmentRef {
 	return refs
 }
 
-func (s *Server) localizeAttachmentLinks(owner, noteID, content string) (string, error) {
+func (s *Server) localizeAttachmentLinks(owner, noteID, content, basePath string) (string, error) {
 	owner = strings.TrimSpace(owner)
 	noteID = strings.TrimSpace(noteID)
 	if owner == "" || noteID == "" {
 		return content, nil
 	}
-	refs := scanAttachmentRefs(content)
+	refs := scanAttachmentRefs(content, basePath)
 	if len(refs) == 0 {
 		return content, nil
 	}
@@ -1382,17 +1424,22 @@ func taskCheckboxID(fileID, lineNo int, hash string) string {
 	return fmt.Sprintf("%s%d-%d-%s", taskIDPrefix, fileID, lineNo, hash)
 }
 
-func taskCheckboxHTML(fileID, lineNo int, hash string, checked bool) string {
+func taskCheckboxHTML(basePath string, fileID, lineNo int, hash string, checked bool) string {
 	id := html.EscapeString(taskCheckboxID(fileID, lineNo, hash))
 	checkedAttr := ""
 	if checked {
 		checkedAttr = " checked"
 	}
+	postURL := "/tasks/toggle"
+	if strings.TrimSpace(basePath) != "" {
+		postURL = strings.TrimSuffix(basePath, "/") + postURL
+	}
 	return fmt.Sprintf(
-		`<input type="checkbox"%s data-task-id="%s" id="%s" hx-post="/tasks/toggle" hx-trigger="change" hx-target="closest .note-body" hx-swap="outerHTML" hx-vals='{"task_id":"%s"}'>`,
+		`<input type="checkbox"%s data-task-id="%s" id="%s" hx-post="%s" hx-trigger="change" hx-target="closest .note-body" hx-swap="outerHTML" hx-vals='{"task_id":"%s"}'>`,
 		checkedAttr,
 		id,
 		id,
+		postURL,
 		id,
 	)
 }
@@ -1424,7 +1471,7 @@ func parseTaskID(raw string) (int, int, string, error) {
 	return fileID, lineNo, hash, nil
 }
 
-func decorateTaskCheckboxes(htmlStr string, fileID int, tasks []index.Task) string {
+func decorateTaskCheckboxes(htmlStr string, fileID int, tasks []index.Task, basePath string) string {
 	if fileID <= 0 || len(tasks) == 0 {
 		return htmlStr
 	}
@@ -1435,7 +1482,7 @@ func decorateTaskCheckboxes(htmlStr string, fileID int, tasks []index.Task) stri
 		}
 		task := tasks[idx]
 		idx++
-		return taskCheckboxHTML(fileID, task.LineNo, task.Hash, task.Done)
+		return taskCheckboxHTML(basePath, fileID, task.LineNo, task.Hash, task.Done)
 	})
 }
 
@@ -1883,7 +1930,7 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	baseURL := baseURLForLinks(r, basePath)
+	baseURL := baseURLForLinks(r, s.withBasePath(basePath))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -3155,7 +3202,7 @@ func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader t
 				if !ok {
 					continue
 				}
-				noteID, relPath, ok := attachmentVideoFromURL(inlineURL)
+				noteID, relPath, ok := attachmentVideoFromURL(inlineURL, srv.basePath())
 				if !ok {
 					continue
 				}
@@ -3203,7 +3250,7 @@ func (t *attachmentVideoEmbedTransformer) Transform(node *ast.Document, reader t
 			}
 			continue
 		}
-		noteID, relPath, ok := attachmentVideoFromURL(urlText)
+		noteID, relPath, ok := attachmentVideoFromURL(urlText, srv.basePath())
 		if !ok {
 			continue
 		}
@@ -4366,7 +4413,7 @@ func formatIntlNumber(country string, local string) string {
 	return "+" + country + " " + group
 }
 
-func attachmentVideoFromURL(raw string) (string, string, bool) {
+func attachmentVideoFromURL(raw, basePath string) (string, string, bool) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", "", false
@@ -4378,6 +4425,13 @@ func attachmentVideoFromURL(raw string) (string, string, bool) {
 	clean := path.Clean(pathValue)
 	clean = strings.TrimPrefix(clean, "./")
 	clean = strings.TrimPrefix(clean, "../")
+	basePath = strings.TrimSpace(basePath)
+	if basePath != "" && basePath != "/" {
+		basePath = strings.TrimSuffix(basePath, "/")
+		if strings.HasPrefix(clean, basePath+"/") {
+			clean = strings.TrimPrefix(clean, basePath)
+		}
+	}
 	if !strings.HasPrefix(clean, "/attachments/") && !strings.HasPrefix(clean, "attachments/") {
 		return "", "", false
 	}
@@ -5418,7 +5472,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	baseURL := baseURLForLinks(r, basePath)
+	baseURL := baseURLForLinks(r, s.withBasePath(basePath))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -5585,7 +5639,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	activeDate := ""
 	calendarDate := date
 	dailyBase := "/daily/" + date
-	baseURL := baseURLForLinks(r, dailyBase)
+	baseURL := baseURLForLinks(r, s.withBasePath(dailyBase))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -5710,7 +5764,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if IsAuthenticated(r.Context()) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, s.withBasePath("/"), http.StatusSeeOther)
 		return
 	}
 	if r.Method == http.MethodGet {
@@ -5770,7 +5824,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.auth.IsExpired(user, time.Now()) {
-		returnTo = "/password/change"
+		returnTo = s.withBasePath("/password/change")
 	}
 	token, err := s.auth.CreateToken(user)
 	if err != nil {
@@ -5785,7 +5839,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	if returnTo == "" {
-		returnTo = "/"
+		returnTo = s.withBasePath("/")
 	}
 	if isHTMX(r) {
 		w.Header().Set("HX-Redirect", returnTo)
@@ -5851,7 +5905,7 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 			s.views.RenderTemplate(w, "toast", data)
 			return
 		}
-		http.Redirect(w, r, "/password/change", http.StatusSeeOther)
+		http.Redirect(w, r, s.withBasePath("/password/change"), http.StatusSeeOther)
 	}
 	if currentPass == "" || newPass == "" {
 		fail("Current and new password required.")
@@ -5980,7 +6034,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteLaxMode,
 		})
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, s.withBasePath("/"), http.StatusSeeOther)
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -6010,7 +6064,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := ""
 	activeDate := ""
-	baseURL := baseURLForLinks(r, "/")
+	baseURL := baseURLForLinks(r, s.withBasePath("/"))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -6279,7 +6333,8 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 	if currentURL == nil {
 		currentURL = quickLauncherURL(r)
 	}
-	basePath, _, _, _, _, _ := quickLauncherContext(currentURL)
+	rawBasePath, _, _, _, _, _ := quickLauncherContext(currentURL)
+	basePath := stripBasePrefix(rawBasePath, s.cfg.BaseURL)
 	notePath, hasNote := quickLauncherNotePath(basePath)
 
 	actions := []QuickLauncherEntry{}
@@ -6314,7 +6369,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Label: "Login",
 			Hint:  "Session",
 			Icon:  "I",
-			Href:  "/login",
+			Href:  s.withBasePath("/login"),
 		})
 	} else {
 		addAction(&actions, QuickLauncherEntry{
@@ -6327,20 +6382,20 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:   "#",
 			Hidden: true,
 		})
-		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: "/notes/new"})
-		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: "/"})
-		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: "/todo"})
-		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Search", Hint: "Find", Icon: "F", Href: "/search"})
-		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Sync", Hint: "Git", Icon: "G", Href: "/sync"})
-		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Settings", Hint: "Config", Icon: "S", Href: "/settings"})
-		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Broken links", Hint: "Fix", Icon: "B", Href: "/broken"})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: s.withBasePath("/notes/new")})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: s.withBasePath("/")})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: s.withBasePath("/todo")})
+		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Search", Hint: "Find", Icon: "F", Href: s.withBasePath("/search")})
+		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Sync", Hint: "Git", Icon: "G", Href: s.withBasePath("/sync")})
+		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Settings", Hint: "Config", Icon: "S", Href: s.withBasePath("/settings")})
+		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Broken links", Hint: "Fix", Icon: "B", Href: s.withBasePath("/broken")})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Scroll to top", Hint: "Jump", Icon: "T", Href: "#top", Action: "scroll-top"})
 		if isAuth && hasNote {
-			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: "/notes/" + notePath + "/edit"})
-			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: "/notes/" + notePath + "/delete"})
+			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: s.withBasePath("/notes/" + notePath + "/edit")})
+			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: s.withBasePath("/notes/" + notePath + "/delete")})
 		}
 		if authEnabled {
-			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
+			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: s.withBasePath("/logout")})
 		}
 	}
 
@@ -6423,7 +6478,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 				Label:     label,
 				Hint:      note.Path,
 				Icon:      "N",
-				Href:      "/notes/" + note.Path,
+				Href:      s.withBasePath("/notes/" + note.Path),
 				NotePath:  note.Path,
 				NoteTitle: note.Title,
 			})
@@ -6593,8 +6648,22 @@ func toggleTag(tags []string, target string) []string {
 	return next
 }
 
-func applyRenderReplacements(input string) string {
-	return replaceTaskTokens(input)
+func applyRenderReplacements(input, basePath string) string {
+	out := replaceTaskTokens(input)
+	return applyBasePathToHTML(out, basePath)
+}
+
+func applyBasePathToHTML(input, basePath string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" || basePath == "/" {
+		return input
+	}
+	basePath = strings.TrimSuffix(basePath, "/")
+	output := strings.ReplaceAll(input, `="/attachments/`, `="`+basePath+`/attachments/`)
+	output = strings.ReplaceAll(output, `='/attachments/`, `='`+basePath+`/attachments/`)
+	output = strings.ReplaceAll(output, `="/assets/`, `="`+basePath+`/assets/`)
+	output = strings.ReplaceAll(output, `='/assets/`, `='`+basePath+`/assets/`)
+	return output
 }
 
 func replaceDueTokens(input string) string {
@@ -6822,7 +6891,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	if ownerName != "" {
 		basePath = "/" + ownerName
 	}
-	baseURL := baseURLForLinks(r, basePath)
+	baseURL := baseURLForLinks(r, s.withBasePath(basePath))
 	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
 	if !IsAuthenticated(r.Context()) {
 		activeJournal = false
@@ -6897,7 +6966,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	if ownerName != "" {
 		basePath = "/" + ownerName
 	}
-	baseURL := baseURLForLinks(r, basePath)
+	baseURL := baseURLForLinks(r, s.withBasePath(basePath))
 	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
 	if !IsAuthenticated(r.Context()) {
 		activeJournal = false
@@ -6982,7 +7051,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	baseURL := baseURLForLinks(r, "/tasks")
+	baseURL := baseURLForLinks(r, s.withBasePath("/tasks"))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	dueDate := ""
 	if activeDue {
@@ -7132,7 +7201,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	baseURL := baseURLForLinks(r, "/")
+	baseURL := baseURLForLinks(r, s.withBasePath("/"))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	dueDate := ""
 	if activeDue {
@@ -7247,7 +7316,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 			fileID = noteTasks[0].FileID
 		}
 		if fileID > 0 && len(checkboxTasks) > 0 {
-			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, checkboxTasks)
+			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, checkboxTasks, s.basePath())
 		}
 		noteMeta := index.FrontmatterAttributes(string(contentBytes))
 		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
@@ -7495,7 +7564,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "owner required", http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/sync/"+ownerName, http.StatusSeeOther)
+	http.Redirect(w, r, s.withBasePath("/sync/"+ownerName), http.StatusSeeOther)
 }
 
 func (s *Server) handleSyncUser(w http.ResponseWriter, r *http.Request) {
@@ -8574,7 +8643,7 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fileID > 0 && len(tasksForNote) > 0 {
-		renderedBody = decorateTaskCheckboxes(renderedBody, fileID, tasksForNote)
+		renderedBody = decorateTaskCheckboxes(renderedBody, fileID, tasksForNote, s.basePath())
 	}
 	noteBody := fmt.Sprintf(
 		`<div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="%s" data-note-path="%s">%s</div>`,
@@ -8626,7 +8695,7 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	sidebarReq, basePath := sidebarRequest(r)
+	sidebarReq, basePath := s.sidebarRequest(r)
 	if maxTime, err := s.idx.MaxEtagTime(sidebarReq.Context()); err == nil {
 		etag := pageETag("sidebar", currentURLString(sidebarReq), maxTime, currentUserName(r.Context()))
 		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
@@ -8658,7 +8727,7 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	if pageURL == nil {
 		pageURL = r.URL
 	}
-	basePath := sidebarBasePath(pageURL.Path)
+	basePath := sidebarBasePath(stripBasePrefix(pageURL.Path, s.cfg.BaseURL))
 	if basePath == "/calendar" {
 		basePath = "/"
 	}
@@ -8675,7 +8744,7 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", etag)
 		setPrivateCacheHeaders(w)
 	}
-	baseURL := baseURLForLinks(&pageReq, basePath)
+	baseURL := baseURLForLinks(&pageReq, s.withBasePath(basePath))
 	query := pageURL.Query()
 	activeDate := parseDateParam(query.Get("d"))
 	activeFolder, activeRoot := parseFolderParam(query.Get("f"))
@@ -8701,13 +8770,13 @@ func (s *Server) handleCalendarSkeleton(w http.ResponseWriter, r *http.Request) 
 	if pageURL == nil {
 		pageURL = r.URL
 	}
-	basePath := sidebarBasePath(pageURL.Path)
+	basePath := sidebarBasePath(stripBasePrefix(pageURL.Path, s.cfg.BaseURL))
 	if basePath == "/calendar-skeleton" {
 		basePath = "/"
 	}
 	pageReq := *r
 	pageReq.URL = pageURL
-	baseURL := baseURLForLinks(&pageReq, basePath)
+	baseURL := baseURLForLinks(&pageReq, s.withBasePath(basePath))
 	activeDate := parseDateParam(pageURL.Query().Get("d"))
 	calendar := buildCalendarMonth(calendarReferenceDate(&pageReq), nil, baseURL, activeDate)
 	data := ViewData{
@@ -9238,7 +9307,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
 				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				AttachmentBase:   s.attachmentBase(uploadToken),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -9264,7 +9333,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
 					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					AttachmentBase:   s.attachmentBase(uploadToken),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9284,7 +9353,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
 					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					AttachmentBase:   s.attachmentBase(uploadToken),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9303,7 +9372,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
 					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					AttachmentBase:   s.attachmentBase(uploadToken),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9320,7 +9389,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				DurationSeconds: 3,
 				CreatedAt:       time.Now(),
 			})
-			targetURL := "/notes/" + notePath
+			targetURL := s.withBasePath("/notes/" + notePath)
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
 				w.WriteHeader(http.StatusOK)
@@ -9340,7 +9409,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
 				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				AttachmentBase:   s.attachmentBase(uploadToken),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusInternalServerError)
@@ -9372,7 +9441,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9396,7 +9465,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
 				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				AttachmentBase:   s.attachmentBase(uploadToken),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusInternalServerError)
@@ -9416,7 +9485,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
 				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				AttachmentBase:   s.attachmentBase(uploadToken),
 				ErrorMessage:     err.Error(),
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusInternalServerError)
@@ -9436,7 +9505,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     "invalid folder",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9464,7 +9533,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				SaveAction:       "/notes/new",
 				UploadToken:      uploadToken,
 				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				AttachmentBase:   s.attachmentBase(uploadToken),
 				ErrorMessage:     "invalid priority",
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusBadRequest)
@@ -9484,7 +9553,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9504,7 +9573,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9524,7 +9593,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9561,7 +9630,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9603,7 +9672,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
 					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					AttachmentBase:   s.attachmentBase(uploadToken),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9627,7 +9696,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
 					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					AttachmentBase:   s.attachmentBase(uploadToken),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9662,7 +9731,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 						SaveAction:       "/notes/new",
 						UploadToken:      uploadToken,
 						Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-						AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+						AttachmentBase:   s.attachmentBase(uploadToken),
 						ErrorMessage:     err.Error(),
 						ErrorReturnURL:   "/notes/new",
 					}, http.StatusInternalServerError)
@@ -9683,7 +9752,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
 					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					AttachmentBase:   s.attachmentBase(uploadToken),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9703,7 +9772,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					SaveAction:       "/notes/new",
 					UploadToken:      uploadToken,
 					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					AttachmentBase:   s.attachmentBase(uploadToken),
 					ErrorMessage:     err.Error(),
 					ErrorReturnURL:   "/notes/new",
 				}, http.StatusInternalServerError)
@@ -9721,7 +9790,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				DurationSeconds: 3,
 				CreatedAt:       time.Now(),
 			})
-			targetURL := "/notes/" + notePath
+			targetURL := s.withBasePath("/notes/" + notePath)
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
 				w.WriteHeader(http.StatusOK)
@@ -9770,7 +9839,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9789,7 +9858,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9807,7 +9876,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9825,7 +9894,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			SaveAction:       "/notes/new",
 			UploadToken:      uploadToken,
 			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			AttachmentBase:   s.attachmentBase(uploadToken),
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9844,7 +9913,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		DurationSeconds: 3,
 		CreatedAt:       time.Now(),
 	})
-	targetURL := "/notes/" + notePath
+	targetURL := s.withBasePath("/notes/" + notePath)
 	if isHTMX(r) {
 		w.Header().Set("HX-Redirect", targetURL)
 		w.WriteHeader(http.StatusOK)
@@ -10226,7 +10295,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 			return ViewData{}, http.StatusInternalServerError, err
 		}
 		if err == nil && IsAuthenticated(r.Context()) {
-			rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks)
+			rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks, s.basePath())
 		}
 		htmlStr = rendered
 	}
@@ -10234,7 +10303,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	baseURL := baseURLForLinks(r, "/")
+	baseURL := baseURLForLinks(r, s.withBasePath("/"))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -10416,7 +10485,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		return ViewData{}, http.StatusInternalServerError, err
 	}
 	if err == nil && IsAuthenticated(r.Context()) {
-		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, renderTasks)
+		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, renderTasks, s.basePath())
 	}
 	if info != nil {
 		labelTime := info.ModTime()
@@ -10439,7 +10508,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		}
 	}
 
-	noteURL := baseURLForLinks(r, "/notes/"+notePath)
+	noteURL := baseURLForLinks(r, s.withBasePath("/notes/"+notePath))
 
 	data := ViewData{
 		NotePath:             notePath,
@@ -10540,14 +10609,14 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	attachmentBase := ""
 	if metaAttrs.ID != "" {
 		attachments = listAttachmentNames(s.noteAttachmentsDir(ownerName, metaAttrs.ID))
-		attachmentBase = "/" + filepath.ToSlash(filepath.Join("attachments", metaAttrs.ID))
+		attachmentBase = s.attachmentBase(metaAttrs.ID)
 	}
 	returnURL := sanitizeReturnURL(r, r.URL.Query().Get("return"))
 	if returnURL == "" {
 		returnURL = sanitizeReturnURL(r, r.Referer())
 	}
 	if returnURL == "" {
-		returnURL = "/"
+		returnURL = s.withBasePath("/")
 	}
 	ownerOptions, defaultOwner, err := s.ownerOptionsForUser(r.Context())
 	if err != nil {
@@ -10650,7 +10719,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	}
 	_ = s.idx.RemoveNoteByPath(ctx, notePath)
 	s.commitOwnerRepoAsync(ownerName, "delete "+notePath)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, s.withBasePath("/"), http.StatusSeeOther)
 }
 
 func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, notePath string) {
@@ -10838,7 +10907,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 
 	if isHTMX(r) {
 		attachments := listAttachmentNames(s.noteAttachmentsDir(ownerName, meta.ID))
-		attachmentBase := "/" + filepath.ToSlash(filepath.Join("attachments", meta.ID))
+		attachmentBase := s.attachmentBase(meta.ID)
 		data := ViewData{
 			NotePath:       notePath,
 			Attachments:    attachments,
@@ -10848,7 +10917,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, s.withBasePath("/notes/"+notePath+"/edit"), http.StatusSeeOther)
 }
 
 func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Request) {
@@ -10953,7 +11022,7 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	redirectURL := "/notes/new?upload_token=" + url.QueryEscape(token)
+	redirectURL := s.withBasePath("/notes/new") + "?upload_token=" + url.QueryEscape(token)
 	if ownerName != "" {
 		redirectURL += "&owner=" + url.QueryEscape(ownerName)
 	}
@@ -11013,7 +11082,7 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectURL := "/notes/new?upload_token=" + url.QueryEscape(token)
+	redirectURL := s.withBasePath("/notes/new") + "?upload_token=" + url.QueryEscape(token)
 	if ownerName != "" {
 		redirectURL += "&owner=" + url.QueryEscape(ownerName)
 	}
@@ -11073,7 +11142,7 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, s.withBasePath("/notes/"+notePath+"/edit"), http.StatusSeeOther)
 }
 
 func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
@@ -11344,7 +11413,7 @@ func (s *Server) ensureVideoThumbnail(ctx context.Context, noteID, relPath strin
 			slog.Debug("video thumbnail etag touch", "note_id", noteID, "notes", touched)
 		}
 	}
-	return "/assets/" + noteID + "/" + thumbName, true
+	return s.withBasePath("/assets/" + noteID + "/" + thumbName), true
 }
 
 func generateVideoThumbnail(videoPath, thumbPath string) error {
@@ -11549,7 +11618,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				s.views.RenderTemplate(w, "toast", data)
 				return
 			}
-			http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+			http.Redirect(w, r, s.withBasePath("/notes/"+notePath+"/edit"), http.StatusSeeOther)
 			return
 		}
 		if isHTMX(r) {
@@ -11574,7 +11643,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	}
 
 	if saveResult.NoChange {
-		targetURL := "/notes/" + saveResult.Path
+		targetURL := s.withBasePath("/notes/" + saveResult.Path)
 		if returnURL != "" {
 			targetURL = returnURL
 		}
@@ -11616,7 +11685,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 		slog.Debug("save note redirect owner", "note_path", notePath, "target_owner", targetOwner, "target_path", targetPath)
 	}
-	targetURL := "/notes/" + targetPath
+	targetURL := s.withBasePath("/notes/" + targetPath)
 	if returnURL != "" && targetOwner == ownerName {
 		targetURL = returnURL
 	}
@@ -11902,7 +11971,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 
 	metaAttrs := index.FrontmatterAttributes(mergedContent)
 	if metaAttrs.ID != "" {
-		if updated, err := s.localizeAttachmentLinks(targetOwner, metaAttrs.ID, mergedContent); err != nil {
+		if updated, err := s.localizeAttachmentLinks(targetOwner, metaAttrs.ID, mergedContent, s.basePath()); err != nil {
 			slog.Warn("localize attachment links", "owner", targetOwner, "note_id", metaAttrs.ID, "err", err)
 		} else {
 			mergedContent = updated
@@ -11972,7 +12041,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		}
 	}
 	if metaAttrs.ID != "" {
-		if err := s.cleanupUnusedAttachments(ctx, targetOwner, metaAttrs.ID, mergedContent); err != nil {
+		if err := s.cleanupUnusedAttachments(ctx, targetOwner, metaAttrs.ID, mergedContent, s.basePath()); err != nil {
 			slog.Warn("cleanup unused attachments", "owner", targetOwner, "note_id", metaAttrs.ID, "err", err)
 		}
 	}
@@ -12432,7 +12501,7 @@ func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
-	return applyRenderReplacements(b.String()), nil
+	return applyRenderReplacements(b.String(), s.basePath()), nil
 }
 
 func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error) {
@@ -12454,7 +12523,7 @@ func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error
 	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
 		return "", err
 	}
-	return applyRenderReplacements(b.String()), nil
+	return applyRenderReplacements(b.String(), s.basePath()), nil
 }
 
 func (s *Server) renderLineMarkdown(ctx context.Context, line string) (template.HTML, error) {
@@ -12488,9 +12557,9 @@ func (s *Server) expandWikiLinks(ctx context.Context, input string) string {
 			label = trimmed
 		}
 		if err == nil && target != "" {
-			return fmt.Sprintf("[%s](/notes/%s)", label, target)
+			return fmt.Sprintf("[%s](%s)", label, s.withBasePath("/notes/"+target))
 		}
-		return fmt.Sprintf("[%s](/__missing__?ref=%s)", label, url.QueryEscape(trimmed))
+		return fmt.Sprintf("[%s](%s)", label, s.withBasePath("/__missing__?ref="+url.QueryEscape(trimmed)))
 	})
 }
 
@@ -12526,6 +12595,10 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 	}
 
 	candidates := []string{ref}
+	base := s.basePath()
+	if base != "" {
+		ref = strings.TrimPrefix(ref, base+"/")
+	}
 	trimmed := strings.TrimPrefix(ref, "/notes/")
 	trimmed = strings.TrimPrefix(trimmed, "notes/")
 	trimmed = strings.TrimPrefix(trimmed, "/")
@@ -12689,7 +12762,7 @@ func sanitizeReturnURL(r *http.Request, raw string) string {
 	return ""
 }
 
-func sidebarRequest(r *http.Request) (*http.Request, string) {
+func (s *Server) sidebarRequest(r *http.Request) (*http.Request, string) {
 	raw := strings.TrimSpace(r.Header.Get("HX-Current-URL"))
 	if raw == "" {
 		raw = strings.TrimSpace(r.Referer())
@@ -12698,7 +12771,7 @@ func sidebarRequest(r *http.Request) (*http.Request, string) {
 	if err != nil || parsed == nil {
 		return r, "/"
 	}
-	basePath := sidebarBasePath(parsed.Path)
+	basePath := sidebarBasePath(stripBasePrefix(parsed.Path, s.cfg.BaseURL))
 	clone := *r
 	clone.URL = parsed
 	return &clone, basePath
@@ -12714,6 +12787,19 @@ func sidebarBasePath(path string) string {
 	}
 	if !strings.HasPrefix(path, "/") {
 		return "/" + path
+	}
+	return path
+}
+
+func stripBasePrefix(path string, base string) string {
+	if base == "" || base == "/" {
+		return path
+	}
+	if strings.HasPrefix(path, base+"/") {
+		return strings.TrimPrefix(path, base)
+	}
+	if path == base {
+		return "/"
 	}
 	return path
 }
