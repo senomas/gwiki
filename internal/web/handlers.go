@@ -449,11 +449,19 @@ func (s *Server) requireWriteAccess(w http.ResponseWriter, r *http.Request, owne
 	}
 	canWrite, err := s.idx.CanWriteOwner(r.Context(), ownerName, userName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if isHTMX(r) {
+			s.renderToastError(w, r, err.Error())
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return false
 	}
 	if !canWrite {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		if isHTMX(r) {
+			s.renderToastError(w, r, "forbidden")
+		} else {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
 		return false
 	}
 	return true
@@ -484,14 +492,45 @@ func (s *Server) requireWriteAccessForRelPath(w http.ResponseWriter, r *http.Req
 	}
 	canWrite, err := s.idx.CanWritePath(r.Context(), ownerName, relPath, userName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if isHTMX(r) {
+			s.renderToastError(w, r, err.Error())
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return false
 	}
 	if !canWrite {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		if isHTMX(r) {
+			s.renderToastError(w, r, "forbidden")
+		} else {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
 		return false
 	}
 	return true
+}
+
+func (s *Server) renderToastError(w http.ResponseWriter, r *http.Request, message string) {
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         message,
+		Kind:            "error",
+		DurationSeconds: 0,
+		CreatedAt:       time.Now(),
+	})
+	if isHTMX(r) {
+		slog.Debug("toast error render", "message", message)
+		w.Header().Set("HX-Retarget", "#toast-stack")
+		w.Header().Set("HX-Reswap", "outerHTML")
+		data := ViewData{
+			ContentTemplate: "toast",
+			ToastItems:      s.toasts.List(toastKey(r)),
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "toast", data)
+		return
+	}
+	http.Error(w, message, http.StatusForbidden)
 }
 
 type apiError struct {
@@ -11392,6 +11431,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	slog.Debug("save note request", "note_path", notePath, "is_htmx", isHTMX(r))
 	if !s.requireWriteAccessForPath(w, r, notePath) {
 		return
 	}
@@ -11417,11 +11457,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	if targetOwner == "" {
 		targetOwner = ownerName
 	}
-	if targetOwner != ownerName {
-		if !s.requireWriteAccess(w, r, targetOwner) {
-			return
-		}
-	}
+	slog.Debug("save note owner", "note_path", notePath, "owner", ownerName, "target_owner", targetOwner, "return_url", r.Form.Get("return_url"))
 	if err := s.ensureOwnerNotesDir(targetOwner); err != nil {
 		returnURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
 		s.renderEditError(w, r, ViewData{
@@ -11442,6 +11478,12 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	visibility := strings.TrimSpace(r.Form.Get("visibility"))
 	folderInput := r.Form.Get("folder")
 	priorityInput := strings.TrimSpace(r.Form.Get("priority"))
+	if targetOwner != ownerName {
+		slog.Debug("save note owner change", "note_path", notePath, "from", ownerName, "to", targetOwner)
+		if !s.requireWriteAccess(w, r, targetOwner) {
+			return
+		}
+	}
 	if content == "" {
 		s.renderEditError(w, r, ViewData{
 			Title:            "Edit note",
@@ -11486,6 +11528,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		RenameDecision: r.Form.Get("rename_decision"),
 	})
 	if apiErr != nil {
+		slog.Debug("save note error", "note_path", notePath, "status", apiErr.status, "message", apiErr.message, "is_htmx", isHTMX(r))
 		if apiErr.message == "journal note title cannot change" {
 			s.addToast(r, Toast{
 				ID:              uuid.NewString(),
@@ -11507,6 +11550,10 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				return
 			}
 			http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+			return
+		}
+		if isHTMX(r) {
+			s.renderToastError(w, r, apiErr.message)
 			return
 		}
 		status := apiErr.status
@@ -11532,6 +11579,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			targetURL = returnURL
 		}
 		if isHTMX(r) {
+			slog.Debug("save note no change", "note_path", notePath, "target_url", targetURL)
 			s.addToast(r, Toast{
 				ID:              uuid.NewString(),
 				Message:         "No changes to save.",
@@ -11561,11 +11609,19 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		DurationSeconds: 3,
 		CreatedAt:       time.Now(),
 	})
-	targetURL := "/notes/" + saveResult.TargetPath
-	if returnURL != "" {
+	targetPath := saveResult.TargetPath
+	if targetOwner != "" && !strings.HasPrefix(targetPath, targetOwner+"/") {
+		if _, rel, err := fs.SplitOwnerNotePath(targetPath); err == nil {
+			targetPath = filepath.ToSlash(filepath.Join(targetOwner, rel))
+		}
+		slog.Debug("save note redirect owner", "note_path", notePath, "target_owner", targetOwner, "target_path", targetPath)
+	}
+	targetURL := "/notes/" + targetPath
+	if returnURL != "" && targetOwner == ownerName {
 		targetURL = returnURL
 	}
 	if isHTMX(r) {
+		slog.Debug("save note redirect", "note_path", notePath, "target_url", targetURL)
 		w.Header().Set("X-Redirect-Location", targetURL)
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -11706,7 +11762,9 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	if err != nil {
 		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
 	}
+	slog.Debug("save common start", "note_path", notePath, "owner", ownerName, "rel_path", relPath)
 	if apiErr := s.apiWriteAccessForRelPath(ctx, ownerName, relPath); apiErr != nil {
+		slog.Debug("save common access", "note_path", notePath, "status", apiErr.status, "message", apiErr.message)
 		return saveNoteResult{}, apiErr
 	}
 
@@ -11714,11 +11772,14 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	if targetOwner == "" {
 		targetOwner = ownerName
 	}
+	crossOwnerMove := targetOwner != ownerName
 	if targetOwner != ownerName {
 		if apiErr := s.apiWriteAccessForOwner(ctx, targetOwner); apiErr != nil {
+			slog.Debug("save common owner access", "note_path", notePath, "target_owner", targetOwner, "status", apiErr.status, "message", apiErr.message)
 			return saveNoteResult{}, apiErr
 		}
 	}
+	slog.Debug("save common owner", "note_path", notePath, "target_owner", targetOwner, "cross_owner", crossOwnerMove)
 	if err := s.ensureOwnerNotesDir(targetOwner); err != nil {
 		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 	}
@@ -11816,8 +11877,9 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	pathChanged := filepath.ToSlash(notePath) != desiredPath
 	decision := input.RenameDecision
 	autoMove := !preserveUpdated && pathChanged
+	slog.Debug("save common move", "note_path", notePath, "desired_path", desiredPath, "path_changed", pathChanged, "auto_move", autoMove, "rename_decision", decision, "cross_owner", crossOwnerMove)
 
-	if err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
+	if !crossOwnerMove && err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
 		return saveNoteResult{
 			Path:       notePath,
 			TargetPath: notePath,
@@ -11852,7 +11914,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 
 	targetPath := notePath
 	targetFullPath := fullPath
-	moveConfirmed := (decision != "cancel") && (autoMove || (!preserveUpdated && titleChanged))
+	moveConfirmed := (decision != "cancel") && (autoMove || (!preserveUpdated && titleChanged) || crossOwnerMove)
 	if !preserveUpdated && (titleChanged || pathChanged) && moveConfirmed {
 		targetPath = desiredPath
 		targetFullPath, err = fs.NoteFilePath(s.cfg.RepoPath, targetPath)
@@ -11861,6 +11923,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		}
 		if targetPath != notePath {
 			if _, err := os.Stat(targetFullPath); err == nil {
+				slog.Warn("save note target exists", "note_path", notePath, "target_path", targetPath, "target_full_path", targetFullPath)
 				return saveNoteResult{}, &apiError{status: http.StatusConflict, message: "note already exists"}
 			}
 			if err != nil && !os.IsNotExist(err) {
@@ -11870,6 +11933,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	}
 
 	if err := os.MkdirAll(filepath.Dir(targetFullPath), 0o755); err != nil {
+		slog.Error("save note mkdir failed", "path", filepath.Dir(targetFullPath), "err", err)
 		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 	}
 	writeLock, err := s.acquireNoteWriteLock()
@@ -11886,6 +11950,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 	}
 	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
+		slog.Error("save note write failed", "path", targetFullPath, "err", err)
 		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 	}
 	if targetPath != notePath && metaAttrs.ID != "" && targetOwner != ownerName {
@@ -11893,12 +11958,15 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		newAttach := s.noteAttachmentsDir(targetOwner, metaAttrs.ID)
 		if _, err := os.Stat(oldAttach); err == nil {
 			if _, err := os.Stat(newAttach); err == nil {
+				slog.Error("save note attachments exist", "old_path", oldAttach, "new_path", newAttach, "note_id", metaAttrs.ID)
 				return saveNoteResult{}, &apiError{status: http.StatusConflict, message: "attachments already exist for new owner"}
 			}
 			if err := os.MkdirAll(filepath.Dir(newAttach), 0o755); err != nil {
+				slog.Error("save note attachments mkdir failed", "path", filepath.Dir(newAttach), "err", err)
 				return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 			}
 			if err := os.Rename(oldAttach, newAttach); err != nil {
+				slog.Error("save note attachments move failed", "from", oldAttach, "to", newAttach, "err", err)
 				return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 			}
 		}

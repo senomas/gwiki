@@ -1,0 +1,9 @@
+ARG NODE_VERSION=20-alpine
+FROM node:${NODE_VERSION}
+
+WORKDIR /app
+
+ARG TAILWIND_VERSION=3.4.17
+RUN npm install -g tailwindcss@${TAILWIND_VERSION}
+
+ENTRYPOINT ["tailwindcss"]

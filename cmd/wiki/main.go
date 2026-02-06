@@ -24,16 +24,30 @@ import (
 )
 
 func main() {
-	level := parseLogLevel(os.Getenv("WIKI_LOG_LEVEL"))
-	logWriter, logCloser := selectLogWriter()
-	if logCloser != nil {
-		defer logCloser.Close()
-	}
+	level := parseLogLevel(os.Getenv("WIKI_DEBUG_LEVEL"))
 	pretty := strings.EqualFold(os.Getenv("WIKI_LOG_PRETTY"), "1") || strings.EqualFold(os.Getenv("WIKI_LOG_PRETTY"), "true")
-	if pretty {
-		slog.SetDefault(slog.New(newPrettyHandler(logWriter, level)))
+	if strings.TrimSpace(os.Getenv("DEV")) != "" {
+		file, err := os.Create("dev.log")
+		if err != nil {
+			slog.Error("open log file", "path", "dev.log", "err", err)
+		} else {
+			defer file.Close()
+			_, _ = fmt.Fprintf(file, "=== gwiki dev log start %s ===\n", time.Now().Format(time.RFC3339))
+			fileHandler := slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelDebug})
+			consoleHandler := newPrettyHandler(os.Stdout, level)
+			if !pretty {
+				consoleHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+			}
+			slog.SetDefault(slog.New(&teeHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}))
+		}
 	} else {
-		slog.SetDefault(slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{Level: level})))
+		var handler slog.Handler
+		if pretty {
+			handler = newPrettyHandler(os.Stdout, level)
+		} else {
+			handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+		}
+		slog.SetDefault(slog.New(handler))
 	}
 
 	cfg := config.Load()
@@ -141,26 +155,44 @@ func parseLogLevel(raw string) slog.Leveler {
 	return level
 }
 
-func selectLogWriter() (io.Writer, io.Closer) {
-	if strings.TrimSpace(os.Getenv("DEBUG")) != "" {
-		file, err := os.Create("dev.log")
-		if err != nil {
-			slog.Error("open log file", "path", "dev.log", "err", err)
-			return os.Stdout, nil
+type teeHandler struct {
+	handlers []slog.Handler
+}
+
+func (t *teeHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range t.handlers {
+		if h.Enabled(ctx, level) {
+			return true
 		}
-		_, _ = fmt.Fprintf(file, "=== gwiki dev log start %s ===\n", time.Now().Format(time.RFC3339))
-		return io.MultiWriter(os.Stdout, file), file
 	}
-	path := strings.TrimSpace(os.Getenv("LOG_FILE"))
-	if path == "" {
-		return os.Stdout, nil
+	return false
+}
+
+func (t *teeHandler) Handle(ctx context.Context, record slog.Record) error {
+	for _, h := range t.handlers {
+		if h.Enabled(ctx, record.Level) {
+			if err := h.Handle(ctx, record); err != nil {
+				return err
+			}
+		}
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		slog.Error("open log file", "path", path, "err", err)
-		return os.Stdout, nil
+	return nil
+}
+
+func (t *teeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	out := make([]slog.Handler, 0, len(t.handlers))
+	for _, h := range t.handlers {
+		out = append(out, h.WithAttrs(attrs))
 	}
-	return file, file
+	return &teeHandler{handlers: out}
+}
+
+func (t *teeHandler) WithGroup(name string) slog.Handler {
+	out := make([]slog.Handler, 0, len(t.handlers))
+	for _, h := range t.handlers {
+		out = append(out, h.WithGroup(name))
+	}
+	return &teeHandler{handlers: out}
 }
 
 func resolveDataPath(cfg config.Config) (string, error) {
