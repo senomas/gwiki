@@ -469,6 +469,12 @@ func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []str
 	if err := i.ensureColumn(ctx, "file_tags", "is_exclusive", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := i.ensureColumn(ctx, "users", "last_sync_unix", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := i.ensureColumn(ctx, "users", "last_sync_status", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	scanned, updated, cleaned, err := i.RecheckFromFS(ctx, repoPath)
 	if err != nil {
 		return err
@@ -649,6 +655,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 30
+		case 30:
+			slog.Info("schema migration", "from", 30, "to", 31)
+			if err := i.migrate30To31(ctx); err != nil {
+				return err
+			}
+			version = 31
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1044,6 +1056,16 @@ func (i *Index) migrate29To30(ctx context.Context) error {
 		return err
 	}
 	if _, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS file_cleanup_expires ON file_cleanup(user_id, expires_at)"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *Index) migrate30To31(ctx context.Context) error {
+	if err := i.ensureColumn(ctx, "users", "last_sync_unix", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := i.ensureColumn(ctx, "users", "last_sync_status", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	return nil

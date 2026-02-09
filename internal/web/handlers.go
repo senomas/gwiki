@@ -7919,6 +7919,13 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	duration := time.Since(start).Round(time.Millisecond).String()
+	syncStatus := "success"
+	if err != nil {
+		syncStatus = "failed"
+	}
+	if syncErr := s.idx.SetUserSyncState(r.Context(), ownerName, syncStatus, time.Now()); syncErr != nil {
+		slog.Warn("sync state update failed", "owner", ownerName, "status", syncStatus, "err", syncErr)
+	}
 	data := ViewData{
 		SyncOutput:   output,
 		SyncDuration: duration,
@@ -7999,12 +8006,22 @@ func (s *Server) settingsUsersWithOrigin(ctx context.Context) []UserSummary {
 			Roles: entry.Roles,
 		})
 	}
+	syncStates, err := s.idx.UserSyncStates(ctx)
+	if err != nil {
+		slog.Warn("list user sync states", "err", err)
+	}
 	sort.Slice(users, func(i, j int) bool {
 		return strings.ToLower(users[i].Name) < strings.ToLower(users[j].Name)
 	})
 	for i := range users {
 		repoPath := s.ownerRepoPath(users[i].Name)
 		users[i].GitOrigin = gitOriginURL(repoPath)
+		if state, ok := syncStates[users[i].Name]; ok {
+			if state.LastSyncUnix > 0 {
+				users[i].LastSync = time.Unix(state.LastSyncUnix, 0).In(time.Local).Format("2006-01-02 15:04:05")
+			}
+			users[i].LastSyncStatus = state.LastSyncStatus
+		}
 	}
 	return users
 }

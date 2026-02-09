@@ -282,6 +282,9 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index) 
 		unlock()
 		if runErr != nil {
 			slog.Warn("sync schedule failed", "owner", target.Owner, "err", runErr)
+			if err := idx.SetUserSyncState(ctx, target.Owner, "failed", time.Now()); err != nil {
+				slog.Warn("sync schedule state update failed", "owner", target.Owner, "status", "failed", "err", err)
+			}
 			continue
 		}
 		logOutput, logErr := syncer.LogGraphWithOptions(ctx, target.Path, 10, opts)
@@ -294,6 +297,9 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index) 
 			slog.Warn("sync schedule history failed", "owner", target.Owner, "err", histErr)
 		} else if inserted > 0 {
 			slog.Info("sync schedule history updated", "owner", target.Owner, "inserted", inserted)
+		}
+		if err := idx.SetUserSyncState(ctx, target.Owner, "success", time.Now()); err != nil {
+			slog.Warn("sync schedule state update failed", "owner", target.Owner, "status", "success", "err", err)
 		}
 		anySuccess = true
 	}

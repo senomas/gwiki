@@ -100,6 +100,8 @@
                     <tr>
                       <th class="px-4 py-2 font-semibold">Username</th>
                       <th class="px-4 py-2 font-semibold">Git Origin</th>
+                      <th class="px-4 py-2 font-semibold">Last Sync</th>
+                      <th class="px-4 py-2 font-semibold">Last Sync Status</th>
                       <th class="px-4 py-2 font-semibold">Roles</th>
                       <th class="px-4 py-2 font-semibold">Actions</th>
                     </tr>
@@ -113,6 +115,26 @@
                             {{.GitOrigin}}
                           {{else}}
                             —
+                          {{end}}
+                        </td>
+                        <td class="px-4 py-2 text-slate-400">
+                          {{if .LastSync}}
+                            {{.LastSync}}
+                          {{else}}
+                            —
+                          {{end}}
+                        </td>
+                        <td class="px-4 py-2">
+                          {{if .LastSyncStatus}}
+                            {{if eq .LastSyncStatus "success"}}
+                              <span class="inline-flex rounded-full border border-emerald-700/70 bg-emerald-900/30 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-emerald-200">{{.LastSyncStatus}}</span>
+                            {{else if eq .LastSyncStatus "failed"}}
+                              <span class="inline-flex rounded-full border border-red-700/70 bg-red-900/30 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-red-200">{{.LastSyncStatus}}</span>
+                            {{else}}
+                              <span class="inline-flex rounded-full border border-slate-700/70 bg-slate-800/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-200">{{.LastSyncStatus}}</span>
+                            {{end}}
+                          {{else}}
+                            <span class="text-slate-500">—</span>
                           {{end}}
                         </td>
                         <td class="px-4 py-2 text-slate-400">
