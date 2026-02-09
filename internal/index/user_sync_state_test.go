@@ -45,6 +45,28 @@ func TestUserSyncStateRoundTrip(t *testing.T) {
 	if state.LastSyncStatus != "success" {
 		t.Fatalf("expected status success, got %q", state.LastSyncStatus)
 	}
+	if state.LastSuccessSyncUnix != syncAt.Unix() {
+		t.Fatalf("expected last_success_sync_unix=%d, got %d", syncAt.Unix(), state.LastSuccessSyncUnix)
+	}
+
+	failedAt := syncAt.Add(30 * time.Minute)
+	if err := idx.SetUserSyncState(ctx, "alice", "failed", failedAt); err != nil {
+		t.Fatalf("set failed sync state: %v", err)
+	}
+
+	state, err = idx.UserSyncState(ctx, "alice")
+	if err != nil {
+		t.Fatalf("get failed sync state: %v", err)
+	}
+	if state.LastSyncUnix != failedAt.Unix() {
+		t.Fatalf("expected failed last_sync_unix=%d, got %d", failedAt.Unix(), state.LastSyncUnix)
+	}
+	if state.LastSyncStatus != "failed" {
+		t.Fatalf("expected status failed, got %q", state.LastSyncStatus)
+	}
+	if state.LastSuccessSyncUnix != syncAt.Unix() {
+		t.Fatalf("expected last_success_sync_unix to remain %d, got %d", syncAt.Unix(), state.LastSuccessSyncUnix)
+	}
 
 	allStates, err := idx.UserSyncStates(ctx)
 	if err != nil {
@@ -54,7 +76,7 @@ func TestUserSyncStateRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected alice in sync state map")
 	}
-	if got.LastSyncUnix != syncAt.Unix() || got.LastSyncStatus != "success" {
+	if got.LastSyncUnix != failedAt.Unix() || got.LastSyncStatus != "failed" || got.LastSuccessSyncUnix != syncAt.Unix() {
 		t.Fatalf("unexpected sync state %+v", got)
 	}
 }
@@ -107,7 +129,7 @@ func TestUserSyncStateMigrateFromSchema30(t *testing.T) {
 	}
 
 	syncAt := time.Date(2026, 2, 9, 16, 7, 8, 0, time.UTC)
-	if err := idx.SetUserSyncState(ctx, "legacy", "failed", syncAt); err != nil {
+	if err := idx.SetUserSyncState(ctx, "legacy", "success", syncAt); err != nil {
 		t.Fatalf("set sync state after migration: %v", err)
 	}
 	state, err := idx.UserSyncState(ctx, "legacy")
@@ -117,7 +139,10 @@ func TestUserSyncStateMigrateFromSchema30(t *testing.T) {
 	if state.LastSyncUnix != syncAt.Unix() {
 		t.Fatalf("expected migrated last_sync_unix=%d, got %d", syncAt.Unix(), state.LastSyncUnix)
 	}
-	if state.LastSyncStatus != "failed" {
-		t.Fatalf("expected migrated status failed, got %q", state.LastSyncStatus)
+	if state.LastSyncStatus != "success" {
+		t.Fatalf("expected migrated status success, got %q", state.LastSyncStatus)
+	}
+	if state.LastSuccessSyncUnix != syncAt.Unix() {
+		t.Fatalf("expected migrated last_success_sync_unix=%d, got %d", syncAt.Unix(), state.LastSuccessSyncUnix)
 	}
 }

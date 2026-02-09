@@ -101,6 +101,7 @@
                       <th class="px-4 py-2 font-semibold">Username</th>
                       <th class="px-4 py-2 font-semibold">Git Origin</th>
                       <th class="px-4 py-2 font-semibold">Last Sync</th>
+                      <th class="px-4 py-2 font-semibold">Last Success Sync</th>
                       <th class="px-4 py-2 font-semibold">Last Sync Status</th>
                       <th class="px-4 py-2 font-semibold">Roles</th>
                       <th class="px-4 py-2 font-semibold">Actions</th>
@@ -120,6 +121,13 @@
                         <td class="px-4 py-2 text-slate-400">
                           {{if .LastSync}}
                             {{.LastSync}}
+                          {{else}}
+                            —
+                          {{end}}
+                        </td>
+                        <td class="px-4 py-2 text-slate-400">
+                          {{if .LastSuccessSync}}
+                            {{.LastSuccessSync}}
                           {{else}}
                             —
                           {{end}}

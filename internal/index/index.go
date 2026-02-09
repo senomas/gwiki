@@ -475,6 +475,9 @@ func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []str
 	if err := i.ensureColumn(ctx, "users", "last_sync_status", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := i.ensureColumn(ctx, "users", "last_success_sync_unix", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	scanned, updated, cleaned, err := i.RecheckFromFS(ctx, repoPath)
 	if err != nil {
 		return err
@@ -661,6 +664,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 31
+		case 31:
+			slog.Info("schema migration", "from", 31, "to", 32)
+			if err := i.migrate31To32(ctx); err != nil {
+				return err
+			}
+			version = 32
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1066,6 +1075,13 @@ func (i *Index) migrate30To31(ctx context.Context) error {
 		return err
 	}
 	if err := i.ensureColumn(ctx, "users", "last_sync_status", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *Index) migrate31To32(ctx context.Context) error {
+	if err := i.ensureColumn(ctx, "users", "last_success_sync_unix", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	return nil

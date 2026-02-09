@@ -8020,6 +8020,9 @@ func (s *Server) settingsUsersWithOrigin(ctx context.Context) []UserSummary {
 			if state.LastSyncUnix > 0 {
 				users[i].LastSync = time.Unix(state.LastSyncUnix, 0).In(time.Local).Format("2006-01-02 15:04:05")
 			}
+			if state.LastSuccessSyncUnix > 0 {
+				users[i].LastSuccessSync = time.Unix(state.LastSuccessSyncUnix, 0).In(time.Local).Format("2006-01-02 15:04:05")
+			}
 			users[i].LastSyncStatus = state.LastSyncStatus
 		}
 	}

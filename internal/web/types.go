@@ -148,11 +148,12 @@ type QuickLauncherEntry struct {
 }
 
 type UserSummary struct {
-	Name           string
-	Roles          []string
-	GitOrigin      string
-	LastSync       string
-	LastSyncStatus string
+	Name            string
+	Roles           []string
+	GitOrigin       string
+	LastSync        string
+	LastSuccessSync string
+	LastSyncStatus  string
 }
 
 type GitRemoteCred struct {

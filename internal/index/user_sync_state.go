@@ -9,8 +9,9 @@ import (
 )
 
 type UserSyncState struct {
-	LastSyncUnix   int64
-	LastSyncStatus string
+	LastSyncUnix        int64
+	LastSyncStatus      string
+	LastSuccessSyncUnix int64
 }
 
 func (i *Index) UserSyncState(ctx context.Context, ownerName string) (UserSyncState, error) {
@@ -20,10 +21,10 @@ func (i *Index) UserSyncState(ctx context.Context, ownerName string) (UserSyncSt
 	}
 	var state UserSyncState
 	err := i.queryRowContext(ctx, `
-		SELECT last_sync_unix, last_sync_status
+		SELECT last_sync_unix, last_sync_status, last_success_sync_unix
 		FROM users
 		WHERE name=?
-	`, ownerName).Scan(&state.LastSyncUnix, &state.LastSyncStatus)
+	`, ownerName).Scan(&state.LastSyncUnix, &state.LastSyncStatus, &state.LastSuccessSyncUnix)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return UserSyncState{}, nil
@@ -36,7 +37,7 @@ func (i *Index) UserSyncState(ctx context.Context, ownerName string) (UserSyncSt
 
 func (i *Index) UserSyncStates(ctx context.Context) (map[string]UserSyncState, error) {
 	rows, err := i.queryContext(ctx, `
-		SELECT name, last_sync_unix, last_sync_status
+		SELECT name, last_sync_unix, last_sync_status, last_success_sync_unix
 		FROM users
 	`)
 	if err != nil {
@@ -51,7 +52,7 @@ func (i *Index) UserSyncStates(ctx context.Context) (map[string]UserSyncState, e
 			state  UserSyncState
 			status string
 		)
-		if err := rows.Scan(&name, &state.LastSyncUnix, &status); err != nil {
+		if err := rows.Scan(&name, &state.LastSyncUnix, &status, &state.LastSuccessSyncUnix); err != nil {
 			return nil, err
 		}
 		name = strings.TrimSpace(name)
@@ -84,8 +85,11 @@ func (i *Index) SetUserSyncState(ctx context.Context, ownerName string, status s
 	}
 	_, err := i.execContext(ctx, `
 		UPDATE users
-		SET last_sync_unix=?, last_sync_status=?
+		SET
+			last_sync_unix=?,
+			last_sync_status=?,
+			last_success_sync_unix=CASE WHEN ?='success' THEN ? ELSE last_success_sync_unix END
 		WHERE name=?
-	`, syncedAt.Unix(), status, ownerName)
+	`, syncedAt.Unix(), status, status, syncedAt.Unix(), ownerName)
 	return err
 }
