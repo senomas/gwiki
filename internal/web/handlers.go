@@ -6894,6 +6894,10 @@ func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []ind
 			continue
 		}
 		line := lines[task.LineNo-1]
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(trimmed, "- [ ]") {
+			continue
+		}
 		if !inboxTagRe.MatchString(line) {
 			continue
 		}
