@@ -9647,6 +9647,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			unlock := s.locker.Lock(notePath)
+			if attrs := index.FrontmatterAttributes(updatedContent); attrs.ID != "" {
+				if updated, err := s.localizeAttachmentLinks(ownerName, attrs.ID, updatedContent); err != nil {
+					slog.Warn("localize attachment links", "owner", ownerName, "note_id", attrs.ID, "err", err)
+				} else {
+					updatedContent = updated
+				}
+			}
 			if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
 				unlock()
 				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
@@ -9798,6 +9805,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				ErrorReturnURL:   "/notes/new",
 			}, http.StatusInternalServerError)
 			return
+		}
+	}
+	if attrs := index.FrontmatterAttributes(mergedContent); attrs.ID != "" {
+		if updated, err := s.localizeAttachmentLinks(ownerName, attrs.ID, mergedContent); err != nil {
+			slog.Warn("localize attachment links", "owner", ownerName, "note_id", attrs.ID, "err", err)
+		} else {
+			mergedContent = updated
 		}
 	}
 	folder, err := normalizeFolderPath(folderInput)
@@ -10067,6 +10081,11 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			unlock := s.locker.Lock(notePath)
+			if updated, err := s.localizeAttachmentLinks(ownerName, existingID, updatedContent); err != nil {
+				slog.Warn("localize attachment links", "owner", ownerName, "note_id", existingID, "err", err)
+			} else {
+				updatedContent = updated
+			}
 			if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
 				unlock()
 				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
