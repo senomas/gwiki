@@ -129,8 +129,10 @@ type OwnerOption struct {
 }
 
 type UserLink struct {
-	Name  string
-	Count int
+	Name            string
+	Count           int
+	LastCommitAt    string
+	LastSuccessSync string
 }
 
 type QuickLauncherEntry struct {

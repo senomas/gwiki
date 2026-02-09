@@ -1986,10 +1986,35 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 		return err
 	}
 	currentUser := currentUserName(r.Context())
-	users = filterSidebarUsers(users, currentUser)
+	users = filterSidebarUsers(users)
 	userCounts, err := s.idx.CountSharedNotesByOwner(r.Context(), currentUser)
 	if err != nil {
 		return err
+	}
+	if currentUser != "" {
+		ownCount, countErr := s.idx.CountOwnedNotesByOwner(r.Context(), currentUser)
+		if countErr != nil {
+			slog.Warn("sidebar current user notes count", "user", currentUser, "err", countErr)
+		} else {
+			userCounts[currentUser] = ownCount
+		}
+	}
+	userSyncStates, err := s.idx.UserSyncStates(r.Context())
+	if err != nil {
+		slog.Warn("sidebar user sync states", "err", err)
+		userSyncStates = map[string]index.UserSyncState{}
+	}
+	userLastCommits := map[string]int64{}
+	for _, user := range users {
+		repoPath := s.ownerRepoPath(user)
+		lastCommitUnix, commitErr := latestRepoCommitUnix(r.Context(), repoPath)
+		if commitErr != nil {
+			slog.Warn("sidebar user last commit", "user", user, "repo", repoPath, "err", commitErr)
+			continue
+		}
+		if lastCommitUnix > 0 {
+			userLastCommits[user] = lastCommitUnix
+		}
 	}
 	data.Tags = tags
 	data.TagLinks = tagLinks
@@ -2021,23 +2046,12 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	data.CalendarMonth = calendar
 	applyCalendarLinks(data, baseURL)
 	data.JournalSidebar = journalSidebar
-	data.Users = buildUserLinks(users, userCounts)
+	data.Users = buildUserLinks(users, userCounts, userLastCommits, userSyncStates)
 	return nil
 }
 
-func filterSidebarUsers(users []string, current string) []string {
-	current = strings.TrimSpace(current)
-	if current == "" || len(users) == 0 {
-		return filterInternalUsers(users)
-	}
-	out := make([]string, 0, len(users))
-	for _, user := range users {
-		if strings.EqualFold(user, current) {
-			continue
-		}
-		out = append(out, user)
-	}
-	return filterInternalUsers(out)
+func filterSidebarUsers(users []string) []string {
+	return filterInternalUsers(users)
 }
 
 func filterInternalUsers(users []string) []string {
@@ -2054,16 +2068,23 @@ func filterInternalUsers(users []string) []string {
 	return out
 }
 
-func buildUserLinks(users []string, counts map[string]int) []UserLink {
+func buildUserLinks(users []string, counts map[string]int, lastCommits map[string]int64, syncStates map[string]index.UserSyncState) []UserLink {
 	if len(users) == 0 {
 		return nil
 	}
 	out := make([]UserLink, 0, len(users))
 	for _, user := range users {
-		out = append(out, UserLink{
+		link := UserLink{
 			Name:  user,
 			Count: counts[user],
-		})
+		}
+		if ts, ok := lastCommits[user]; ok && ts > 0 {
+			link.LastCommitAt = time.Unix(ts, 0).In(time.Local).Format("2006-01-02 15:04")
+		}
+		if state, ok := syncStates[user]; ok && state.LastSuccessSyncUnix > 0 {
+			link.LastSuccessSync = time.Unix(state.LastSuccessSyncUnix, 0).In(time.Local).Format("2006-01-02 15:04")
+		}
+		out = append(out, link)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {
@@ -2072,6 +2093,37 @@ func buildUserLinks(users []string, counts map[string]int) []UserLink {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out
+}
+
+func latestRepoCommitUnix(ctx context.Context, repoPath string) (int64, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return 0, nil
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "log", "-1", "--format=%ct")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "does not have any commits yet") ||
+			strings.Contains(lower, "unknown revision or path not in the working tree") ||
+			strings.Contains(lower, "not a git repository") {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("git latest commit lookup failed: %s", msg)
+	}
+	raw := strings.TrimSpace(string(output))
+	if raw == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse latest commit unix %q: %w", raw, err)
+	}
+	return parsed, nil
 }
 
 func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, mentionTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool, ownerName string) (int, int, error) {

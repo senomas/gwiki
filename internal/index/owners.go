@@ -659,3 +659,22 @@ func (i *Index) CountSharedNotesByOwner(ctx context.Context, userName string) (m
 	}
 	return counts, nil
 }
+
+func (i *Index) CountOwnedNotesByOwner(ctx context.Context, ownerName string) (int, error) {
+	ownerName = strings.TrimSpace(ownerName)
+	if ownerName == "" {
+		return 0, nil
+	}
+	ownerID, err := i.userIDByName(ctx, ownerName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	if err := i.queryRowContext(ctx, "SELECT COUNT(DISTINCT id) FROM files WHERE user_id=?", ownerID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
