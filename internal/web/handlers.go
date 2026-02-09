@@ -2002,6 +2002,15 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	data.FolderQuery = buildFolderQuery(activeFolder, activeRoot)
 	data.FilterQuery = filterQuery
 	data.TodoURL = buildTodoLink(currentURLString(r))
+	data.InboxURL = toggleTagURL(currentURLString(r), "inbox")
+	if len(tagLinks) > 0 {
+		for _, tag := range tagLinks {
+			if tag.Name == "inbox" {
+				data.InboxCount = tag.Count
+				break
+			}
+		}
+	}
 	data.RawQuery = r.URL.RawQuery
 	data.HomeURL = baseURL
 	data.ActiveDate = activeDate
@@ -9458,6 +9467,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			targetURL := "/notes/" + notePath
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
+				w.Header().Set("X-Redirect-Location", targetURL)
 				w.WriteHeader(http.StatusOK)
 				return
 			}
@@ -9859,6 +9869,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			targetURL := "/notes/" + notePath
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
+				w.Header().Set("X-Redirect-Location", targetURL)
 				w.WriteHeader(http.StatusOK)
 				return
 			}
@@ -9982,6 +9993,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	targetURL := "/notes/" + notePath
 	if isHTMX(r) {
 		w.Header().Set("HX-Redirect", targetURL)
+		w.Header().Set("X-Redirect-Location", targetURL)
 		w.WriteHeader(http.StatusOK)
 		return
 	}

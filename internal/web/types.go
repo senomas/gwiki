@@ -77,6 +77,8 @@ type ViewData struct {
 	FolderQuery          string
 	FilterQuery          string
 	TodoURL              string
+	InboxURL             string
+	InboxCount           int
 	RawQuery             string
 	HomeURL              string
 	NoteURL              string
