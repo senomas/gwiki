@@ -6691,6 +6691,9 @@ func applyRenderReplacements(input string) string {
 	return replaceTaskTokens(input)
 }
 
+var inboxTagRe = regexp.MustCompile(`(?i)#inbox\b`)
+var inboxLinkRe = regexp.MustCompile(`(?i)(<a\s+[^>]*href="[^"]*type=inbox[^"]*"[^>]*)>`)
+
 func replaceDueTokens(input string) string {
 	return dueTokenRe.ReplaceAllStringFunc(input, func(match string) string {
 		parts := dueTokenRe.FindStringSubmatch(match)
@@ -6750,6 +6753,170 @@ func replaceTaskTokens(input string) string {
 		lines[i] = line
 	}
 	return strings.Join(lines, "\n")
+}
+
+func parseLineRange(raw string) (int, int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, 0, fmt.Errorf("missing line range")
+	}
+	parts := strings.Split(raw, "-")
+	if len(parts) == 1 {
+		val, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || val <= 0 {
+			return 0, 0, fmt.Errorf("invalid line range")
+		}
+		return val, val, nil
+	}
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid line range")
+	}
+	start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || start <= 0 {
+		return 0, 0, fmt.Errorf("invalid line range")
+	}
+	end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || end <= 0 {
+		return 0, 0, fmt.Errorf("invalid line range")
+	}
+	if end < start {
+		return 0, 0, fmt.Errorf("invalid line range")
+	}
+	return start, end, nil
+}
+
+func countIndent(line string) int {
+	count := 0
+	for _, r := range line {
+		if r != ' ' && r != '\t' {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func dedentLine(line string, baseIndent int) string {
+	if baseIndent <= 0 {
+		return line
+	}
+	count := 0
+	idx := 0
+	for idx < len(line) {
+		r := line[idx]
+		if r != ' ' && r != '\t' {
+			break
+		}
+		count++
+		if count == baseIndent {
+			idx++
+			break
+		}
+		idx++
+	}
+	if count < baseIndent {
+		idx = count
+	}
+	return line[idx:]
+}
+
+func isBlankLine(line string) bool {
+	return strings.TrimSpace(line) == ""
+}
+
+func inboxLineRange(lines []string, startLine int) int {
+	if startLine <= 0 || startLine > len(lines) {
+		return startLine
+	}
+	baseIndent := countIndent(lines[startLine-1])
+	endLine := startLine
+	for i := startLine; i < len(lines); i++ {
+		if isBlankLine(lines[i]) {
+			endLine = i + 1
+			continue
+		}
+		lineIndent := countIndent(lines[i])
+		if lineIndent <= baseIndent {
+			break
+		}
+		endLine = i + 1
+	}
+	return endLine
+}
+
+func extractInboxFromNote(content string, startLine int, endLine int) (string, error) {
+	body := index.StripFrontmatter(normalizeLineEndings(content))
+	lines := strings.Split(body, "\n")
+	if startLine <= 0 || endLine <= 0 || startLine > endLine {
+		return "", fmt.Errorf("invalid line range")
+	}
+	if startLine > len(lines) || endLine > len(lines) {
+		return "", fmt.Errorf("line range out of bounds")
+	}
+	line := lines[startLine-1]
+	if !inboxTagRe.MatchString(line) {
+		return "", fmt.Errorf("inbox tag not found")
+	}
+	baseIndent := countIndent(line)
+	trimmed := strings.TrimLeft(line, " \t")
+	if strings.HasPrefix(trimmed, "- [ ]") {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "- [ ]"))
+	}
+	trimmed = strings.TrimSpace(inboxTagRe.ReplaceAllString(trimmed, ""))
+	block := []string{trimmed}
+	for i := startLine; i < endLine; i++ {
+		current := lines[i]
+		if isBlankLine(current) {
+			block = append(block, "")
+			continue
+		}
+		if countIndent(current) <= baseIndent {
+			break
+		}
+		block = append(block, dedentLine(current, baseIndent))
+	}
+	for len(block) > 0 && strings.TrimSpace(block[len(block)-1]) == "" {
+		block = block[:len(block)-1]
+	}
+	contentOut := strings.Join(block, "\n")
+	if contentOut == "" {
+		return "", fmt.Errorf("empty inbox content")
+	}
+	return "# INBOX\n\n" + contentOut + "\n", nil
+}
+
+func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []index.Task) []string {
+	if noteID == "" || len(lines) == 0 || len(tasks) == 0 {
+		return lines
+	}
+	for _, task := range tasks {
+		if task.LineNo <= 0 || task.LineNo > len(lines) {
+			continue
+		}
+		line := lines[task.LineNo-1]
+		if !inboxTagRe.MatchString(line) {
+			continue
+		}
+		endLine := inboxLineRange(lines, task.LineNo)
+		link := fmt.Sprintf("%s?note=%s&line=%d-%d&type=inbox", baseURL, url.QueryEscape(noteID), task.LineNo, endLine)
+		replaced := inboxTagRe.ReplaceAllStringFunc(line, func(match string) string {
+			return fmt.Sprintf("[%s](%s)", match, link)
+		})
+		lines[task.LineNo-1] = replaced
+	}
+	return lines
+}
+
+func addInboxLinkTarget(html string) string {
+	if html == "" {
+		return html
+	}
+	return inboxLinkRe.ReplaceAllStringFunc(html, func(match string) string {
+		if strings.Contains(strings.ToLower(match), "target=") {
+			return match
+		}
+		return strings.TrimSuffix(match, ">") + ` target="_blank" rel="noopener">`
+	})
 }
 
 func fuzzyMatchTag(term string, candidate string) bool {
@@ -7345,14 +7512,23 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		noteMeta := index.FrontmatterAttributes(string(contentBytes))
 		body := index.StripFrontmatter(normalizeLineEndings(string(contentBytes)))
 		lines := strings.Split(body, "\n")
+		if noteMeta.ID != "" && len(noteTasks) > 0 {
+			taskLines := make([]index.Task, 0, len(noteTasks))
+			for _, task := range noteTasks {
+				taskLines = append(taskLines, index.Task{LineNo: task.LineNo})
+			}
+			lines = injectInboxLinks(lines, noteMeta.ID, baseURLForLinks(r, "/notes/new"), taskLines)
+		}
 		snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
 		htmlStr, err := s.renderNoteBody(r.Context(), []byte(snippet))
 		if err != nil {
 			slog.Warn("render todo note snippet", "path", path, "err", err)
 			continue
 		}
+		htmlStr = addInboxLinkTarget(htmlStr)
 		fileID := 0
 		if len(noteTasks) > 0 {
 			fileID = noteTasks[0].FileID
@@ -7360,7 +7536,6 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		if fileID > 0 && len(checkboxTasks) > 0 {
 			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, checkboxTasks)
 		}
-		noteMeta := index.FrontmatterAttributes(string(contentBytes))
 		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
 		todoNotes = append(todoNotes, NoteCard{
 			Path:         path,
@@ -9157,12 +9332,65 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		rawContent := ""
+		noteType := strings.TrimSpace(r.URL.Query().Get("type"))
+		noteRef := strings.TrimSpace(r.URL.Query().Get("note"))
+		lineRange := strings.TrimSpace(r.URL.Query().Get("line"))
 		noteMeta := index.FrontmatterAttrs{Priority: "10"}
 		if presetFolder != "" {
 			noteMeta.Folder = presetFolder
 		}
+		if strings.EqualFold(noteType, "inbox") && noteRef != "" && lineRange != "" {
+			startLine, endLine, err := parseLineRange(lineRange)
+			if err != nil {
+				s.addToast(r, Toast{ID: uuid.NewString(), Message: err.Error(), Kind: "error", CreatedAt: time.Now()})
+			} else {
+				userName := currentUserName(r.Context())
+				userID, err := s.idx.LookupOwnerIDs(r.Context(), userName)
+				if err != nil {
+					slog.Warn("new note inbox user lookup failed", "user", userName, "err", err)
+					s.addToast(r, Toast{ID: uuid.NewString(), Message: "unable to load inbox selection", Kind: "error", CreatedAt: time.Now()})
+				} else {
+					accessCtx := index.WithAccessFilter(r.Context(), userID)
+					resolved, err := s.resolveNotePath(accessCtx, noteRef)
+					if err != nil {
+						slog.Warn("new note inbox resolve failed", "note", noteRef, "err", err)
+						s.addToast(r, Toast{ID: uuid.NewString(), Message: "unable to load inbox selection", Kind: "error", CreatedAt: time.Now()})
+					} else {
+						exists, err := s.idx.NoteExists(accessCtx, resolved)
+						if err != nil {
+							slog.Warn("new note inbox exists check failed", "note", resolved, "err", err)
+							s.addToast(r, Toast{ID: uuid.NewString(), Message: "unable to load inbox selection", Kind: "error", CreatedAt: time.Now()})
+						} else if !exists {
+							s.addToast(r, Toast{ID: uuid.NewString(), Message: "inbox source not found", Kind: "error", CreatedAt: time.Now()})
+						} else {
+							fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, resolved)
+							if err != nil {
+								slog.Warn("new note inbox path resolve failed", "note", resolved, "err", err)
+								s.addToast(r, Toast{ID: uuid.NewString(), Message: "unable to load inbox selection", Kind: "error", CreatedAt: time.Now()})
+							} else {
+								contentBytes, err := os.ReadFile(fullPath)
+								if err != nil {
+									slog.Warn("new note inbox read failed", "note", resolved, "err", err)
+									s.addToast(r, Toast{ID: uuid.NewString(), Message: "unable to load inbox selection", Kind: "error", CreatedAt: time.Now()})
+								} else {
+									inboxContent, err := extractInboxFromNote(string(contentBytes), startLine, endLine)
+									if err != nil {
+										slog.Warn("new note inbox extract failed", "note", resolved, "start", startLine, "end", endLine, "err", err)
+										s.addToast(r, Toast{ID: uuid.NewString(), Message: err.Error(), Kind: "error", CreatedAt: time.Now()})
+									} else {
+										rawContent = inboxContent
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 		if presetTitle != "" {
-			rawContent = "# " + presetTitle + "\n\n"
+			if rawContent == "" {
+				rawContent = "# " + presetTitle + "\n\n"
+			}
 		}
 		tempFrontmatter := fmt.Sprintf("---\nid: %s\n---\n", uploadToken)
 		attachments, attachmentBase := s.tempAttachmentView(selectedOwner, uploadToken)
@@ -10393,7 +10621,10 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		} else if ok {
 			renderCtx = withCollapsibleSectionState(renderCtx, state)
 		}
-		rendered, err := s.renderNoteBody(renderCtx, normalizedContent)
+		renderSource := index.StripFrontmatter(normalizeLineEndings(string(content)))
+		renderLines := strings.Split(renderSource, "\n")
+		renderLines = injectInboxLinks(renderLines, noteMeta.ID, baseURLForLinks(r, "/notes/new"), meta.Tasks)
+		rendered, err := s.renderNoteBody(renderCtx, []byte(strings.Join(renderLines, "\n")))
 		if err != nil {
 			return ViewData{}, http.StatusInternalServerError, err
 		}
@@ -10401,6 +10632,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return ViewData{}, http.StatusInternalServerError, err
 		}
+		rendered = addInboxLinkTarget(rendered)
 		if err == nil && IsAuthenticated(r.Context()) {
 			rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks)
 		}
