@@ -3,7 +3,7 @@
 -include .env.local
 export
 
-.PHONY: docker-build build docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build build docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images truenas-deploy
 
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
@@ -73,6 +73,20 @@ docker-prune-old-gwiki-images:
 		fi; \
 	done
 
+truenas-deploy:
+	@if [ -n "$(strip $(TRUENAS_SERVER))" ] && [ -n "$(strip $(TRUENAS_PATH))" ] && [ -n "$(strip $(TRUENAS_APP))" ]; then \
+		if [ ! -f .env.truenas ]; then \
+			echo "ERROR: .env.truenas not found"; \
+			exit 1; \
+		fi; \
+		echo "Deploying TrueNAS app $(TRUENAS_APP) on $(TRUENAS_SERVER)"; \
+		ssh truenas_admin@$(TRUENAS_SERVER) "midclt call app.stop $(TRUENAS_APP)"; \
+		scp .env.truenas truenas_admin@$(TRUENAS_SERVER):$(TRUENAS_PATH)/.env; \
+		ssh truenas_admin@$(TRUENAS_SERVER) "midclt call app.start $(TRUENAS_APP)"; \
+	else \
+		echo "Skipping TrueNAS deploy (set TRUENAS_SERVER, TRUENAS_PATH, TRUENAS_APP in .env.local)"; \
+	fi
+
 build: ensure-clean
 	@echo "Building image $(IMAGE):$(IMAGE_TAG)"
 	docker build --build-arg BUILD_TAG=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t $(IMAGE):$(IMAGE_TAG) .
@@ -82,6 +96,7 @@ build: ensure-clean
 	$(MAKE) update-env-image IMAGE_TAG=$(IMAGE_TAG)
 	$(MAKE) compose-restart
 	$(MAKE) docker-prune-old-gwiki-images
+	$(MAKE) truenas-deploy
 
 docker-run:
 	docker run --rm -p 8080:8080 -v $(WIKI_REPO_PATH):/notes -v $(WIKI_DATA_PATH):/data -e WIKI_REPO_PATH=/notes -e WIKI_DATA_PATH=/data gwiki

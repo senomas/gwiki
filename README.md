@@ -81,7 +81,14 @@ make build
 - pushes both version tag and `latest`,
 - updates `.env.local` with `GWIKI_IMAGE=...`,
 - restarts `docker compose` service `gwiki`,
-- removes local image tags for the selected repository older than 24h (keeps `latest`).
+- removes local image tags for the selected repository older than 24h (keeps `latest`),
+- optionally deploys to TrueNAS when `TRUENAS_SERVER`, `TRUENAS_PATH`, and `TRUENAS_APP` are set in `.env.local`.
+
+Optional TrueNAS deploy variables in `.env.local`:
+
+- `TRUENAS_SERVER` (example: `100.79.105.114`)
+- `TRUENAS_PATH` (example: `/mnt/data/config/gwiki`)
+- `TRUENAS_APP` (example: `gwiki`)
 
 ## Run (Local Go Binary)
 
