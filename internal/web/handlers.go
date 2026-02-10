@@ -6974,6 +6974,67 @@ func addInboxLinkTarget(html string) string {
 	})
 }
 
+func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []index.Task {
+	if len(tasks) == 0 {
+		return nil
+	}
+	parsedTasks := index.ParseContent(body).Tasks
+	if len(parsedTasks) == 0 {
+		return tasks
+	}
+	lineNosByHash := make(map[string][]int, len(parsedTasks))
+	for _, task := range parsedTasks {
+		hash := strings.TrimSpace(task.Hash)
+		if hash == "" || task.LineNo <= 0 {
+			continue
+		}
+		lineNosByHash[hash] = append(lineNosByHash[hash], task.LineNo)
+	}
+	if len(lineNosByHash) == 0 {
+		return tasks
+	}
+	used := make(map[string]int, len(lineNosByHash))
+	remapped := make([]index.Task, 0, len(tasks))
+	for _, task := range tasks {
+		hash := strings.TrimSpace(task.Hash)
+		if hash == "" {
+			remapped = append(remapped, task)
+			continue
+		}
+		lineNos := lineNosByHash[hash]
+		next := used[hash]
+		if next >= len(lineNos) {
+			remapped = append(remapped, task)
+			continue
+		}
+		mapped := task
+		mapped.LineNo = lineNos[next]
+		used[hash] = next + 1
+		remapped = append(remapped, mapped)
+	}
+	return remapped
+}
+
+func (s *Server) renderNoteContentHTML(r *http.Request, renderCtx context.Context, notePath string, noteID string, source string, tasks []index.Task) (string, error) {
+	body := index.StripFrontmatter(normalizeLineEndings(source))
+	lines := strings.Split(body, "\n")
+	inboxTasks := remapTasksToBodyLineNumbers(body, tasks)
+	lines = injectInboxLinks(lines, noteID, baseURLForLinks(r, "/notes/new"), inboxTasks)
+	rendered, err := s.renderNoteBody(renderCtx, []byte(strings.Join(lines, "\n")))
+	if err != nil {
+		return "", err
+	}
+	rendered = addInboxLinkTarget(rendered)
+	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("lookup file id for %s: %w", notePath, err)
+	}
+	if err == nil && IsAuthenticated(r.Context()) {
+		rendered = decorateTaskCheckboxes(rendered, fileID, tasks)
+	}
+	return rendered, nil
+}
+
 func fuzzyMatchTag(term string, candidate string) bool {
 	if term == "" {
 		return true
@@ -7570,26 +7631,11 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		noteMeta := index.FrontmatterAttributes(string(contentBytes))
 		body := index.StripFrontmatter(normalizeLineEndings(string(contentBytes)))
 		lines := strings.Split(body, "\n")
-		if noteMeta.ID != "" && len(noteTasks) > 0 {
-			taskLines := make([]index.Task, 0, len(noteTasks))
-			for _, task := range noteTasks {
-				taskLines = append(taskLines, index.Task{LineNo: task.LineNo})
-			}
-			lines = injectInboxLinks(lines, noteMeta.ID, baseURLForLinks(r, "/notes/new"), taskLines)
-		}
 		snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
-		htmlStr, err := s.renderNoteBody(r.Context(), []byte(snippet))
+		htmlStr, err := s.renderNoteContentHTML(r, r.Context(), path, noteMeta.ID, snippet, checkboxTasks)
 		if err != nil {
 			slog.Warn("render todo note snippet", "path", path, "err", err)
 			continue
-		}
-		htmlStr = addInboxLinkTarget(htmlStr)
-		fileID := 0
-		if len(noteTasks) > 0 {
-			fileID = noteTasks[0].FileID
-		}
-		if fileID > 0 && len(checkboxTasks) > 0 {
-			htmlStr = decorateTaskCheckboxes(htmlStr, fileID, checkboxTasks)
 		}
 		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
 		todoNotes = append(todoNotes, NoteCard{
@@ -8955,13 +9001,10 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	renderedBody, err := s.renderNoteBody(renderCtx, []byte(renderSource))
+	renderedBody, err := s.renderNoteContentHTML(r, renderCtx, notePath, meta.ID, renderSource, tasksForNote)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	if fileID > 0 && len(tasksForNote) > 0 {
-		renderedBody = decorateTaskCheckboxes(renderedBody, fileID, tasksForNote)
 	}
 	noteBody := fmt.Sprintf(
 		`<div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="%s" data-note-path="%s">%s</div>`,
@@ -10696,31 +10739,15 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	renderStart := time.Now()
 	renderCtx := r.Context()
-	sections, err := s.idx.CollapsedSections(renderCtx, noteMeta.ID)
-	if err != nil {
-		return ViewData{}, http.StatusInternalServerError, err
-	}
-	if state, ok, err := collapsedSectionStateFromSections(noteMeta.ID, sections); err != nil {
+	if state, ok, err := s.collapsedSectionState(renderCtx, noteMeta.ID); err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	} else if ok {
 		renderCtx = withCollapsibleSectionState(renderCtx, state)
 	}
-	renderSource := index.StripFrontmatter(normalizeLineEndings(string(content)))
-	renderLines := strings.Split(renderSource, "\n")
-	renderLines = injectInboxLinks(renderLines, noteMeta.ID, baseURLForLinks(r, "/notes/new"), meta.Tasks)
-	rendered, err := s.renderNoteBody(renderCtx, []byte(strings.Join(renderLines, "\n")))
+	htmlStr, err := s.renderNoteContentHTML(r, renderCtx, notePath, noteMeta.ID, string(normalizedContent), meta.Tasks)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
-	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return ViewData{}, http.StatusInternalServerError, err
-	}
-	rendered = addInboxLinkTarget(rendered)
-	if err == nil && IsAuthenticated(r.Context()) {
-		rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks)
-	}
-	htmlStr := rendered
 	slog.Debug("note view data rendered", "path", notePath, "duration_ms", time.Since(renderStart).Milliseconds())
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -10915,16 +10942,9 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		completedCount = count
 		renderTasks = tasks
 	}
-	htmlStr, err := s.renderNoteBody(renderCtx, renderContent)
+	htmlStr, err := s.renderNoteContentHTML(r, renderCtx, notePath, noteMeta.ID, string(renderContent), renderTasks)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
-	}
-	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return ViewData{}, http.StatusInternalServerError, err
-	}
-	if err == nil && IsAuthenticated(r.Context()) {
-		htmlStr = decorateTaskCheckboxes(htmlStr, fileID, renderTasks)
 	}
 	if info != nil {
 		labelTime := info.ModTime()
