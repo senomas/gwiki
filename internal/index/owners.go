@@ -17,8 +17,9 @@ type AccessMember struct {
 }
 
 type AccessPathRule struct {
-	Path    string
-	Members []AccessMember
+	Path       string
+	Visibility string
+	Members    []AccessMember
 }
 
 type OwnerSyncStats struct {
@@ -318,10 +319,11 @@ func (i *Index) SyncPathAccessWithStats(ctx context.Context, access map[string][
 		}
 		for _, rule := range rules {
 			pathName := normalizeAccessPath(rule.Path)
+			visibility := normalizeEffectiveVisibility(rule.Visibility)
 			if _, err := i.execContextTx(ctx, tx, `
-				INSERT OR REPLACE INTO path_access_files(owner_user_id, path, depth)
-				VALUES(?, ?, ?)
-			`, ownerID, pathName, accessPathDepth(pathName)); err != nil {
+				INSERT OR REPLACE INTO path_access_files(owner_user_id, path, depth, visibility)
+				VALUES(?, ?, ?, ?)
+			`, ownerID, pathName, accessPathDepth(pathName), visibility); err != nil {
 				return stats, err
 			}
 			for _, member := range rule.Members {
@@ -520,30 +522,47 @@ func (i *Index) accessBoundaryPath(ctx context.Context, ownerID int, relPath str
 }
 
 func (i *Index) accessBoundaryPathTx(ctx context.Context, tx *sql.Tx, ownerID int, relPath string) (string, bool, error) {
+	pathName, _, ok, err := i.accessBoundaryRuleTx(ctx, tx, ownerID, relPath)
+	return pathName, ok, err
+}
+
+func (i *Index) accessBoundaryVisibilityTx(ctx context.Context, tx *sql.Tx, ownerID int, relPath string) (string, error) {
+	_, visibility, ok, err := i.accessBoundaryRuleTx(ctx, tx, ownerID, relPath)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return VisibilityPrivate, nil
+	}
+	return visibility, nil
+}
+
+func (i *Index) accessBoundaryRuleTx(ctx context.Context, tx *sql.Tx, ownerID int, relPath string) (string, string, bool, error) {
 	relPath = normalizeAccessPath(relPath)
 	rows, err := i.queryContextTx(ctx, tx, `
-		SELECT path
+		SELECT path, visibility
 		FROM path_access_files
 		WHERE owner_user_id = ?
 		ORDER BY depth DESC
 	`, ownerID)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var pathName string
-		if err := rows.Scan(&pathName); err != nil {
-			return "", false, err
+		var visibility string
+		if err := rows.Scan(&pathName, &visibility); err != nil {
+			return "", "", false, err
 		}
 		if accessPathMatches(pathName, relPath) {
-			return pathName, true, nil
+			return pathName, normalizeEffectiveVisibility(visibility), true, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
-	return "", false, nil
+	return "", "", false, nil
 }
 
 func normalizeAccessPath(value string) string {
@@ -574,7 +593,7 @@ func accessPathMatches(rulePath, relPath string) bool {
 	if rulePath == "" {
 		return true
 	}
-	return strings.HasPrefix(relPath, rulePath+"/")
+	return relPath == rulePath || strings.HasPrefix(relPath, rulePath+"/")
 }
 
 func containsString(items []string, target string) bool {
@@ -635,7 +654,7 @@ func (i *Index) CountSharedNotesByOwner(ctx context.Context, userName string) (m
 		FROM files
 		JOIN users owners ON owners.id = files.user_id
 		LEFT JOIN file_access ON file_access.file_id = files.id AND file_access.grantee_user_id = ?
-		WHERE owners.name != ? AND (file_access.grantee_user_id IS NOT NULL OR files.visibility = 'public')
+		WHERE owners.name != ? AND (file_access.grantee_user_id IS NOT NULL OR files.visibility IN ('public', 'protected'))
 		GROUP BY owners.name
 	`, userID, userName)
 	if err != nil {

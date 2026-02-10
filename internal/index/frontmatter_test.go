@@ -34,6 +34,9 @@ func TestEnsureFrontmatterAddsFields(t *testing.T) {
 	if fm["priority"] != "10" {
 		t.Fatalf("expected priority to be 10, got %s", fm["priority"])
 	}
+	if fm["visibility"] != "inherited" {
+		t.Fatalf("expected visibility to be inherited, got %s", fm["visibility"])
+	}
 	if _, ok := fm["title"]; ok {
 		t.Fatalf("expected title to be omitted from frontmatter")
 	}
@@ -71,6 +74,9 @@ func TestEnsureFrontmatterPreservesIDAndCreated(t *testing.T) {
 	}
 	if fm["priority"] != "10" {
 		t.Fatalf("expected priority to default to 10, got %s", fm["priority"])
+	}
+	if fm["visibility"] != "inherited" {
+		t.Fatalf("expected visibility to default to inherited, got %s", fm["visibility"])
 	}
 	if _, ok := fm["title"]; ok {
 		t.Fatalf("expected title to be omitted from frontmatter")
@@ -165,6 +171,38 @@ func TestEnsureFrontmatterHistoryMergeWindow(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(fmLines, "\n"), "history:") {
 		t.Fatalf("expected history to be omitted")
+	}
+}
+
+func TestSetVisibilitySupportsInheritedAndProtected(t *testing.T) {
+	input := strings.Join([]string{
+		"---",
+		"id: abc",
+		"visibility: private",
+		"---",
+		"# Title",
+	}, "\n")
+
+	updated, err := SetVisibility(input, "inherited")
+	if err != nil {
+		t.Fatalf("SetVisibility inherited: %v", err)
+	}
+	attrs := FrontmatterAttributes(updated)
+	if attrs.Visibility != "inherited" {
+		t.Fatalf("expected inherited visibility, got %q", attrs.Visibility)
+	}
+
+	updated, err = SetVisibility(updated, "protected")
+	if err != nil {
+		t.Fatalf("SetVisibility protected: %v", err)
+	}
+	attrs = FrontmatterAttributes(updated)
+	if attrs.Visibility != "protected" {
+		t.Fatalf("expected protected visibility, got %q", attrs.Visibility)
+	}
+
+	if _, err := SetVisibility(updated, "unknown"); err == nil {
+		t.Fatalf("expected invalid visibility error")
 	}
 }
 

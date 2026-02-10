@@ -78,7 +78,15 @@ curl -sS -X POST http://localhost:8080/api/notes \
 
 ## Access discovery
 
-User access is discovered by scanning `.access.txt` files under `WIKI_REPO_PATH/<owner>/notes/**`. Each line is `user:access` with access `ro` or `rw`. The closest (deepest) `.access.txt` controls access for that subtree; users not listed there have no access to that subtree.
+User access is discovered by scanning `.access.txt` files under `WIKI_REPO_PATH/<owner>/notes/**`.
+
+- The first non-empty, non-comment line can be folder visibility: `public`, `protected`, `private`, or `inherited`.
+- Remaining lines are `user:access` with access `ro` or `rw`.
+- Folder visibility `inherited` resolves from the nearest parent folder.
+- Root folder default visibility is `private`; non-root default is `inherited`.
+- File frontmatter visibility defaults to `inherited`; inherited files use resolved folder visibility.
+- File visibility values other than `inherited` override folder visibility.
+- `protected` means all authenticated users can read; write still requires owner/rw grant.
 
 Access rules are stored in `path_access`/`path_access_files`, and `file_access` is precomputed during indexing for fast read filters (no path LIKE). Writes check the effective path rule for the specific note path.
 

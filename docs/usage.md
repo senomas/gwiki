@@ -51,13 +51,21 @@ WIKI_REPO_PATH/<owner>/notes/hobby/.access.txt
 
 Format:
 ```
+public|protected|private|inherited   # optional first non-comment line (folder visibility)
 alice:rw
 bob:ro
 ```
 
 Rules:
+- The first non-empty, non-comment line can set folder visibility: `public`, `protected`, `private`, or `inherited`.
 - Access values are `rw` (write) and `ro` (read).
-- The deepest `.access.txt` wins; if a user is not listed there, they have no access to that subtree.
+- Folder visibility `inherited` follows the nearest parent folder visibility.
+- Root folder default visibility is `private` when not explicitly defined.
+- Other folders default to `inherited` when not explicitly defined.
+- File frontmatter `visibility` defaults to `inherited`; inherited files use their folder visibility.
+- `protected` means any authenticated user can read, while write still needs owner/rw access.
+- If a file sets visibility to non-`inherited`, the file value overrides folder visibility.
+- The deepest `.access.txt` still controls path-based `ro`/`rw` grants for that subtree.
 
 ## Settings
 

@@ -102,7 +102,9 @@
         <div class="space-y-2">
           <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Visibility</label>
           <select class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="visibility">
-            <option value="private" {{if or (eq .NoteMeta.Visibility "") (eq .NoteMeta.Visibility "private")}}selected{{end}}>Private</option>
+            <option value="inherited" {{if or (eq .NoteMeta.Visibility "") (eq .NoteMeta.Visibility "inherited")}}selected{{end}}>Inherited</option>
+            <option value="private" {{if eq .NoteMeta.Visibility "private"}}selected{{end}}>Private</option>
+            <option value="protected" {{if eq .NoteMeta.Visibility "protected"}}selected{{end}}>Protected</option>
             <option value="public" {{if eq .NoteMeta.Visibility "public"}}selected{{end}}>Public</option>
           </select>
         </div>

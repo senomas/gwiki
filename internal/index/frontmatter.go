@@ -59,7 +59,7 @@ func ensureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 			"created: " + nowStr,
 			"updated: " + updatedVal,
 			"priority: 10",
-			"visibility: private",
+			"visibility: inherited",
 			"---",
 		}
 		if body == "" {
@@ -107,8 +107,9 @@ func ensureFrontmatterWithTitleAndUser(content string, now time.Time, maxUpdated
 	}
 	visibilityVal := valueOrEmpty(fmLines, lineIdx, "visibility")
 	if visibilityVal == "" {
-		visibilityVal = "private"
+		visibilityVal = VisibilityInherited
 	}
+	visibilityVal = normalizeDeclaredVisibility(visibilityVal)
 	if maxUpdated <= 0 {
 		maxUpdated = 1
 	}
@@ -150,9 +151,10 @@ func SetVisibility(content string, visibility string) (string, error) {
 	if visibility == "" {
 		return content, nil
 	}
-	if visibility != "public" && visibility != "private" {
+	if !isDeclaredVisibility(visibility) {
 		return "", fmt.Errorf("invalid visibility")
 	}
+	visibility = normalizeDeclaredVisibility(visibility)
 	fmLines, body, ok := splitFrontmatterLines(content)
 	if !ok {
 		return "", fmt.Errorf("frontmatter required")
@@ -533,7 +535,9 @@ func FrontmatterAttributes(content string) FrontmatterAttrs {
 		attrs.History = ParseHistoryEntries(content)
 	}
 	if attrs.Visibility == "" {
-		attrs.Visibility = "private"
+		attrs.Visibility = VisibilityInherited
+	} else {
+		attrs.Visibility = normalizeDeclaredVisibility(attrs.Visibility)
 	}
 	return attrs
 }

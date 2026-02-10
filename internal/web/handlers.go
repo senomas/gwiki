@@ -6034,7 +6034,11 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 			for _, member := range rule.Members {
 				members = append(members, index.AccessMember{User: member.User, Access: member.Access})
 			}
-			list = append(list, index.AccessPathRule{Path: rule.Path, Members: members})
+			list = append(list, index.AccessPathRule{
+				Path:       rule.Path,
+				Visibility: rule.Visibility,
+				Members:    members,
+			})
 		}
 		accessRules[owner] = list
 	}
@@ -6064,6 +6068,11 @@ func (s *Server) refreshAuthSources(ctx context.Context) error {
 		"grants_updated", accessStats.GrantsUpdated,
 		"grants_removed", accessStats.GrantsRemoved,
 	)
+	scanned, updated, cleaned, err := s.idx.RebuildFromFSWithStats(ctx, s.cfg.RepoPath)
+	if err != nil {
+		return err
+	}
+	slog.Debug("auth reload rebuild", "scanned", scanned, "updated", updated, "cleaned", cleaned)
 	return nil
 }
 
@@ -10733,8 +10742,15 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
 	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
-	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
-		return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
+	if !IsAuthenticated(r.Context()) {
+		publicCtx := index.WithPublicVisibility(r.Context())
+		visible, err := s.idx.NoteExists(publicCtx, notePath)
+		if err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+		if !visible {
+			return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
+		}
 	}
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	renderStart := time.Now()
@@ -10923,8 +10939,15 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
 	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
-	if !IsAuthenticated(r.Context()) && !strings.EqualFold(noteMeta.Visibility, "public") {
-		return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
+	if !IsAuthenticated(r.Context()) {
+		publicCtx := index.WithPublicVisibility(r.Context())
+		visible, err := s.idx.NoteExists(publicCtx, notePath)
+		if err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
+		if !visible {
+			return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
+		}
 	}
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
 	renderCtx := r.Context()

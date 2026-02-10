@@ -125,21 +125,16 @@ func main() {
 		slog.Error("load access file", "err", err)
 		os.Exit(1)
 	}
-	accessRules := make(map[string][]index.AccessPathRule, len(accessFile))
-	for owner, rules := range accessFile {
-		list := make([]index.AccessPathRule, 0, len(rules))
-		for _, rule := range rules {
-			members := make([]index.AccessMember, 0, len(rule.Members))
-			for _, member := range rule.Members {
-				members = append(members, index.AccessMember{User: member.User, Access: member.Access})
-			}
-			list = append(list, index.AccessPathRule{Path: rule.Path, Members: members})
-		}
-		accessRules[owner] = list
-	}
+	accessRules := convertAccessRules(accessFile)
 	if _, _, err := idx.SyncAuthSources(ctx, users, accessRules); err != nil {
 		slog.Error("sync access", "err", err)
 		os.Exit(1)
+	}
+	if scanned, updated, cleaned, err := idx.RebuildFromFSWithStats(ctx, cfg.RepoPath); err != nil {
+		slog.Error("rebuild after sync access", "err", err)
+		os.Exit(1)
+	} else {
+		slog.Info("index rebuild after sync access", "scanned", scanned, "updated", updated, "cleaned", cleaned)
 	}
 	syncGitHistoryOnStartup(ctx, cfg, idx, users)
 
@@ -322,15 +317,16 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index) 
 		anySuccess = true
 	}
 	if anySuccess {
-		scanned, updated, cleaned, recheckErr := idx.RecheckFromFS(ctx, cfg.RepoPath)
-		if recheckErr != nil {
-			slog.Warn("sync schedule recheck failed", "err", recheckErr)
-			return
-		}
-		slog.Info("sync schedule recheck", "scanned", scanned, "updated", updated, "cleaned", cleaned)
 		if err := refreshAuthSources(ctx, cfg, idx, users); err != nil {
 			slog.Warn("sync schedule auth refresh failed", "err", err)
+			return
 		}
+		scanned, updated, cleaned, rebuildErr := idx.RebuildFromFSWithStats(ctx, cfg.RepoPath)
+		if rebuildErr != nil {
+			slog.Warn("sync schedule rebuild failed", "err", rebuildErr)
+			return
+		}
+		slog.Info("sync schedule rebuild", "scanned", scanned, "updated", updated, "cleaned", cleaned)
 	}
 }
 
@@ -399,6 +395,12 @@ func refreshAuthSources(ctx context.Context, cfg config.Config, idx *index.Index
 	if err != nil {
 		return err
 	}
+	accessRules := convertAccessRules(accessFile)
+	_, _, err = idx.SyncAuthSources(ctx, users, accessRules)
+	return err
+}
+
+func convertAccessRules(accessFile auth.AccessFile) map[string][]index.AccessPathRule {
 	accessRules := make(map[string][]index.AccessPathRule, len(accessFile))
 	for owner, rules := range accessFile {
 		list := make([]index.AccessPathRule, 0, len(rules))
@@ -407,12 +409,15 @@ func refreshAuthSources(ctx context.Context, cfg config.Config, idx *index.Index
 			for _, member := range rule.Members {
 				members = append(members, index.AccessMember{User: member.User, Access: member.Access})
 			}
-			list = append(list, index.AccessPathRule{Path: rule.Path, Members: members})
+			list = append(list, index.AccessPathRule{
+				Path:       rule.Path,
+				Visibility: rule.Visibility,
+				Members:    members,
+			})
 		}
 		accessRules[owner] = list
 	}
-	_, _, err = idx.SyncAuthSources(ctx, users, accessRules)
-	return err
+	return accessRules
 }
 
 func pruneEmptyNotesDirs(repoPath string) (int, error) {

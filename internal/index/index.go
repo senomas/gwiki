@@ -244,8 +244,8 @@ func applyAccessFilter(ctx context.Context, clauses *[]string, args *[]interface
 	if table == "" {
 		table = "files"
 	}
-	*clauses = append(*clauses, "("+table+".visibility = ? OR EXISTS (SELECT 1 FROM file_access fa WHERE fa.file_id = "+table+".id AND fa.grantee_user_id = ?))")
-	*args = append(*args, "public", filter.userID)
+	*clauses = append(*clauses, "("+table+".visibility IN (?, ?) OR EXISTS (SELECT 1 FROM file_access fa WHERE fa.file_id = "+table+".id AND fa.grantee_user_id = ?))")
+	*args = append(*args, VisibilityPublic, VisibilityProtected, filter.userID)
 }
 
 func applyFolderFilter(folder string, rootOnly bool, clauses *[]string, args *[]interface{}, table string) {
@@ -478,6 +478,9 @@ func (i *Index) InitWithOwners(ctx context.Context, repoPath string, users []str
 	if err := i.ensureColumn(ctx, "users", "last_success_sync_unix", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := i.ensureColumn(ctx, "path_access_files", "visibility", "TEXT NOT NULL DEFAULT 'private'"); err != nil {
+		return err
+	}
 	scanned, updated, cleaned, err := i.RecheckFromFS(ctx, repoPath)
 	if err != nil {
 		return err
@@ -670,6 +673,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 32
+		case 32:
+			slog.Info("schema migration", "from", 32, "to", 33)
+			if err := i.migrate32To33(ctx); err != nil {
+				return err
+			}
+			version = 33
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1087,6 +1096,13 @@ func (i *Index) migrate31To32(ctx context.Context) error {
 	return nil
 }
 
+func (i *Index) migrate32To33(ctx context.Context) error {
+	if err := i.ensureColumn(ctx, "path_access_files", "visibility", "TEXT NOT NULL DEFAULT 'private'"); err != nil {
+		return err
+	}
+	return nil
+}
+
 type ownerRoot struct {
 	name      string
 	notesRoot string
@@ -1315,9 +1331,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	err = i.queryRowContextTx(ctx, tx, "SELECT id, created_at FROM files WHERE "+ownerClause+" AND path=?", ownerArgs...).Scan(&existingID, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		createdAt = time.Now().Unix()
-		visibility := attrs.Visibility
-		if visibility == "" {
-			visibility = "private"
+		visibility := normalizeDeclaredVisibility(attrs.Visibility)
+		if visibility == VisibilityInherited {
+			resolved, err := i.accessBoundaryVisibilityTx(ctx, tx, userID, relPath)
+			if err != nil {
+				return err
+			}
+			visibility = resolved
+		} else {
+			visibility = normalizeEffectiveVisibility(visibility)
 		}
 		etagTime := time.Now().UnixNano()
 		_, err = i.execContextTx(ctx, tx, `
@@ -1331,9 +1353,15 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 			return err
 		}
 	} else if err == nil {
-		visibility := attrs.Visibility
-		if visibility == "" {
-			visibility = "private"
+		visibility := normalizeDeclaredVisibility(attrs.Visibility)
+		if visibility == VisibilityInherited {
+			resolved, err := i.accessBoundaryVisibilityTx(ctx, tx, userID, relPath)
+			if err != nil {
+				return err
+			}
+			visibility = resolved
+		} else {
+			visibility = normalizeEffectiveVisibility(visibility)
 		}
 		etagTime := time.Now().UnixNano()
 		_, err = i.execContextTx(ctx, tx, `

@@ -85,8 +85,9 @@ Foreign note body.
 				})
 			}
 			converted = append(converted, index.AccessPathRule{
-				Path:    rule.Path,
-				Members: members,
+				Path:       rule.Path,
+				Visibility: rule.Visibility,
+				Members:    members,
 			})
 		}
 		accessRules[ownerName] = converted
