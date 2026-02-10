@@ -14,13 +14,14 @@ endif
 COMPOSE := docker compose $(COMPOSE_ENV_FILES)
 
 docker-build:
-	docker build --build-arg BUILD_TAG=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t gwiki .
+	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t gwiki .
 
 GIT_SHA_SHORT := $(shell git rev-parse --short HEAD)
-BUILD_TS := $(shell date +%Y%m%d%H%M%S)
-BUILD_VERSION_TS := $(shell date +%Y-%m-%d.%H:%M)
-BUILD_VERSION := $(BUILD_VERSION_TS)-$(GIT_SHA_SHORT)
-IMAGE_TAG := $(GIT_SHA_SHORT)-$(BUILD_TS)
+GIT_COMMIT_TS_COMPACT := $(shell git show -s --format=%cd --date=format:'%Y%m%d%H%M%S' HEAD)
+GIT_COMMIT_TS_DISPLAY := $(shell git show -s --format=%cd --date=format:'%Y-%m-%d.%H:%M' HEAD)
+BUILD_VERSION := $(GIT_COMMIT_TS_DISPLAY)-$(GIT_SHA_SHORT)
+BUILD_TAG := $(GIT_SHA_SHORT)-$(GIT_COMMIT_TS_COMPACT)
+IMAGE_TAG := $(BUILD_TAG)
 DOCKER_IMAGE_NAME ?= gwiki
 DOCKER_REGISTRY_TRIMMED := $(patsubst %/,%,$(strip $(DOCKER_REGISTRY)))
 ifeq ($(DOCKER_REGISTRY_TRIMMED),)
@@ -92,7 +93,7 @@ deploy:
 
 build: ensure-clean
 	@echo "Building image $(IMAGE):$(IMAGE_TAG)"
-	docker build --build-arg BUILD_TAG=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t $(IMAGE):$(IMAGE_TAG) .
+	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t $(IMAGE):$(IMAGE_TAG) .
 	docker tag $(IMAGE):$(IMAGE_TAG) $(IMAGE):latest
 	docker push $(IMAGE):$(IMAGE_TAG)
 	docker push $(IMAGE):latest
