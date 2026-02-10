@@ -663,7 +663,7 @@ View models and UI types.
 
 E2E tests run in Docker using the Playwright image (browsers bundled). The test runner installs Go and the Playwright driver inside the container.
 
-- `make e2e` starts a separate gwiki container on port `8082` and runs `go test` in `tests/e2e`.
-- Base URL is configured via `E2E_BASE_URL` (default `http://gwiki-e2e:8080` inside Docker).
+- `make e2e` starts the `gwiki` service and runs `go test` in `tests/e2e`.
+- Base URL is configured via `E2E_BASE_URL` (default `http://gwiki:8080` inside Docker).
 
 Smoke test checks the home page, sidebar, and calendar rendering.

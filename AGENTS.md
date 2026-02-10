@@ -43,8 +43,8 @@ Non-goals (v1)
 8. **Response structure**
    - Always provide a deep-dive analysis, an implementation plan, and test cases for the requested change.
 9. **Dev server rebuild trigger**
-   - `make dev` runs the server under `reflex` and restarts when `tmp/main` changes.
-   - After finishing code updates, always run `make dev-build` to rebuild `tmp/main` and trigger a restart before manual testing (and before committing).
+   - `make dev` runs the `gwiki` compose service using the configured image.
+   - After finishing code updates, always run `make build` to publish/restart before manual testing (and before committing).
 
 ---
 

@@ -47,26 +47,54 @@ container (published to `localhost:8080` by default).
 Set the host paths and start:
 
 ```bash
-WIKI_REPO_PATH_HOST=/path/to/your/wiki/repo WIKI_DATA_PATH_HOST=/path/to/your/wiki/.wiki docker compose up --build
+WIKI_REPO_PATH_HOST=/path/to/your/wiki/repo WIKI_DATA_PATH_HOST=/path/to/your/wiki/.wiki docker compose up -d
 ```
 
 Defaults to the current directory if `WIKI_REPO_PATH_HOST` is not set:
 
 ```bash
-docker compose up --build
+docker compose up -d
 ```
 
 Optional Compose envs:
 
 - `TZ` (default: `Asia/Jakarta`)
 - `UID` and `GID` (default: `1000`, container runs as this user)
+- `GWIKI_IMAGE` in `.env.local` (default fallback: `gwiki:latest`)
+- `DOCKER_REGISTRY` in `.env.local` for `make build` target (unset = Docker Hub)
+`docker-compose.yml` includes `docker-compose.app.yml` with `env_file` entries
+for both `.env` and `.env.local`, so plain `docker compose up` uses both.
 
-## Run (Local)
+Use `make dev` to run local dev via Compose (`gwiki` service).
+
+### Build and Deploy (Docker Registry + Compose Restart)
+
+Run:
+
+```bash
+make build
+```
+
+`make build` now:
+- fails when git working tree is not clean,
+- builds/tests in Docker and tags image as `<shortsha>-<yyyymmddHHMMSS>`,
+- pushes both version tag and `latest`,
+- updates `.env.local` with `GWIKI_IMAGE=...`,
+- restarts `docker compose` service `gwiki`,
+- removes local image tags for the selected repository older than 24h (keeps `latest`).
+
+## Run (Local Go Binary)
 
 Set the repo and data paths and start the server:
 
 ```bash
 WIKI_REPO_PATH=/path/to/your/wiki/repo WIKI_DATA_PATH=/path/to/your/wiki/.wiki go run ./cmd/wiki
+```
+
+For reflex-based local binary dev mode:
+
+```bash
+make dev-local
 ```
 
 The server creates `notes/` under `WIKI_REPO_PATH` and stores internal data under
