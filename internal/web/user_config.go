@@ -12,7 +12,6 @@ import (
 )
 
 type UserConfig struct {
-	CompactNoteList     *bool  `json:"compact-note-list"`
 	EditCommandTrigger  string `json:"edit-command-trigger"`
 	EditCommandTodo     string `json:"edit-command-todo"`
 	EditCommandToday    string `json:"edit-command-today"`
@@ -21,22 +20,13 @@ type UserConfig struct {
 }
 
 func defaultUserConfig() UserConfig {
-	val := true
 	return UserConfig{
-		CompactNoteList:     &val,
 		EditCommandTrigger:  "!",
 		EditCommandTodo:     "!",
 		EditCommandToday:    "d",
 		EditCommandTime:     "t",
 		EditCommandDateBase: "d",
 	}
-}
-
-func (c UserConfig) CompactNoteListValue() bool {
-	if c.CompactNoteList == nil {
-		return true
-	}
-	return *c.CompactNoteList
 }
 
 func (c UserConfig) EditCommandTriggerValue() string {

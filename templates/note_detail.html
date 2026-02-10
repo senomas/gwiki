@@ -48,8 +48,8 @@
       </div>
     </details>
   {{end}}
-  <div class="note-body text-sm leading-relaxed text-slate-200{{if .Short}} note-body--short{{end}}" data-note-id="{{.NoteMeta.ID}}" data-note-path="{{.NotePath}}">
-    {{if .RenderedHTML}}{{.RenderedHTML}}{{else}}{{template "note_content" .}}{{end}}
+  <div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="{{.NoteMeta.ID}}" data-note-path="{{.NotePath}}">
+    {{.RenderedHTML}}
   </div>
   {{if and .ShowCompletedSummary (gt .CompletedTaskCount 0)}}
   <div class="mt-3 border-t border-slate-800/70 pt-2 text-xs text-slate-500">

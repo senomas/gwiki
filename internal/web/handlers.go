@@ -311,7 +311,6 @@ func (s *Server) attachViewData(r *http.Request, data *ViewData) {
 	if err != nil {
 		slog.Warn("load user config", "err", err)
 	}
-	data.CompactNoteList = cfg.CompactNoteListValue()
 	data.EditCommandTrigger = cfg.EditCommandTriggerValue()
 	data.EditCommandTodo = cfg.EditCommandTodoValue()
 	data.EditCommandToday = cfg.EditCommandTodayValue()
@@ -8219,11 +8218,6 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	mode := strings.TrimSpace(r.Form.Get("list_view"))
-	if mode != "compact" && mode != "full" {
-		http.Error(w, "invalid list view", http.StatusBadRequest)
-		return
-	}
 	trigger := strings.TrimSpace(r.Form.Get("edit_command_trigger"))
 	todoToken := strings.TrimSpace(r.Form.Get("edit_command_todo"))
 	todayToken := strings.TrimSpace(r.Form.Get("edit_command_today"))
@@ -8270,8 +8264,6 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Warn("load user config", "err", err)
 	}
-	val := mode == "compact"
-	cfg.CompactNoteList = &val
 	cfg.EditCommandTrigger = trigger
 	cfg.EditCommandTodo = todoToken
 	cfg.EditCommandToday = todayToken
@@ -10493,7 +10485,7 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath string) {
-	data, status, err := s.buildNoteViewData(r, notePath, false)
+	data, status, err := s.buildNoteViewData(r, notePath)
 	if err != nil {
 		if status == http.StatusNotFound {
 			http.NotFound(w, r)
@@ -10526,7 +10518,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 }
 
 func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request, notePath string) {
-	data, status, err := s.buildNoteViewData(r, notePath, true)
+	data, status, err := s.buildNoteViewData(r, notePath)
 	if err != nil {
 		if status == http.StatusNotFound {
 			http.NotFound(w, r)
@@ -10554,7 +10546,7 @@ func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Request, notePath string) {
-	data, status, err := s.buildNoteViewData(r, notePath, false)
+	data, status, err := s.buildNoteViewData(r, notePath)
 	if err != nil {
 		if status == http.StatusNotFound {
 			http.NotFound(w, r)
@@ -10601,7 +10593,6 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	s.attachViewData(r, &data)
-	data.Short = data.CompactNoteList
 	etag := noteCardETag(data.NoteMeta, data.NoteHash, data.NoteEtagTime, currentUserName(r.Context()))
 	if etag != "" && strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
 		w.Header().Set("ETag", etag)
@@ -10652,9 +10643,9 @@ func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, erro
 	}, nil
 }
 
-func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody bool) (ViewData, int, error) {
+func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, int, error) {
 	start := time.Now()
-	slog.Debug("note view data start", "path", notePath, "render_body", renderBody)
+	slog.Debug("note view data start", "path", notePath)
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
 		return ViewData{}, http.StatusBadRequest, err
@@ -10703,37 +10694,34 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string, renderBody 
 		return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
 	}
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
-	htmlStr := ""
-	if renderBody {
-		renderStart := time.Now()
-		renderCtx := r.Context()
-		sections, err := s.idx.CollapsedSections(renderCtx, noteMeta.ID)
-		if err != nil {
-			return ViewData{}, http.StatusInternalServerError, err
-		}
-		if state, ok, err := collapsedSectionStateFromSections(noteMeta.ID, sections); err != nil {
-			return ViewData{}, http.StatusInternalServerError, err
-		} else if ok {
-			renderCtx = withCollapsibleSectionState(renderCtx, state)
-		}
-		renderSource := index.StripFrontmatter(normalizeLineEndings(string(content)))
-		renderLines := strings.Split(renderSource, "\n")
-		renderLines = injectInboxLinks(renderLines, noteMeta.ID, baseURLForLinks(r, "/notes/new"), meta.Tasks)
-		rendered, err := s.renderNoteBody(renderCtx, []byte(strings.Join(renderLines, "\n")))
-		if err != nil {
-			return ViewData{}, http.StatusInternalServerError, err
-		}
-		fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return ViewData{}, http.StatusInternalServerError, err
-		}
-		rendered = addInboxLinkTarget(rendered)
-		if err == nil && IsAuthenticated(r.Context()) {
-			rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks)
-		}
-		htmlStr = rendered
-		slog.Debug("note view data rendered", "path", notePath, "duration_ms", time.Since(renderStart).Milliseconds())
+	renderStart := time.Now()
+	renderCtx := r.Context()
+	sections, err := s.idx.CollapsedSections(renderCtx, noteMeta.ID)
+	if err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
 	}
+	if state, ok, err := collapsedSectionStateFromSections(noteMeta.ID, sections); err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
+	} else if ok {
+		renderCtx = withCollapsibleSectionState(renderCtx, state)
+	}
+	renderSource := index.StripFrontmatter(normalizeLineEndings(string(content)))
+	renderLines := strings.Split(renderSource, "\n")
+	renderLines = injectInboxLinks(renderLines, noteMeta.ID, baseURLForLinks(r, "/notes/new"), meta.Tasks)
+	rendered, err := s.renderNoteBody(renderCtx, []byte(strings.Join(renderLines, "\n")))
+	if err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
+	}
+	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return ViewData{}, http.StatusInternalServerError, err
+	}
+	rendered = addInboxLinkTarget(rendered)
+	if err == nil && IsAuthenticated(r.Context()) {
+		rendered = decorateTaskCheckboxes(rendered, fileID, meta.Tasks)
+	}
+	htmlStr := rendered
+	slog.Debug("note view data rendered", "path", notePath, "duration_ms", time.Since(renderStart).Milliseconds())
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
@@ -12953,29 +12941,18 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string)
 }
 
 func (s *Server) renderMarkdown(ctx context.Context, data []byte) (string, error) {
-	body := index.StripFrontmatter(string(data))
-	body = s.expandWikiLinks(ctx, body)
-	var b strings.Builder
-	parseContext := parser.NewContext()
-	parseContext.Set(mapsEmbedContextKey, ctx)
-	parseContext.Set(youtubeEmbedContextKey, ctx)
-	parseContext.Set(tiktokEmbedContextKey, ctx)
-	parseContext.Set(instagramEmbedContextKey, ctx)
-	parseContext.Set(chatgptEmbedContextKey, ctx)
-	parseContext.Set(attachmentVideoEmbedContextKey, attachmentVideoEmbedContextValue{ctx: ctx, server: s})
-	parseContext.Set(linkTitleContextKey, ctx)
-	if state, ok := collapsibleSectionStateFromContext(ctx); ok {
-		parseContext.Set(collapsibleSectionContextKey, state)
-	}
-	if err := mdRenderer.Convert([]byte(body), &b, parser.WithContext(parseContext)); err != nil {
-		return "", err
-	}
-	return applyRenderReplacements(b.String()), nil
+	return s.renderMarkdownWithOptions(ctx, data, false)
 }
 
 func (s *Server) renderNoteBody(ctx context.Context, data []byte) (string, error) {
+	return s.renderMarkdownWithOptions(ctx, data, true)
+}
+
+func (s *Server) renderMarkdownWithOptions(ctx context.Context, data []byte, stripHeading bool) (string, error) {
 	body := index.StripFrontmatter(string(data))
-	body = stripFirstHeading(body)
+	if stripHeading {
+		body = stripFirstHeading(body)
+	}
 	body = s.expandWikiLinks(ctx, body)
 	var b strings.Builder
 	parseContext := parser.NewContext()

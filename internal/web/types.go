@@ -17,7 +17,6 @@ type ViewData struct {
 	NotePath             string
 	NoteTitle            string
 	NoteFileName         string
-	Short                bool
 	RawContent           string
 	FrontmatterBlock     string
 	SaveAction           string
@@ -110,7 +109,6 @@ type ViewData struct {
 	SyncOwner            string
 	BrokenLinks          []BrokenLinkGroup
 	BuildVersion         string
-	CompactNoteList      bool
 	EditCommandTrigger   string
 	EditCommandTodo      string
 	EditCommandToday     string

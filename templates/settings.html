@@ -11,14 +11,6 @@
           {{if .ReturnURL}}
             <input type="hidden" name="return_url" value="{{.ReturnURL}}">
           {{end}}
-          <div class="space-y-2">
-            <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">List view</label>
-            <select class="w-full rounded-xl border border-slate-800/80 bg-[#0f1216] px-3 py-2 text-sm text-slate-100 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.5)] focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500/40" name="list_view">
-              <option value="compact" {{if .CompactNoteList}}selected{{end}}>Compact</option>
-              <option value="full" {{if .CompactNoteList}}{{else}}selected{{end}}>Full</option>
-            </select>
-            <p class="text-xs text-slate-500">Compact hides long note bodies in lists.</p>
-          </div>
           <div class="space-y-3">
             <label class="block text-xs uppercase tracking-[0.2em] text-slate-500">Edit commands</label>
             <div class="grid gap-3 sm:grid-cols-2">

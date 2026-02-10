@@ -617,10 +617,6 @@
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    .note-body--short {
-      max-height: 18rem;
-      overflow: hidden;
-    }
     .sidebar-shell {
       width: 100%;
     }
@@ -902,7 +898,7 @@
     }
   </style>
 </head>
-<body class="min-h-screen bg-[#0b0d0f] text-slate-100" data-note-list-mode="{{if .CompactNoteList}}compact{{else}}full{{end}}">
+<body class="min-h-screen bg-[#0b0d0f] text-slate-100">
 {{if or (eq .ContentTemplate "settings") (eq .ContentTemplate "login") (eq .ContentTemplate "change_password") (eq .ContentTemplate "change_password_ok") (eq .ContentTemplate "edit")}}
   {{template "layout_plain" .}}
 {{else}}
@@ -1067,26 +1063,6 @@
 
       function buildNoteURL(path) {
         return encodeURI("/notes/" + path);
-      }
-
-      function noteListView() {
-        return document.body.getAttribute("data-note-list-mode") || "compact";
-      }
-
-      function applyNoteListView(root) {
-        var mode = noteListView();
-        var container = root || document;
-        var lists = container.querySelectorAll("[data-note-list]");
-        lists.forEach(function (list) {
-          var bodies = list.querySelectorAll(".note-body");
-          bodies.forEach(function (body) {
-            if (mode === "compact") {
-              body.classList.add("note-body--short");
-            } else {
-              body.classList.remove("note-body--short");
-            }
-          });
-        });
       }
 
       function openWikiLauncher(ref, element) {
@@ -1653,18 +1629,6 @@
           submenu.setAttribute("aria-hidden", "true");
         }
       });
-
-      document.body.addEventListener("htmx:afterSwap", function (event) {
-        if (event.target && event.target.matches && event.target.matches("[data-note-list]")) {
-          applyNoteListView(event.target);
-          return;
-        }
-        if (event.target && event.target.querySelector && event.target.querySelector("[data-note-list]")) {
-          applyNoteListView(event.target);
-        }
-      });
-
-      applyNoteListView();
 
       document.addEventListener("click", function (event) {
         var target = event.target.closest(".js-wiki-missing");
