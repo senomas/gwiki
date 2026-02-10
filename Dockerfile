@@ -29,7 +29,9 @@ RUN apk add --no-cache gcc musl-dev
 COPY go.mod go.sum ./
 RUN go mod download
 ARG BUILD_TAG=dev
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
+COPY templates ./templates
 RUN CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
 RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_TAG}" -o /out/wiki ./cmd/wiki
 RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -o /out/user ./cmd/user

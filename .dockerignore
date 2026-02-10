@@ -1,6 +1,7 @@
 .git
 .github
 .gitignore
+.env*
 .wiki
 index.sqlite
 drafts
