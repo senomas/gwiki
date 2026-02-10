@@ -9,14 +9,54 @@
       <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
         No open tasks.
       </div>
-    {{end}}
-    {{range .TodoNotes}}
-      <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
-        {{ $noteURL := printf "/notes/%s" .Path }}
-        {{ if $.RawQuery }}{{ $noteURL = printf "/notes/%s?%s" .Path $.RawQuery }}{{ end }}
-        {{template "note_detail" (dict "NoteTitle" .Title "NoteMeta" .Meta "NotePath" .Path "NoteURL" $noteURL "RenderedHTML" .RenderedHTML)}}
-      </article>
+    {{else}}
+      {{template "todo_notes_chunk" .}}
     {{end}}
   </div>
 </section>
+{{end}}
+
+{{define "todo_notes_chunk"}}
+{{range .TodoNotes}}
+  {{template "todo_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .TodoHasMore}}
+  {{template "todo_next_loader" .}}
+{{end}}
+{{end}}
+
+{{define "todo_note_item"}}
+  {{ $note := .Note }}
+  {{ $root := .Root }}
+  <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+    {{ $noteURL := printf "/notes/%s" $note.Path }}
+    {{ if $root.RawQuery }}{{ $noteURL = printf "/notes/%s?%s" $note.Path $root.RawQuery }}{{ end }}
+    {{template "note_detail" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "RenderedHTML" $note.RenderedHTML "FolderLabel" $note.FolderLabel)}}
+  </article>
+{{end}}
+
+{{define "todo_next_loader"}}
+<div
+  class="home-section-loader"
+  hx-get="/todo/page?offset={{.TodoNextOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+>
+  {{template "todo_note_item_skeleton" .}}
+</div>
+{{end}}
+
+{{define "todo_note_item_skeleton"}}
+<article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+  <div class="mt-4 space-y-3">
+    <div class="note-skeleton-line note-skeleton-line--short"></div>
+    <div class="note-skeleton-meta note-skeleton-line note-skeleton-line--short"></div>
+    <div class="space-y-2">
+      <div class="note-skeleton-line"></div>
+      <div class="note-skeleton-line note-skeleton-line--long"></div>
+      <div class="note-skeleton-line note-skeleton-line--short"></div>
+    </div>
+  </div>
+</article>
 {{end}}

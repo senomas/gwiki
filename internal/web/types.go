@@ -73,6 +73,9 @@ type ViewData struct {
 	OpenTasks              []index.TaskItem
 	TodoTasks              []TaskView
 	TodoNotes              []NoteCard
+	TodoHasMore            bool
+	TodoNextOffset         int
+	TodoOffset             int
 	TodoCount              int
 	DueCount               int
 	TagLinks               []TagLink

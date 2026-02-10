@@ -5438,6 +5438,7 @@ func mapsEmbedQueryURL(value string) string {
 const (
 	homeNotesPageSize    = 50
 	homeSectionsMaxNotes = 5000
+	todoNotesPageSize    = 50
 )
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
@@ -7603,21 +7604,21 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	}
 	mentionTagsActive, noteTags := splitMentionTags(noteTags)
 	currentUser := currentUserName(r.Context())
-	mentionTagsFilter := append([]string{}, mentionTagsActive...)
-	if currentUser != "" {
-		currentMention := "@" + currentUser
-		found := false
-		for _, tag := range mentionTagsFilter {
-			if tag == currentMention {
-				found = true
-				break
-			}
-		}
-		if !found {
-			mentionTagsFilter = append(mentionTagsFilter, currentMention)
-		}
-	}
-	tasks, err := s.idx.OpenTasksWithMentions(r.Context(), noteTags, mentionTagsFilter, currentUser, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
+	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
+	todoNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
+		r,
+		r.Context(),
+		noteTags,
+		mentionTagsFilter,
+		currentUser,
+		activeDue,
+		dueDate,
+		activeFolder,
+		activeRoot,
+		activeJournal,
+		0,
+		todoNotesPageSize,
+	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -7675,6 +7676,149 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	data := ViewData{
+		Title:            "Todo",
+		ContentTemplate:  "todo",
+		TodoNotes:        todoNotes,
+		TodoHasMore:      hasMore,
+		TodoNextOffset:   nextOffset,
+		TodoOffset:       0,
+		Tags:             tags,
+		TagLinks:         tagLinks,
+		TodoCount:        todoCount,
+		DueCount:         dueCount,
+		ActiveTags:       urlTags,
+		TagQuery:         tagQuery,
+		FolderTree:       folderTree,
+		ActiveFolder:     activeFolder,
+		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      filterQuery,
+		HomeURL:          baseURL,
+		ActiveDate:       activeDate,
+		DateQuery:        buildDateQuery(activeDate),
+		SearchQuery:      activeSearch,
+		SearchQueryParam: buildSearchQuery(activeSearch),
+		UpdateDays:       updateDays,
+		CalendarMonth:    calendar,
+		JournalSidebar:   journalSidebar,
+		RawQuery:         queryWithout(currentURLString(r), "offset"),
+	}
+	applyCalendarLinks(&data, baseURL)
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	_, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	dueDate := ""
+	if activeDue {
+		dueDate = time.Now().Format("2006-01-02")
+	}
+	mentionTagsActive, noteTags := splitMentionTags(noteTags)
+	currentUser := currentUserName(r.Context())
+	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
+	todoNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
+		r,
+		r.Context(),
+		noteTags,
+		mentionTagsFilter,
+		currentUser,
+		activeDue,
+		dueDate,
+		activeFolder,
+		activeRoot,
+		activeJournal,
+		offset,
+		todoNotesPageSize,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	urlTags := append([]string{}, noteTags...)
+	urlTags = append(urlTags, mentionTagsActive...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	data := ViewData{
+		TodoNotes:        todoNotes,
+		TodoHasMore:      hasMore,
+		TodoNextOffset:   nextOffset,
+		TodoOffset:       offset,
+		TagQuery:         buildTagsQuery(urlTags),
+		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		SearchQueryParam: buildSearchQuery(activeSearch),
+		RawQuery:         queryWithout(currentURLString(r), "offset"),
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "todo_notes_chunk", data)
+}
+
+func buildTodoMentionTagsFilter(mentionTagsActive []string, currentUser string) []string {
+	mentionTagsFilter := append([]string{}, mentionTagsActive...)
+	if currentUser == "" {
+		return mentionTagsFilter
+	}
+	currentMention := "@" + currentUser
+	for _, tag := range mentionTagsFilter {
+		if tag == currentMention {
+			return mentionTagsFilter
+		}
+	}
+	return append(mentionTagsFilter, currentMention)
+}
+
+func (s *Server) loadTodoNotesPage(
+	r *http.Request,
+	ctx context.Context,
+	noteTags []string,
+	mentionTagsFilter []string,
+	currentUser string,
+	activeDue bool,
+	dueDate string,
+	activeFolder string,
+	activeRoot bool,
+	activeJournal bool,
+	offset int,
+	limit int,
+) ([]NoteCard, int, bool, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = todoNotesPageSize
+	}
+	tasks, err := s.idx.OpenTasksWithMentions(
+		ctx,
+		noteTags,
+		mentionTagsFilter,
+		currentUser,
+		homeSectionsMaxNotes,
+		activeDue,
+		dueDate,
+		activeFolder,
+		activeRoot,
+		activeJournal,
+	)
+	if err != nil {
+		return nil, offset, false, err
+	}
 	tasksByNote := make(map[string][]index.TaskItem)
 	noteTitles := make(map[string]string)
 	noteUpdated := make(map[string]time.Time)
@@ -7689,12 +7833,12 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 			noteTitles[task.Path] = task.Title
 			noteUpdated[task.Path] = task.UpdatedAt
 			noteEarliestDue[task.Path] = dueTime
-		} else if task.UpdatedAt.After(noteUpdated[task.Path]) {
+			continue
+		}
+		if task.UpdatedAt.After(noteUpdated[task.Path]) {
 			noteUpdated[task.Path] = task.UpdatedAt
-			if dueTime.Before(noteEarliestDue[task.Path]) {
-				noteEarliestDue[task.Path] = dueTime
-			}
-		} else if dueTime.Before(noteEarliestDue[task.Path]) {
+		}
+		if dueTime.Before(noteEarliestDue[task.Path]) {
 			noteEarliestDue[task.Path] = dueTime
 		}
 	}
@@ -7710,7 +7854,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		contentBytes, err := os.ReadFile(fullPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				_ = s.idx.RemoveNoteByPath(r.Context(), path)
+				_ = s.idx.RemoveNoteByPath(ctx, path)
 			}
 			continue
 		}
@@ -7718,12 +7862,12 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		body := index.StripFrontmatter(normalizeLineEndings(string(contentBytes)))
 		lines := strings.Split(body, "\n")
 		snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
-		htmlStr, err := s.renderNoteContentHTML(r, r.Context(), path, noteMeta.ID, snippet, checkboxTasks)
+		htmlStr, err := s.renderNoteContentHTML(r, ctx, path, noteMeta.ID, snippet, checkboxTasks)
 		if err != nil {
 			slog.Warn("render todo note snippet", "path", path, "err", err)
 			continue
 		}
-		folderLabel := s.noteFolderLabel(r.Context(), path, noteMeta.Folder)
+		folderLabel := s.noteFolderLabel(ctx, path, noteMeta.Folder)
 		todoNotes = append(todoNotes, NoteCard{
 			Path:         path,
 			Title:        noteTitles[path],
@@ -7746,32 +7890,16 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		}
 		return leftUpdated.Before(rightUpdated)
 	})
-	data := ViewData{
-		Title:            "Todo",
-		ContentTemplate:  "todo",
-		TodoNotes:        todoNotes,
-		Tags:             tags,
-		TagLinks:         tagLinks,
-		TodoCount:        todoCount,
-		DueCount:         dueCount,
-		ActiveTags:       urlTags,
-		TagQuery:         tagQuery,
-		FolderTree:       folderTree,
-		ActiveFolder:     activeFolder,
-		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:      filterQuery,
-		HomeURL:          baseURL,
-		ActiveDate:       activeDate,
-		DateQuery:        buildDateQuery(activeDate),
-		SearchQuery:      activeSearch,
-		SearchQueryParam: buildSearchQuery(activeSearch),
-		UpdateDays:       updateDays,
-		CalendarMonth:    calendar,
-		JournalSidebar:   journalSidebar,
+	if offset >= len(todoNotes) {
+		return []NoteCard{}, offset, false, nil
 	}
-	applyCalendarLinks(&data, baseURL)
-	s.attachViewData(r, &data)
-	s.views.RenderPage(w, data)
+	end := offset + limit
+	if end > len(todoNotes) {
+		end = len(todoNotes)
+	}
+	nextOffset := end
+	hasMore := nextOffset < len(todoNotes)
+	return todoNotes[offset:end], nextOffset, hasMore, nil
 }
 
 func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []index.Task) {

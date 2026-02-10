@@ -265,6 +265,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/tags/suggest", s.handleTagSuggest)
 	s.mux.HandleFunc("/users/suggest", s.handleUserSuggest)
 	s.mux.HandleFunc("/tasks", s.handleTasks)
+	s.mux.HandleFunc("/todo/page", s.handleTodoPage)
 	s.mux.HandleFunc("/todo", s.handleTodo)
 	s.mux.HandleFunc("/broken", s.handleBroken)
 	s.mux.HandleFunc("/quick/notes", s.handleQuickNotes)
