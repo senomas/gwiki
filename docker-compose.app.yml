@@ -7,13 +7,16 @@ services:
       - "${WIKI_REPO_PATH_HOST:-.}:/notes"
       - "${WIKI_DATA_PATH_HOST:-./.wiki}:/data"
       - "${GIT_HOME_HOST:-./git-home}:/git-home"
+      - "${LOG_PATH_HOST:-./log}:/app/log"
     user: "${UID:-1000}:${GID:-1000}"
     environment:
+      - DEV=${DEV:-}
       - HOME=/home/gwiki
       - GIT_CONFIG_GLOBAL=/git-home/.gitconfig
       - GIT_CREDENTIALS_FILE=/git-home/.git-credentials
       - WIKI_REPO_PATH=/notes
       - WIKI_DATA_PATH=/data
+      - WIKI_DEV_LOG_FILE=/app/log/dev.log
       - TZ=${TZ:-Asia/Jakarta}
 
   e2e:

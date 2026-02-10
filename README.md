@@ -60,6 +60,7 @@ Optional Compose envs:
 
 - `TZ` (default: `Asia/Jakarta`)
 - `UID` and `GID` (default: `1000`, container runs as this user)
+- `LOG_PATH_HOST` (default: `./log`, mounted to `/app/log` for `dev.log`)
 - `GWIKI_IMAGE` in `.env.local` (default fallback: `gwiki:latest`)
 - `DOCKER_REGISTRY` in `.env.local` for `make build` target (unset = Docker Hub)
 `docker-compose.yml` includes `docker-compose.app.yml` with `env_file` entries

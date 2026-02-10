@@ -44,6 +44,7 @@ Non-goals (v1)
    - Always provide a deep-dive analysis, an implementation plan, and test cases for the requested change.
 9. **Dev server rebuild trigger**
    - `make dev` runs the `gwiki` compose service using the configured image.
+   - `make dev-build` is deprecated/removed.
    - After finishing code updates, always run `make build` to publish/restart before manual testing (and before committing).
 
 ---

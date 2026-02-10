@@ -27,9 +27,22 @@ func main() {
 	level := parseLogLevel(os.Getenv("WIKI_DEBUG_LEVEL"))
 	pretty := strings.EqualFold(os.Getenv("WIKI_LOG_PRETTY"), "1") || strings.EqualFold(os.Getenv("WIKI_LOG_PRETTY"), "true")
 	if strings.TrimSpace(os.Getenv("DEV")) != "" {
-		file, err := os.Create("dev.log")
+		logPath := strings.TrimSpace(os.Getenv("WIKI_DEV_LOG_FILE"))
+		if logPath == "" {
+			logPath = "dev.log"
+		}
+		displayLogPath := logPath
+		if absPath, absErr := filepath.Abs(logPath); absErr == nil {
+			displayLogPath = absPath
+		}
+		if dir := filepath.Dir(logPath); dir != "." {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				slog.Error("create log dir", "path", dir, "err", err)
+			}
+		}
+		file, err := os.Create(logPath)
 		if err != nil {
-			slog.Error("open log file", "path", "dev.log", "err", err)
+			slog.Error("open log file", "path", displayLogPath, "err", err)
 		} else {
 			defer file.Close()
 			_, _ = fmt.Fprintf(file, "=== gwiki dev log start %s ===\n", time.Now().Format(time.RFC3339))
