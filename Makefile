@@ -41,13 +41,15 @@ ensure-clean:
 	fi
 
 update-env-image:
-	@touch .env.local
-	@if rg -q '^GWIKI_IMAGE=' .env.local; then \
-		sed -i 's|^GWIKI_IMAGE=.*|GWIKI_IMAGE=$(IMAGE):$(IMAGE_TAG)|' .env.local; \
-	else \
-		printf '\nGWIKI_IMAGE=%s:%s\n' "$(IMAGE)" "$(IMAGE_TAG)" >> .env.local; \
-	fi
-	@echo "Updated .env.local with GWIKI_IMAGE=$(IMAGE):$(IMAGE_TAG)"
+	@for env_file in .env.local .env.truenas; do \
+		touch "$$env_file"; \
+		if rg -q '^GWIKI_IMAGE=' "$$env_file"; then \
+			sed -i 's|^GWIKI_IMAGE=.*|GWIKI_IMAGE=$(IMAGE):$(IMAGE_TAG)|' "$$env_file"; \
+		else \
+			printf '\nGWIKI_IMAGE=%s:%s\n' "$(IMAGE)" "$(IMAGE_TAG)" >> "$$env_file"; \
+		fi; \
+		echo "Updated $$env_file with GWIKI_IMAGE=$(IMAGE):$(IMAGE_TAG)"; \
+	done
 
 compose-restart:
 	$(COMPOSE) up -d --force-recreate gwiki

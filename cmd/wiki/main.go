@@ -51,6 +51,11 @@ func main() {
 	}
 
 	cfg := config.Load()
+	version := strings.TrimSpace(web.BuildVersion)
+	if version == "" {
+		version = "dev"
+	}
+	slog.Info("startup", "build_version", version)
 	index.SetBuildVersion(web.BuildVersion)
 	if cfg.RepoPath == "" {
 		slog.Error("WIKI_REPO_PATH is required")

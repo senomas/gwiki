@@ -79,7 +79,7 @@ make build
 - fails when git working tree is not clean,
 - builds/tests in Docker and tags image as `<shortsha>-<yyyymmddHHMMSS>`,
 - pushes both version tag and `latest`,
-- updates `.env.local` with `GWIKI_IMAGE=...`,
+- updates both `.env.local` and `.env.truenas` with `GWIKI_IMAGE=...`,
 - restarts `docker compose` service `gwiki`,
 - removes local image tags for the selected repository older than 24h (keeps `latest`).
 
