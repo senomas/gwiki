@@ -5072,6 +5072,12 @@ func (i *Index) PathByUID(ctx context.Context, uid string) (string, error) {
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := fmt.Sprintf("SELECT files.path, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	if filter, ok := accessFilterFromContext(ctx); ok && filter.userID > 0 {
+		query += " ORDER BY CASE WHEN files.user_id = ? THEN 0 ELSE 1 END, files.updated_at DESC, files.id DESC LIMIT 1"
+		args = append(args, filter.userID)
+	} else {
+		query += " ORDER BY files.updated_at DESC, files.id DESC LIMIT 1"
+	}
 	if err := i.queryRowContext(ctx, query, args...).Scan(&relPath, &ownerName); err != nil {
 		return "", err
 	}
@@ -5091,6 +5097,12 @@ func (i *Index) PathTitleByUID(ctx context.Context, uid string) (string, string,
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	query := fmt.Sprintf("SELECT files.path, files.title, %s FROM files %s WHERE %s", ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	if filter, ok := accessFilterFromContext(ctx); ok && filter.userID > 0 {
+		query += " ORDER BY CASE WHEN files.user_id = ? THEN 0 ELSE 1 END, files.updated_at DESC, files.id DESC LIMIT 1"
+		args = append(args, filter.userID)
+	} else {
+		query += " ORDER BY files.updated_at DESC, files.id DESC LIMIT 1"
+	}
 	if err := i.queryRowContext(ctx, query, args...).Scan(&relPath, &title, &ownerName); err != nil {
 		return "", "", err
 	}
