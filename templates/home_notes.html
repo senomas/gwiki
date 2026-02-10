@@ -105,3 +105,16 @@
   </div>
 </article>
 {{end}}
+
+{{define "home_section_next_loader"}}
+{{$root := .Root}}
+<div
+  class="home-section-loader"
+  hx-get="/notes/section?name={{.SectionName}}{{if $root.TagQuery}}&t={{$root.TagQuery}}{{end}}{{if $root.FolderQuery}}&f={{$root.FolderQuery}}{{end}}{{if $root.SearchQueryParam}}&s={{$root.SearchQueryParam}}{{end}}{{if $root.HomeOwner}}&o={{$root.HomeOwner}}{{end}}&offset={{.NextOffset}}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+>
+  {{template "home_note_item_skeleton" $root}}
+</div>
+{{end}}

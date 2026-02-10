@@ -5436,7 +5436,7 @@ func mapsEmbedQueryURL(value string) string {
 }
 
 const (
-	homeNotesPageSize    = 6
+	homeNotesPageSize    = 50
 	homeSectionsMaxNotes = 5000
 )
 
@@ -7258,6 +7258,12 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "missing section", http.StatusBadRequest)
 		return
 	}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
 	ownerName := strings.TrimSpace(r.URL.Query().Get("o"))
 	if ownerName != "" {
 		normalized, ok := ownerHomeName("/" + ownerName)
@@ -7310,47 +7316,118 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 
 	switch section {
 	case "planned":
-		plannedNotes, err := s.loadHomeSectionNotes(r.Context(), "planned", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		plannedNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "planned", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		data.HomePlannedNotes = plannedNotes
+		data.HomePlannedHasMore = hasMore
+		data.HomePlannedNextOffset = nextOffset
 		s.attachViewData(r, &data)
+		if offset > 0 {
+			s.views.RenderTemplate(w, "home_section_planned_chunk", data)
+			return
+		}
 		s.views.RenderTemplate(w, "home_section_planned", data)
 	case "rest":
-		weekNotes, err := s.loadHomeSectionNotes(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		weekNotes, weekNextOffset, weekHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		monthNotes, err := s.loadHomeSectionNotes(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		monthNotes, monthNextOffset, monthHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		yearNotes, err := s.loadHomeSectionNotes(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		yearNotes, yearNextOffset, yearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		lastYearNotes, err := s.loadHomeSectionNotes(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		lastYearNotes, lastYearNextOffset, lastYearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		otherNotes, err := s.loadHomeSectionNotes(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
+		otherNotes, otherNextOffset, otherHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		data.HomeWeekNotes = weekNotes
+		data.HomeWeekHasMore = weekHasMore
+		data.HomeWeekNextOffset = weekNextOffset
 		data.HomeMonthNotes = monthNotes
+		data.HomeMonthHasMore = monthHasMore
+		data.HomeMonthNextOffset = monthNextOffset
 		data.HomeYearNotes = yearNotes
+		data.HomeYearHasMore = yearHasMore
+		data.HomeYearNextOffset = yearNextOffset
 		data.HomeLastYearNotes = lastYearNotes
+		data.HomeLastYearHasMore = lastYearHasMore
+		data.HomeLastYearNextOffset = lastYearNextOffset
 		data.HomeOtherNotes = otherNotes
+		data.HomeOtherHasMore = otherHasMore
+		data.HomeOtherNextOffset = otherNextOffset
 		s.attachViewData(r, &data)
 		s.views.RenderTemplate(w, "home_section_rest", data)
+	case "week":
+		weekNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.HomeWeekNotes = weekNotes
+		data.HomeWeekHasMore = hasMore
+		data.HomeWeekNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "home_section_week_chunk", data)
+	case "month":
+		monthNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.HomeMonthNotes = monthNotes
+		data.HomeMonthHasMore = hasMore
+		data.HomeMonthNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "home_section_month_chunk", data)
+	case "year":
+		yearNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.HomeYearNotes = yearNotes
+		data.HomeYearHasMore = hasMore
+		data.HomeYearNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "home_section_year_chunk", data)
+	case "lastYear":
+		lastYearNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.HomeLastYearNotes = lastYearNotes
+		data.HomeLastYearHasMore = hasMore
+		data.HomeLastYearNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "home_section_last_year_chunk", data)
+	case "others":
+		otherNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data.HomeOtherNotes = otherNotes
+		data.HomeOtherHasMore = hasMore
+		data.HomeOtherNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "home_section_other_chunk", data)
 	default:
 		http.Error(w, "unknown section", http.StatusBadRequest)
 	}
@@ -9330,6 +9407,17 @@ func homeSectionBounds(now time.Time) (time.Time, time.Time, time.Time, time.Tim
 }
 
 func (s *Server) loadHomeSectionNotes(ctx context.Context, section string, tags []string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string) ([]NoteCard, error) {
+	notes, _, _, err := s.loadHomeSectionNotesPage(ctx, section, tags, activeSearch, folder, rootOnly, journalOnly, ownerName, 0, homeSectionsMaxNotes)
+	return notes, err
+}
+
+func (s *Server) loadHomeSectionNotesPage(ctx context.Context, section string, tags []string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string, offset int, limit int) ([]NoteCard, int, bool, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = homeNotesPageSize
+	}
 	filter := index.NoteListFilter{
 		Tags:        tags,
 		Query:       activeSearch,
@@ -9337,8 +9425,8 @@ func (s *Server) loadHomeSectionNotes(ctx context.Context, section string, tags 
 		Root:        rootOnly,
 		JournalOnly: journalOnly,
 		OwnerName:   ownerName,
-		Limit:       homeSectionsMaxNotes,
-		Offset:      0,
+		Limit:       limit + 1,
+		Offset:      offset,
 	}
 	priorityMin := 6
 	priorityMax := 5
@@ -9387,13 +9475,22 @@ func (s *Server) loadHomeSectionNotes(ctx context.Context, section string, tags 
 		updatedBefore := startOfLastYear.Unix()
 		filter.UpdatedBefore = &updatedBefore
 	default:
-		return nil, fmt.Errorf("unknown section %q", section)
+		return nil, offset, false, fmt.Errorf("unknown section %q", section)
 	}
 	notes, err := s.idx.NoteList(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, offset, false, err
 	}
-	return s.buildNoteCardsFromSummaries(ctx, notes)
+	hasMore := len(notes) > limit
+	if hasMore {
+		notes = notes[:limit]
+	}
+	nextOffset := offset + len(notes)
+	cards, err := s.buildNoteCardsFromSummaries(ctx, notes)
+	if err != nil {
+		return nil, offset, false, err
+	}
+	return cards, nextOffset, hasMore, nil
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {

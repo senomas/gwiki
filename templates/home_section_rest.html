@@ -1,56 +1,91 @@
 {{define "home_section_rest"}}
 {{if .HomeWeekNotes}}
 <details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Week ({{len .HomeWeekNotes}} notes)</summary>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Week</summary>
   <div class="space-y-4 pt-2">
-  {{range .HomeWeekNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
+    {{template "home_section_week_chunk" .}}
   </div>
 </details>
 {{end}}
 
 {{if .HomeMonthNotes}}
 <details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Month ({{len .HomeMonthNotes}} notes)</summary>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Month</summary>
   <div class="space-y-4 pt-2">
-  {{range .HomeMonthNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
+    {{template "home_section_month_chunk" .}}
   </div>
 </details>
 {{end}}
 
 {{if .HomeYearNotes}}
 <details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Year ({{len .HomeYearNotes}} notes)</summary>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">This Year</summary>
   <div class="space-y-4 pt-2">
-  {{range .HomeYearNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
+    {{template "home_section_year_chunk" .}}
   </div>
 </details>
 {{end}}
 
 {{if .HomeLastYearNotes}}
 <details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Last Year ({{len .HomeLastYearNotes}} notes)</summary>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Last Year</summary>
   <div class="space-y-4 pt-2">
-  {{range .HomeLastYearNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
+    {{template "home_section_last_year_chunk" .}}
   </div>
 </details>
 {{end}}
 
 {{if .HomeOtherNotes}}
 <details class="home-section" open>
-  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Others ({{len .HomeOtherNotes}} notes)</summary>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Others</summary>
   <div class="space-y-4 pt-2">
-  {{range .HomeOtherNotes}}
-    {{template "home_note_item" (dict "Note" . "Root" $)}}
-  {{end}}
+    {{template "home_section_other_chunk" .}}
   </div>
 </details>
+{{end}}
+{{end}}
+
+{{define "home_section_week_chunk"}}
+{{range .HomeWeekNotes}}
+  {{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeWeekHasMore}}
+  {{template "home_section_next_loader" (dict "SectionName" "week" "NextOffset" .HomeWeekNextOffset "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "home_section_month_chunk"}}
+{{range .HomeMonthNotes}}
+  {{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeMonthHasMore}}
+  {{template "home_section_next_loader" (dict "SectionName" "month" "NextOffset" .HomeMonthNextOffset "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "home_section_year_chunk"}}
+{{range .HomeYearNotes}}
+  {{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeYearHasMore}}
+  {{template "home_section_next_loader" (dict "SectionName" "year" "NextOffset" .HomeYearNextOffset "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "home_section_last_year_chunk"}}
+{{range .HomeLastYearNotes}}
+  {{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeLastYearHasMore}}
+  {{template "home_section_next_loader" (dict "SectionName" "lastYear" "NextOffset" .HomeLastYearNextOffset "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "home_section_other_chunk"}}
+{{range .HomeOtherNotes}}
+  {{template "home_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeOtherHasMore}}
+  {{template "home_section_next_loader" (dict "SectionName" "others" "NextOffset" .HomeOtherNextOffset "Root" .)}}
 {{end}}
 {{end}}
