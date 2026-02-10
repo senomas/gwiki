@@ -3,7 +3,7 @@
 -include .env.local
 export
 
-.PHONY: docker-build build docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images truenas-deploy
+.PHONY: docker-build build deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
 
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
@@ -18,8 +18,9 @@ docker-build:
 
 GIT_SHA_SHORT := $(shell git rev-parse --short HEAD)
 BUILD_TS := $(shell date +%Y%m%d%H%M%S)
-BUILD_VERSION := $(GIT_SHA_SHORT)-$(BUILD_TS)
-IMAGE_TAG := $(BUILD_VERSION)
+BUILD_VERSION_TS := $(shell date +%Y-%m-%d.%H:%M)
+BUILD_VERSION := $(BUILD_VERSION_TS)-$(GIT_SHA_SHORT)
+IMAGE_TAG := $(GIT_SHA_SHORT)-$(BUILD_TS)
 DOCKER_IMAGE_NAME ?= gwiki
 DOCKER_REGISTRY_TRIMMED := $(patsubst %/,%,$(strip $(DOCKER_REGISTRY)))
 ifeq ($(DOCKER_REGISTRY_TRIMMED),)
@@ -73,7 +74,7 @@ docker-prune-old-gwiki-images:
 		fi; \
 	done
 
-truenas-deploy:
+deploy:
 	@if [ -n "$(strip $(TRUENAS_SERVER))" ] && [ -n "$(strip $(TRUENAS_PATH))" ] && [ -n "$(strip $(TRUENAS_APP))" ]; then \
 		if [ ! -f .env.truenas ]; then \
 			echo "ERROR: .env.truenas not found"; \
@@ -96,7 +97,6 @@ build: ensure-clean
 	$(MAKE) update-env-image IMAGE_TAG=$(IMAGE_TAG)
 	$(MAKE) compose-restart
 	$(MAKE) docker-prune-old-gwiki-images
-	$(MAKE) truenas-deploy
 
 docker-run:
 	docker run --rm -p 8080:8080 -v $(WIKI_REPO_PATH):/notes -v $(WIKI_DATA_PATH):/data -e WIKI_REPO_PATH=/notes -e WIKI_DATA_PATH=/data gwiki
@@ -110,7 +110,7 @@ dev-local:
 		if [ ! -f ./tmp/main ]; then \
 			$(MAKE) static; \
 			mkdir -p ./tmp; \
-			WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) go build -tags "sqlite_fts5" -ldflags "-X gwiki/internal/web.BuildVersion=$$(date +%Y.%m.%d.%H.%M.%S)" -o ./tmp/main ./cmd/wiki; \
+			WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) go build -tags "sqlite_fts5" -ldflags "-X gwiki/internal/web.BuildVersion=$(BUILD_VERSION)" -o ./tmp/main ./cmd/wiki; \
 		fi; \
 		DEV=1 WIKI_REPO_PATH=$(WIKI_REPO_PATH) WIKI_DATA_PATH=$(WIKI_DATA_PATH) WIKI_DEBUG_LEVEL=info WIKI_LOG_PRETTY=1 WIKI_AUTH_SECRET=dev-secret-key reflex -s -r 'tmp/main$$' -- sh -lc './tmp/main'; \
 	else \

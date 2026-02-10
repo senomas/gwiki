@@ -67,7 +67,7 @@ for both `.env` and `.env.local`, so plain `docker compose up` uses both.
 
 Use `make dev` to run local dev via Compose (`gwiki` service).
 
-### Build and Deploy (Docker Registry + Compose Restart)
+### Build (Docker Registry + Compose Restart)
 
 Run:
 
@@ -81,8 +81,17 @@ make build
 - pushes both version tag and `latest`,
 - updates `.env.local` with `GWIKI_IMAGE=...`,
 - restarts `docker compose` service `gwiki`,
-- removes local image tags for the selected repository older than 24h (keeps `latest`),
-- optionally deploys to TrueNAS when `TRUENAS_SERVER`, `TRUENAS_PATH`, and `TRUENAS_APP` are set in `.env.local`.
+- removes local image tags for the selected repository older than 24h (keeps `latest`).
+
+### Deploy to TrueNAS
+
+Run:
+
+```bash
+make deploy
+```
+
+`make deploy` uses `TRUENAS_SERVER`, `TRUENAS_PATH`, and `TRUENAS_APP` from `.env.local`.
 
 Optional TrueNAS deploy variables in `.env.local`:
 
