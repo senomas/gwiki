@@ -246,3 +246,83 @@ func TestDueTasksSnippetWithDefaultDate(t *testing.T) {
 		t.Fatalf("unexpected snippet:\n%s", out)
 	}
 }
+
+func TestFilterCompletedTasksWithHidden(t *testing.T) {
+	input := strings.Join([]string{
+		"# Title",
+		"",
+		"- [ ] open task",
+		"- [x] done task",
+		"  hidden detail",
+		"",
+		"## Empty",
+		"",
+		"## Keep",
+		"visible text",
+		"",
+		"- [x] done task two",
+		"",
+		"after",
+	}, "\n")
+
+	result := FilterCompletedTasksWithHidden(input)
+
+	if result.CompletedCount != 2 {
+		t.Fatalf("expected completed count 2, got %d", result.CompletedCount)
+	}
+	if len(result.OpenTasks) != 1 {
+		t.Fatalf("expected 1 open task, got %d", len(result.OpenTasks))
+	}
+	if result.OpenTasks[0].LineNo != 3 {
+		t.Fatalf("expected open task line 3, got %d", result.OpenTasks[0].LineNo)
+	}
+	if strings.Contains(result.Visible, "done task") {
+		t.Fatalf("visible snippet should not include completed tasks:\n%s", result.Visible)
+	}
+	if strings.Contains(result.Visible, "## Empty") {
+		t.Fatalf("visible snippet should not include empty h2:\n%s", result.Visible)
+	}
+	if !strings.Contains(result.Visible, "## Keep") {
+		t.Fatalf("visible snippet should include non-empty h2:\n%s", result.Visible)
+	}
+	if len(result.Hidden) != 3 {
+		t.Fatalf("expected 3 hidden blocks, got %d (%+v)", len(result.Hidden), result.Hidden)
+	}
+	if result.Hidden[0].StartLine != 4 || result.Hidden[0].EndLine != 5 || result.Hidden[0].Kind != HiddenBlockKindCompleted {
+		t.Fatalf("unexpected first hidden block: %+v", result.Hidden[0])
+	}
+	if !strings.Contains(result.Hidden[0].Markdown, "done task") {
+		t.Fatalf("expected completed task markdown in first hidden block: %+v", result.Hidden[0])
+	}
+	if result.Hidden[1].StartLine != 7 || result.Hidden[1].EndLine != 7 || result.Hidden[1].Kind != HiddenBlockKindEmptyH2 {
+		t.Fatalf("unexpected second hidden block: %+v", result.Hidden[1])
+	}
+	if strings.TrimSpace(result.Hidden[1].Markdown) != "## Empty" {
+		t.Fatalf("unexpected empty h2 markdown: %q", result.Hidden[1].Markdown)
+	}
+	if result.Hidden[2].StartLine != 12 || result.Hidden[2].EndLine != 12 || result.Hidden[2].Kind != HiddenBlockKindCompleted {
+		t.Fatalf("unexpected third hidden block: %+v", result.Hidden[2])
+	}
+}
+
+func TestFilterCompletedTasksSnippetCompatibility(t *testing.T) {
+	input := strings.Join([]string{
+		"- [ ] open",
+		"- [x] done",
+		"## Empty",
+		"",
+	}, "\n")
+
+	visible, completed, tasks := FilterCompletedTasksSnippet(input)
+	structured := FilterCompletedTasksWithHidden(input)
+
+	if visible != structured.Visible {
+		t.Fatalf("expected visible compatibility, got:\n%s\nwant:\n%s", visible, structured.Visible)
+	}
+	if completed != structured.CompletedCount {
+		t.Fatalf("expected completed compatibility %d, got %d", structured.CompletedCount, completed)
+	}
+	if len(tasks) != len(structured.OpenTasks) {
+		t.Fatalf("expected tasks compatibility len %d, got %d", len(structured.OpenTasks), len(tasks))
+	}
+}

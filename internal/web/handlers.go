@@ -8996,9 +8996,9 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else if isIndex {
-		filtered, _, tasks := index.FilterCompletedTasksSnippet(updatedContent)
-		renderSource = filtered
-		tasksForNote = tasks
+		snippet := index.FilterCompletedTasksWithHidden(updatedContent)
+		renderSource = snippet.Visible
+		tasksForNote = snippet.OpenTasks
 	} else {
 		metaTasks := index.ParseContent(updatedContent).Tasks
 		tasksForNote = make([]index.Task, 0, len(metaTasks))
@@ -10710,6 +10710,36 @@ func noteVisibilityDisplay(declared, effective string) string {
 	return declared
 }
 
+func (s *Server) renderHiddenBlocks(r *http.Request, renderCtx context.Context, notePath string, noteID string, blocks []index.HiddenBlock) ([]HiddenRenderBlock, error) {
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+	rendered := make([]HiddenRenderBlock, 0, len(blocks))
+	for _, block := range blocks {
+		markdown := strings.TrimRight(block.Markdown, "\n")
+		if strings.TrimSpace(markdown) == "" {
+			continue
+		}
+		htmlStr, err := s.renderNoteContentHTML(r, renderCtx, notePath, noteID, markdown, nil)
+		if err != nil {
+			return nil, err
+		}
+		rendered = append(rendered, HiddenRenderBlock{
+			StartLine:    block.StartLine,
+			EndLine:      block.EndLine,
+			Kind:         block.Kind,
+			RenderedHTML: template.HTML(htmlStr),
+		})
+	}
+	sort.SliceStable(rendered, func(i, j int) bool {
+		if rendered[i].StartLine == rendered[j].StartLine {
+			return rendered[i].EndLine < rendered[j].EndLine
+		}
+		return rendered[i].StartLine < rendered[j].StartLine
+	})
+	return rendered, nil
+}
+
 func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, int, error) {
 	start := time.Now()
 	slog.Debug("note view data start", "path", notePath)
@@ -10781,7 +10811,12 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 	} else if ok {
 		renderCtx = withCollapsibleSectionState(renderCtx, state)
 	}
-	htmlStr, err := s.renderNoteContentHTML(r, renderCtx, notePath, noteMeta.ID, string(normalizedContent), meta.Tasks)
+	snippet := index.FilterCompletedTasksWithHidden(string(normalizedContent))
+	htmlStr, err := s.renderNoteContentHTML(r, renderCtx, notePath, noteMeta.ID, snippet.Visible, snippet.OpenTasks)
+	if err != nil {
+		return ViewData{}, http.StatusInternalServerError, err
+	}
+	hiddenBlocks, err := s.renderHiddenBlocks(r, renderCtx, notePath, noteMeta.ID, snippet.Hidden)
 	if err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
 	}
@@ -10907,6 +10942,10 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 		CalendarMonth:         calendar,
 		Backlinks:             backlinkViews,
 		JournalSidebar:        journalSidebar,
+		HiddenBlocks:          hiddenBlocks,
+		HiddenCount:           len(hiddenBlocks),
+		ShowHiding:            len(hiddenBlocks) > 0,
+		CompletedTaskCount:    snippet.CompletedCount,
 	}
 	applyCalendarLinks(&data, baseURL)
 	slog.Debug("note view data done", "path", notePath, "duration_ms", time.Since(start).Milliseconds())
@@ -10987,11 +11026,16 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 	renderContent := normalizedContent
 	renderTasks := meta.Tasks
 	completedCount := 0
+	hiddenBlocks := make([]HiddenRenderBlock, 0)
 	if hideCompleted {
-		filtered, count, tasks := index.FilterCompletedTasksSnippet(string(normalizedContent))
-		renderContent = []byte(filtered)
-		completedCount = count
-		renderTasks = tasks
+		snippet := index.FilterCompletedTasksWithHidden(string(normalizedContent))
+		renderContent = []byte(snippet.Visible)
+		completedCount = snippet.CompletedCount
+		renderTasks = snippet.OpenTasks
+		hiddenBlocks, err = s.renderHiddenBlocks(r, renderCtx, notePath, noteMeta.ID, snippet.Hidden)
+		if err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
 	}
 	htmlStr, err := s.renderNoteContentHTML(r, renderCtx, notePath, noteMeta.ID, string(renderContent), renderTasks)
 	if err != nil {
@@ -11030,6 +11074,9 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		RenderedHTML:          template.HTML(htmlStr),
 		NoteURL:               noteURL,
 		FolderLabel:           folderLabel,
+		HiddenBlocks:          hiddenBlocks,
+		HiddenCount:           len(hiddenBlocks),
+		ShowHiding:            len(hiddenBlocks) > 0,
 		CompletedTaskCount:    completedCount,
 		ShowCompletedSummary:  hideCompleted,
 	}

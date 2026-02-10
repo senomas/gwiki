@@ -95,6 +95,9 @@ type ViewData struct {
 	JournalSidebar        JournalSidebar
 	JournalYear           JournalYearNode
 	JournalMonth          JournalMonthNode
+	HiddenBlocks          []HiddenRenderBlock
+	HiddenCount           int
+	ShowHiding            bool
 	DueByPath             map[string]string
 	CompletedTaskCount    int
 	ShowCompletedSummary  bool
@@ -227,6 +230,13 @@ type NoteCard struct {
 	Meta         index.FrontmatterAttrs
 	FolderLabel  string
 	SectionRank  int
+}
+
+type HiddenRenderBlock struct {
+	StartLine    int
+	EndLine      int
+	Kind         string
+	RenderedHTML template.HTML
 }
 
 type JournalDay struct {

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -31,6 +32,30 @@ type Metadata struct {
 	Tasks    []Task
 	Priority int
 }
+
+type HiddenBlock struct {
+	StartLine int
+	EndLine   int
+	Kind      string
+	Markdown  string
+}
+
+type FilteredSnippet struct {
+	Visible        string
+	CompletedCount int
+	OpenTasks      []Task
+	Hidden         []HiddenBlock
+}
+
+type snippetLine struct {
+	LineNo int
+	Text   string
+}
+
+const (
+	HiddenBlockKindCompleted = "completed_block"
+	HiddenBlockKindEmptyH2   = "empty_h2"
+)
 
 var (
 	wikiLinkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
@@ -216,31 +241,66 @@ func UncheckedTasksSnippet(input string) string {
 }
 
 func FilterCompletedTasksSnippet(input string) (string, int, []Task) {
+	result := FilterCompletedTasksWithHidden(input)
+	return result.Visible, result.CompletedCount, result.OpenTasks
+}
+
+func FilterCompletedTasksWithHidden(input string) FilteredSnippet {
 	body := StripFrontmatter(input)
 	lines := strings.Split(body, "\n")
 	type blockState struct {
-		indent int
-		keep   bool
+		indent    int
+		keep      bool
+		hiddenIdx int
 	}
 	stack := make([]blockState, 0, 8)
-	out := make([]string, 0, len(lines))
+	visible := make([]snippetLine, 0, len(lines))
 	completed := 0
 	tasks := make([]Task, 0)
+	hidden := make([]HiddenBlock, 0)
+
+	appendHiddenLine := func(idx int, lineNo int, line string) int {
+		if idx < 0 || idx >= len(hidden) {
+			hidden = append(hidden, HiddenBlock{
+				StartLine: lineNo,
+				EndLine:   lineNo,
+				Kind:      HiddenBlockKindCompleted,
+				Markdown:  line,
+			})
+			return len(hidden) - 1
+		}
+		if hidden[idx].StartLine <= 0 {
+			hidden[idx].StartLine = lineNo
+		}
+		if hidden[idx].EndLine < lineNo {
+			hidden[idx].EndLine = lineNo
+		}
+		if hidden[idx].Markdown == "" {
+			hidden[idx].Markdown = line
+		} else {
+			hidden[idx].Markdown += "\n" + line
+		}
+		return idx
+	}
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
+		lineNo := i + 1
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			if len(stack) > 0 && i+1 < len(lines) && countIndentSpaces(lines[i+1]) > stack[len(stack)-1].indent {
 				if stack[len(stack)-1].keep {
-					out = append(out, line)
+					visible = append(visible, snippetLine{LineNo: lineNo, Text: line})
+				} else {
+					top := &stack[len(stack)-1]
+					top.hiddenIdx = appendHiddenLine(top.hiddenIdx, lineNo, line)
 				}
 				continue
 			}
 			for len(stack) > 0 && 0 <= stack[len(stack)-1].indent {
 				stack = stack[:len(stack)-1]
 			}
-			out = append(out, line)
+			visible = append(visible, snippetLine{LineNo: lineNo, Text: line})
 			continue
 		}
 
@@ -253,43 +313,87 @@ func FilterCompletedTasksSnippet(input string) (string, int, []Task) {
 			done := strings.TrimSpace(match[1]) != ""
 			if done {
 				completed++
+				hidden = append(hidden, HiddenBlock{
+					StartLine: lineNo,
+					EndLine:   lineNo,
+					Kind:      HiddenBlockKindCompleted,
+					Markdown:  line,
+				})
 			} else {
-				out = append(out, line)
+				visible = append(visible, snippetLine{LineNo: lineNo, Text: line})
 				tasks = append(tasks, Task{
-					LineNo: i + 1,
+					LineNo: lineNo,
 					Text:   line,
 					Done:   false,
 					Hash:   TaskLineHash(line),
 				})
 			}
-			stack = append(stack, blockState{indent: indent, keep: !done})
+			hiddenIdx := -1
+			if done {
+				hiddenIdx = len(hidden) - 1
+			}
+			stack = append(stack, blockState{indent: indent, keep: !done, hiddenIdx: hiddenIdx})
 			continue
 		}
 		if len(stack) == 0 || stack[len(stack)-1].keep {
-			out = append(out, line)
+			visible = append(visible, snippetLine{LineNo: lineNo, Text: line})
+		} else {
+			top := &stack[len(stack)-1]
+			top.hiddenIdx = appendHiddenLine(top.hiddenIdx, lineNo, line)
 		}
 	}
 
-	out = filterEmptyH2(out)
-	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", completed, tasks
+	visible, hiddenH2 := filterEmptyH2WithHidden(visible)
+	hidden = append(hidden, hiddenH2...)
+	sort.SliceStable(hidden, func(i, j int) bool {
+		if hidden[i].StartLine == hidden[j].StartLine {
+			return hidden[i].EndLine < hidden[j].EndLine
+		}
+		return hidden[i].StartLine < hidden[j].StartLine
+	})
+
+	out := make([]string, 0, len(visible))
+	for _, line := range visible {
+		out = append(out, line.Text)
+	}
+	return FilteredSnippet{
+		Visible:        strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n",
+		CompletedCount: completed,
+		OpenTasks:      tasks,
+		Hidden:         hidden,
+	}
 }
 
 func filterEmptyH2(lines []string) []string {
+	entries := make([]snippetLine, 0, len(lines))
+	for i, line := range lines {
+		entries = append(entries, snippetLine{LineNo: i + 1, Text: line})
+	}
+	filtered, _ := filterEmptyH2WithHidden(entries)
+	out := make([]string, 0, len(filtered))
+	for _, line := range filtered {
+		out = append(out, line.Text)
+	}
+	return out
+}
+
+func filterEmptyH2WithHidden(lines []snippetLine) ([]snippetLine, []HiddenBlock) {
 	if len(lines) == 0 {
-		return lines
+		return lines, nil
 	}
 	keep := make([]bool, len(lines))
 	for i := range lines {
 		keep[i] = true
 	}
+	hidden := make([]HiddenBlock, 0)
 	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
+		line := strings.TrimSpace(lines[i].Text)
 		if !strings.HasPrefix(line, "## ") {
 			continue
 		}
 		hasContent := false
 		for j := i + 1; j < len(lines); j++ {
-			next := strings.TrimSpace(lines[j])
+			next := strings.TrimSpace(lines[j].Text)
 			if strings.HasPrefix(next, "#") {
 				break
 			}
@@ -300,15 +404,21 @@ func filterEmptyH2(lines []string) []string {
 		}
 		if !hasContent {
 			keep[i] = false
+			hidden = append(hidden, HiddenBlock{
+				StartLine: lines[i].LineNo,
+				EndLine:   lines[i].LineNo,
+				Kind:      HiddenBlockKindEmptyH2,
+				Markdown:  lines[i].Text,
+			})
 		}
 	}
-	filtered := make([]string, 0, len(lines))
+	filtered := make([]snippetLine, 0, len(lines))
 	for i, line := range lines {
 		if keep[i] {
 			filtered = append(filtered, line)
 		}
 	}
-	return filtered
+	return filtered, hidden
 }
 
 func extractTaskTags(lines []string, start int) []string {
