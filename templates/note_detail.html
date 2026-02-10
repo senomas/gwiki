@@ -16,6 +16,7 @@
       <summary class="list-none cursor-pointer select-none text-xs text-slate-500">
         <span class="group-open:hidden">
           <span class="mr-2">{{if .FolderLabel}}{{.FolderLabel}}{{else}}{{if .NoteMeta.Folder}}{{.NoteMeta.Folder}}{{else}}/{{end}}{{end}}</span>
+          {{if .NoteMeta.Visibility}}<span class="mr-2">{{if .NoteVisibilityDisplay}}{{.NoteVisibilityDisplay}}{{else}}{{.NoteMeta.Visibility}}{{end}}</span>{{end}}
           {{if .NoteMeta.Updated.IsZero}}
             {{if .NoteMeta.UpdatedRaw}}{{.NoteMeta.UpdatedRaw}}{{else}}Metadata{{end}}
           {{else}}
@@ -31,7 +32,7 @@
         {{if .NoteMeta.UpdatedRaw}}<span class="uppercase tracking-[0.18em] text-slate-600">Updated</span><span>{{.NoteMeta.UpdatedRaw}}</span>{{end}}
         {{if .NoteMeta.CreatedRaw}}<span class="uppercase tracking-[0.18em] text-slate-600">Created</span><span>{{.NoteMeta.CreatedRaw}}</span>{{end}}
         {{if .NoteMeta.Priority}}<span class="uppercase tracking-[0.18em] text-slate-600">Priority</span><span>{{.NoteMeta.Priority}}</span>{{end}}
-        {{if .NoteMeta.Visibility}}<span class="uppercase tracking-[0.18em] text-slate-600">Visibility</span><span>{{.NoteMeta.Visibility}}</span>{{end}}
+        {{if .NoteMeta.Visibility}}<span class="uppercase tracking-[0.18em] text-slate-600">Visibility</span><span>{{if .NoteVisibilityDisplay}}{{.NoteVisibilityDisplay}}{{else}}{{.NoteMeta.Visibility}}{{end}}</span>{{end}}
         {{if .NoteMeta.ID}}<span class="uppercase tracking-[0.18em] text-slate-600">ID</span><span>{{.NoteMeta.ID}}</span>{{end}}
         {{if gt .NoteMeta.HistoryCount 0}}
           <span class="uppercase tracking-[0.18em] text-slate-600">History</span>

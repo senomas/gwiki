@@ -3943,6 +3943,31 @@ func (i *Index) NoteHashByPath(ctx context.Context, notePath string) (NoteHashSu
 	}, nil
 }
 
+func (i *Index) NoteVisibilityByPath(ctx context.Context, notePath string) (string, error) {
+	ownerName, relPath, err := splitOwnerPath(notePath)
+	if err != nil {
+		return "", err
+	}
+	userID, err := i.LookupOwnerIDs(ctx, ownerName)
+	if err != nil {
+		return "", err
+	}
+	clauses := []string{}
+	args := []interface{}{}
+	ownerClause, ownerArgs := ownerWhereClause(userID, "files")
+	clauses = append(clauses, ownerClause, "files.path = ?")
+	args = append(args, ownerArgs...)
+	args = append(args, relPath)
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := "SELECT files.visibility FROM files WHERE " + strings.Join(clauses, " AND ")
+	var visibility string
+	if err := i.queryRowContext(ctx, query, args...).Scan(&visibility); err != nil {
+		return "", err
+	}
+	return normalizeEffectiveVisibility(visibility), nil
+}
+
 func (i *Index) MaxEtagTime(ctx context.Context) (int64, error) {
 	clauses := []string{}
 	args := []interface{}{}

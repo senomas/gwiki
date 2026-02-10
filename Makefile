@@ -22,8 +22,15 @@ test:
 GIT_SHA_SHORT := $(shell git rev-parse --short HEAD)
 GIT_COMMIT_TS_COMPACT := $(shell git show -s --format=%cd --date=format:'%Y%m%d%H%M%S' HEAD)
 GIT_COMMIT_TS_DISPLAY := $(shell git show -s --format=%cd --date=format:'%Y-%m-%d.%H:%M' HEAD)
+GIT_DIRTY := $(shell if [ -n "$$(git status --porcelain)" ]; then echo 1; else echo 0; fi)
+DIRTY_TS_DISPLAY := $(shell date '+%Y-%m-%d.%H:%M:%S')
+ifeq ($(GIT_DIRTY),1)
+BUILD_VERSION := dev-$(DIRTY_TS_DISPLAY)
+BUILD_TAG := dev
+else
 BUILD_VERSION := $(GIT_COMMIT_TS_DISPLAY)-$(GIT_SHA_SHORT)
 BUILD_TAG := $(GIT_SHA_SHORT)-$(GIT_COMMIT_TS_COMPACT)
+endif
 IMAGE_TAG := $(BUILD_TAG)
 DOCKER_IMAGE_NAME ?= gwiki
 DOCKER_REGISTRY_TRIMMED := $(patsubst %/,%,$(strip $(DOCKER_REGISTRY)))
@@ -80,7 +87,7 @@ docker-prune-old-gwiki-images:
 		fi; \
 	done
 
-build-img: ensure-clean
+build-img:
 	@echo "Building image $(IMAGE):$(IMAGE_TAG)"
 	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t $(IMAGE):$(IMAGE_TAG) .
 	docker tag $(IMAGE):$(IMAGE_TAG) $(IMAGE):latest
@@ -95,7 +102,9 @@ build: build-img
 	$(MAKE) compose-restart
 	$(MAKE) docker-prune-old-gwiki-images
 
-deploy: push-image
+deploy: ensure-clean
+	$(MAKE) build
+	$(MAKE) push-image
 	@if [ -n "$(strip $(TRUENAS_SERVER))" ] && [ -n "$(strip $(TRUENAS_PATH))" ] && [ -n "$(strip $(TRUENAS_APP))" ]; then \
 		if [ ! -f .env.truenas ]; then \
 			echo "ERROR: .env.truenas not found"; \

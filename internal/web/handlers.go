@@ -10695,6 +10695,21 @@ func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, erro
 	}, nil
 }
 
+func noteVisibilityDisplay(declared, effective string) string {
+	declared = strings.ToLower(strings.TrimSpace(declared))
+	effective = strings.ToLower(strings.TrimSpace(effective))
+	if effective == "" {
+		effective = index.VisibilityPrivate
+	}
+	if declared == "" {
+		declared = index.VisibilityInherited
+	}
+	if declared == index.VisibilityInherited {
+		return declared + " (" + effective + ")"
+	}
+	return declared
+}
+
 func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, int, error) {
 	start := time.Now()
 	slog.Debug("note view data start", "path", notePath)
@@ -10753,6 +10768,12 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 		}
 	}
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
+	effectiveVisibility := ""
+	if visibility, visErr := s.idx.NoteVisibilityByPath(r.Context(), notePath); visErr == nil {
+		effectiveVisibility = visibility
+	} else if !errors.Is(visErr, sql.ErrNoRows) {
+		slog.Warn("note view visibility lookup failed", "path", notePath, "err", visErr)
+	}
 	renderStart := time.Now()
 	renderCtx := r.Context()
 	if state, ok, err := s.collapsedSectionState(renderCtx, noteMeta.ID); err != nil {
@@ -10858,33 +10879,34 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 	}
 	slog.Debug("note view data journal sidebar", "path", notePath, "duration_ms", time.Since(journalSidebarStart).Milliseconds())
 	data := ViewData{
-		Title:            meta.Title,
-		ContentTemplate:  "view",
-		NotePath:         notePath,
-		NoteTitle:        meta.Title,
-		NoteFileName:     filepath.Base(notePath),
-		NoteMeta:         noteMeta,
-		FolderLabel:      folderLabel,
-		RenderedHTML:     template.HTML(htmlStr),
-		Tags:             tags,
-		TagLinks:         tagLinks,
-		TodoCount:        todoCount,
-		DueCount:         dueCount,
-		ActiveTags:       urlTags,
-		TagQuery:         tagQuery,
-		FolderTree:       folderTree,
-		ActiveFolder:     activeFolder,
-		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:      filterQuery,
-		HomeURL:          baseURL,
-		ActiveDate:       activeDate,
-		DateQuery:        buildDateQuery(activeDate),
-		SearchQuery:      activeSearch,
-		SearchQueryParam: buildSearchQuery(activeSearch),
-		UpdateDays:       updateDays,
-		CalendarMonth:    calendar,
-		Backlinks:        backlinkViews,
-		JournalSidebar:   journalSidebar,
+		Title:                 meta.Title,
+		ContentTemplate:       "view",
+		NotePath:              notePath,
+		NoteTitle:             meta.Title,
+		NoteFileName:          filepath.Base(notePath),
+		NoteMeta:              noteMeta,
+		NoteVisibilityDisplay: noteVisibilityDisplay(noteMeta.Visibility, effectiveVisibility),
+		FolderLabel:           folderLabel,
+		RenderedHTML:          template.HTML(htmlStr),
+		Tags:                  tags,
+		TagLinks:              tagLinks,
+		TodoCount:             todoCount,
+		DueCount:              dueCount,
+		ActiveTags:            urlTags,
+		TagQuery:              tagQuery,
+		FolderTree:            folderTree,
+		ActiveFolder:          activeFolder,
+		FolderQuery:           buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:           filterQuery,
+		HomeURL:               baseURL,
+		ActiveDate:            activeDate,
+		DateQuery:             buildDateQuery(activeDate),
+		SearchQuery:           activeSearch,
+		SearchQueryParam:      buildSearchQuery(activeSearch),
+		UpdateDays:            updateDays,
+		CalendarMonth:         calendar,
+		Backlinks:             backlinkViews,
+		JournalSidebar:        journalSidebar,
 	}
 	applyCalendarLinks(&data, baseURL)
 	slog.Debug("note view data done", "path", notePath, "duration_ms", time.Since(start).Milliseconds())
@@ -10950,6 +10972,12 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		}
 	}
 	folderLabel := s.noteFolderLabel(r.Context(), notePath, noteMeta.Folder)
+	effectiveVisibility := ""
+	if visibility, visErr := s.idx.NoteVisibilityByPath(r.Context(), notePath); visErr == nil {
+		effectiveVisibility = visibility
+	} else if !errors.Is(visErr, sql.ErrNoRows) {
+		slog.Warn("note card visibility lookup failed", "path", notePath, "err", visErr)
+	}
 	renderCtx := r.Context()
 	if state, ok, err := s.collapsedSectionState(renderCtx, noteMeta.ID); err != nil {
 		return ViewData{}, http.StatusInternalServerError, err
@@ -10993,16 +11021,17 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 	noteURL := baseURLForLinks(r, "/notes/"+notePath)
 
 	data := ViewData{
-		NotePath:             notePath,
-		NoteTitle:            meta.Title,
-		NoteMeta:             noteMeta,
-		NoteHash:             noteHash,
-		NoteEtagTime:         noteEtagTime,
-		RenderedHTML:         template.HTML(htmlStr),
-		NoteURL:              noteURL,
-		FolderLabel:          folderLabel,
-		CompletedTaskCount:   completedCount,
-		ShowCompletedSummary: hideCompleted,
+		NotePath:              notePath,
+		NoteTitle:             meta.Title,
+		NoteMeta:              noteMeta,
+		NoteVisibilityDisplay: noteVisibilityDisplay(noteMeta.Visibility, effectiveVisibility),
+		NoteHash:              noteHash,
+		NoteEtagTime:          noteEtagTime,
+		RenderedHTML:          template.HTML(htmlStr),
+		NoteURL:               noteURL,
+		FolderLabel:           folderLabel,
+		CompletedTaskCount:    completedCount,
+		ShowCompletedSummary:  hideCompleted,
 	}
 	slog.Debug("note card data done", "path", notePath, "duration_ms", time.Since(start).Milliseconds())
 	return data, http.StatusOK, nil
