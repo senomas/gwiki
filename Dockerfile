@@ -22,7 +22,7 @@ RUN BROWSERSLIST_IGNORE_OLD_DATA=1 npx --yes --verbose --package tailwindcss@${T
   -i /app/assets/tailwind.css \
   -o /app/static/css/app.css
 
-FROM golang:${GO_VERSION} AS build
+FROM golang:${GO_VERSION} AS build-base
 
 WORKDIR /src
 RUN apk add --no-cache gcc musl-dev
@@ -33,7 +33,11 @@ ARG BUILD_VERSION=dev
 COPY cmd ./cmd
 COPY internal ./internal
 COPY templates ./templates
+
+FROM build-base AS test
 RUN CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
+
+FROM test AS build
 RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_VERSION}" -o /out/wiki ./cmd/wiki
 RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -o /out/user ./cmd/user
 

@@ -12504,8 +12504,15 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		newAttach := s.noteAttachmentsDir(targetOwner, metaAttrs.ID)
 		if _, err := os.Stat(oldAttach); err == nil {
 			if _, err := os.Stat(newAttach); err == nil {
-				slog.Error("save note attachments exist", "old_path", oldAttach, "new_path", newAttach, "note_id", metaAttrs.ID)
-				return saveNoteResult{}, &apiError{status: http.StatusConflict, message: "attachments already exist for new owner"}
+				// Cross-owner move now treats existing destination attachments as replaceable.
+				slog.Warn("save note attachments overwrite", "old_path", oldAttach, "new_path", newAttach, "note_id", metaAttrs.ID)
+				if err := os.RemoveAll(newAttach); err != nil {
+					slog.Error("save note attachments remove existing failed", "path", newAttach, "err", err)
+					return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+				}
+			} else if !os.IsNotExist(err) {
+				slog.Error("save note attachments stat failed", "path", newAttach, "err", err)
+				return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 			}
 			if err := os.MkdirAll(filepath.Dir(newAttach), 0o755); err != nil {
 				slog.Error("save note attachments mkdir failed", "path", filepath.Dir(newAttach), "err", err)

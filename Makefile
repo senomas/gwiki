@@ -3,7 +3,7 @@
 -include .env.local
 export
 
-.PHONY: docker-build build deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
 
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
@@ -15,6 +15,9 @@ COMPOSE := docker compose $(COMPOSE_ENV_FILES)
 
 docker-build:
 	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t gwiki .
+
+test:
+	docker build --target test --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) .
 
 GIT_SHA_SHORT := $(shell git rev-parse --short HEAD)
 GIT_COMMIT_TS_COMPACT := $(shell git show -s --format=%cd --date=format:'%Y%m%d%H%M%S' HEAD)
@@ -77,7 +80,22 @@ docker-prune-old-gwiki-images:
 		fi; \
 	done
 
-deploy:
+build-img: ensure-clean
+	@echo "Building image $(IMAGE):$(IMAGE_TAG)"
+	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t $(IMAGE):$(IMAGE_TAG) .
+	docker tag $(IMAGE):$(IMAGE_TAG) $(IMAGE):latest
+	$(MAKE) update-env-image IMAGE_TAG=$(IMAGE_TAG)
+
+push-image: ensure-clean
+	docker push $(IMAGE):$(IMAGE_TAG)
+	docker push $(IMAGE):latest
+	$(MAKE) update-env-image IMAGE_TAG=$(IMAGE_TAG)
+
+build: build-img
+	$(MAKE) compose-restart
+	$(MAKE) docker-prune-old-gwiki-images
+
+deploy: push-image
 	@if [ -n "$(strip $(TRUENAS_SERVER))" ] && [ -n "$(strip $(TRUENAS_PATH))" ] && [ -n "$(strip $(TRUENAS_APP))" ]; then \
 		if [ ! -f .env.truenas ]; then \
 			echo "ERROR: .env.truenas not found"; \
@@ -90,16 +108,6 @@ deploy:
 	else \
 		echo "Skipping TrueNAS deploy (set TRUENAS_SERVER, TRUENAS_PATH, TRUENAS_APP in .env.local)"; \
 	fi
-
-build: ensure-clean
-	@echo "Building image $(IMAGE):$(IMAGE_TAG)"
-	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t $(IMAGE):$(IMAGE_TAG) .
-	docker tag $(IMAGE):$(IMAGE_TAG) $(IMAGE):latest
-	docker push $(IMAGE):$(IMAGE_TAG)
-	docker push $(IMAGE):latest
-	$(MAKE) update-env-image IMAGE_TAG=$(IMAGE_TAG)
-	$(MAKE) compose-restart
-	$(MAKE) docker-prune-old-gwiki-images
 
 docker-run:
 	docker run --rm -p 8080:8080 -v $(WIKI_REPO_PATH):/notes -v $(WIKI_DATA_PATH):/data -e WIKI_REPO_PATH=/notes -e WIKI_DATA_PATH=/data gwiki

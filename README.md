@@ -79,7 +79,6 @@ make build
 `make build` now:
 - fails when git working tree is not clean,
 - builds/tests in Docker and tags image as `<shortsha>-<yyyymmddHHMMSS>`,
-- pushes both version tag and `latest`,
 - updates both `.env.local` and `.env.truenas` with `GWIKI_IMAGE=...`,
 - restarts `docker compose` service `gwiki`,
 - removes local image tags for the selected repository older than 24h (keeps `latest`).
@@ -93,6 +92,8 @@ make deploy
 ```
 
 `make deploy` uses `TRUENAS_SERVER`, `TRUENAS_PATH`, and `TRUENAS_APP` from `.env.local`.
+It pushes both `$(IMAGE):$(IMAGE_TAG)` and `$(IMAGE):latest` first, updates `.env.local`/`.env.truenas`,
+then runs the TrueNAS stop/copy/start flow.
 
 Optional TrueNAS deploy variables in `.env.local`:
 
