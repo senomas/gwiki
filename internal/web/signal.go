@@ -160,6 +160,7 @@ func (p *signalPoller) tick() {
 			slog.Debug("signal skip message", "reason", "old_timestamp", "ts", msg.TSMillis)
 			continue
 		}
+		p.writeSignalDebugMessage(msg)
 		notePath := p.notePathForTimestamp(msg.TSMillis)
 		slog.Debug("signal append", "note_path", notePath, "sender", msg.Sender, "ts", msg.TSMillis, "previews", len(msg.Previews))
 		if err := p.appendMessage(ctx, notePath, msg); err != nil {
@@ -179,6 +180,108 @@ func (p *signalPoller) tick() {
 			slog.Warn("signal state save failed", "err", err)
 		}
 	}
+}
+
+func signalDebugLogDir() string {
+	logPath := strings.TrimSpace(os.Getenv("WIKI_DEV_LOG_FILE"))
+	if logPath == "" {
+		logPath = "dev.log"
+	}
+	dir := filepath.Dir(logPath)
+	if strings.TrimSpace(dir) == "" {
+		return "."
+	}
+	return dir
+}
+
+func signalDebugEnabled() bool {
+	return strings.TrimSpace(os.Getenv("DEV")) != ""
+}
+
+func (p *signalPoller) writeSignalDebugMessage(msg signalMessage) {
+	if !signalDebugEnabled() {
+		return
+	}
+	text := strings.TrimSpace(msg.Text)
+	if text == "" {
+		return
+	}
+	dir := signalDebugLogDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("signal debug create dir failed", "dir", dir, "err", err)
+		return
+	}
+
+	timestamp := time.Now()
+	if msg.TSMillis > 0 {
+		timestamp = time.UnixMilli(msg.TSMillis)
+	}
+	baseName := fmt.Sprintf("signal-%s", timestamp.Format("060102150405"))
+	var (
+		file *os.File
+		path string
+	)
+	for i := 0; i < 1000; i++ {
+		name := baseName + ".txt"
+		if i > 0 {
+			name = fmt.Sprintf("%s-%d.txt", baseName, i+1)
+		}
+		candidate := filepath.Join(dir, name)
+		created, err := os.OpenFile(candidate, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			slog.Warn("signal debug open failed", "path", candidate, "err", err)
+			return
+		}
+		file = created
+		path = candidate
+		break
+	}
+	if file == nil {
+		slog.Warn("signal debug file create failed", "base", baseName)
+		return
+	}
+	defer file.Close()
+
+	var builder strings.Builder
+	builder.WriteString("timestamp=")
+	builder.WriteString(timestamp.Format(time.RFC3339Nano))
+	builder.WriteByte('\n')
+	if msg.Sender != "" {
+		builder.WriteString("sender=")
+		builder.WriteString(msg.Sender)
+		builder.WriteByte('\n')
+	}
+	if msg.Group != "" {
+		builder.WriteString("group=")
+		builder.WriteString(msg.Group)
+		builder.WriteByte('\n')
+	}
+	if msg.GroupID != "" {
+		builder.WriteString("group_id=")
+		builder.WriteString(msg.GroupID)
+		builder.WriteByte('\n')
+	}
+	if len(msg.Previews) > 0 {
+		builder.WriteString("previews=")
+		builder.WriteString(fmt.Sprintf("%d", len(msg.Previews)))
+		builder.WriteByte('\n')
+	}
+	builder.WriteByte('\n')
+	builder.WriteString(text)
+	builder.WriteByte('\n')
+
+	if _, err := file.WriteString(builder.String()); err != nil {
+		slog.Warn("signal debug write failed", "path", path, "err", err)
+		return
+	}
+	displayPath := path
+	if absPath, err := filepath.Abs(path); err == nil {
+		displayPath = absPath
+	}
+	slog.Debug("signal debug dump written", "path", displayPath, "chars", len(text))
 }
 
 func (p *signalPoller) resolveGroupID(ctx context.Context) (string, string, error) {
@@ -260,7 +363,7 @@ func (p *signalPoller) doRequest(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	bodyPreview := ""
-	if resp.Body != nil {
+	if signalDebugEnabled() && resp.Body != nil {
 		const maxPreview = 2048
 		bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxPreview))
 		if readErr == nil {
@@ -270,7 +373,11 @@ func (p *signalPoller) doRequest(req *http.Request) (*http.Response, error) {
 			resp.Body = io.NopCloser(bytes.NewReader(append(bodyBytes, rest...)))
 		}
 	}
-	slog.Debug("signal http", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode, "duration", duration.String(), "timeout", timeoutInfo, "deadline", deadlineInfo, "body", bodyPreview)
+	if signalDebugEnabled() {
+		slog.Debug("signal http", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode, "duration", duration.String(), "timeout", timeoutInfo, "deadline", deadlineInfo, "body", bodyPreview)
+	} else {
+		slog.Debug("signal http", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode, "duration", duration.String(), "timeout", timeoutInfo, "deadline", deadlineInfo)
+	}
 	return resp, nil
 }
 
@@ -294,14 +401,15 @@ func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
 			url := strings.TrimSpace(preview.URL)
 			title := strings.TrimSpace(preview.Title)
 			desc := strings.TrimSpace(preview.Description)
-			if url == "" {
+			imageID := strings.TrimSpace(preview.Image.ID)
+			if url == "" && imageID == "" {
 				continue
 			}
 			previews = append(previews, signalPreview{
 				URL:         url,
 				Title:       title,
 				Description: desc,
-				ImageID:     strings.TrimSpace(preview.Image.ID),
+				ImageID:     imageID,
 				ContentType: strings.TrimSpace(preview.Image.ContentType),
 				Filename:    strings.TrimSpace(preview.Image.Filename),
 			})
@@ -407,10 +515,47 @@ func ensureSignalFrontmatter(content string, now time.Time, user string) (string
 }
 
 func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessage, noteID string) ([]string, error) {
-	lines := []string{}
 	suffixTags := " #inbox #signal"
+	text := normalizeSignalText(msg.Text)
+	hasLinkPreview := false
+	hasImagePreview := false
+	for _, preview := range msg.Previews {
+		if strings.TrimSpace(preview.URL) != "" {
+			hasLinkPreview = true
+		}
+		if strings.TrimSpace(preview.ImageID) != "" {
+			hasImagePreview = true
+		}
+	}
+
+	// For captioned image messages, render as a regular inbox task then image(s).
+	if text != "" && hasImagePreview && !hasLinkPreview {
+		lines := []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}
+		if noteID == "" {
+			return lines, nil
+		}
+		for _, preview := range msg.Previews {
+			if strings.TrimSpace(preview.ImageID) == "" {
+				continue
+			}
+			attachmentName, ok, err := p.ensureSignalPreviewImage(ctx, noteID, preview)
+			if err != nil {
+				slog.Warn("signal preview image", "err", err)
+				continue
+			}
+			if ok {
+				lines = append(lines, "  ![](/attachments/"+noteID+"/"+attachmentName+")")
+			}
+		}
+		return lines, nil
+	}
+
+	lines := []string{}
 	if len(msg.Previews) > 0 {
 		for idx, preview := range msg.Previews {
+			if strings.TrimSpace(preview.URL) == "" {
+				continue
+			}
 			title := preview.Title
 			if title == "" {
 				title = preview.URL
@@ -432,17 +577,22 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 				lines = append(lines, "")
 			}
 		}
-		return lines, nil
+		if len(lines) > 0 {
+			return lines, nil
+		}
 	}
-	text := strings.TrimSpace(msg.Text)
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = strings.ReplaceAll(text, "\r", " ")
-	text = strings.ReplaceAll(text, "\t", " ")
-	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil, nil
 	}
 	return []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}, nil
+}
+
+func normalizeSignalText(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.ReplaceAll(text, "\t", " ")
+	return strings.TrimSpace(text)
 }
 
 func (p *signalPoller) ensureSignalPreviewImage(ctx context.Context, noteID string, preview signalPreview) (string, bool, error) {
