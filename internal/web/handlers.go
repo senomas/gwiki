@@ -6946,15 +6946,23 @@ func extractInboxFromNote(content string, startLine int, endLine int) (string, e
 	return "# INBOX\n\n" + contentOut + "\n", nil
 }
 
-func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []index.Task) []string {
+type inboxLinkTask struct {
+	DisplayLineNo int
+	SourceLineNo  int
+}
+
+func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []inboxLinkTask) []string {
 	if noteID == "" || len(lines) == 0 || len(tasks) == 0 {
 		return lines
 	}
 	for _, task := range tasks {
-		if task.LineNo <= 0 || task.LineNo > len(lines) {
+		if task.DisplayLineNo <= 0 || task.DisplayLineNo > len(lines) {
 			continue
 		}
-		line := lines[task.LineNo-1]
+		if task.SourceLineNo <= 0 {
+			continue
+		}
+		line := lines[task.DisplayLineNo-1]
 		trimmed := strings.TrimLeft(line, " \t")
 		if !strings.HasPrefix(trimmed, "- [ ]") {
 			continue
@@ -6962,12 +6970,20 @@ func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []ind
 		if !inboxTagRe.MatchString(line) {
 			continue
 		}
-		endLine := inboxLineRange(lines, task.LineNo)
-		link := fmt.Sprintf("%s?note=%s&line=%d-%d&type=inbox", baseURL, url.QueryEscape(noteID), task.LineNo, endLine)
+		displayEndLine := inboxLineRange(lines, task.DisplayLineNo)
+		sourceEndLine := task.SourceLineNo + (displayEndLine - task.DisplayLineNo)
+		if sourceEndLine < task.SourceLineNo {
+			sourceEndLine = task.SourceLineNo
+		}
+		link := mutateURL(baseURL, func(query url.Values) {
+			query.Set("note", noteID)
+			query.Set("line", fmt.Sprintf("%d-%d", task.SourceLineNo, sourceEndLine))
+			query.Set("type", "inbox")
+		})
 		replaced := inboxTagRe.ReplaceAllStringFunc(line, func(match string) string {
 			return fmt.Sprintf("[%s](%s)", match, link)
 		})
-		lines[task.LineNo-1] = replaced
+		lines[task.DisplayLineNo-1] = replaced
 	}
 	return lines
 }
@@ -6984,13 +7000,23 @@ func addInboxLinkTarget(html string) string {
 	})
 }
 
-func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []index.Task {
+func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []inboxLinkTask {
 	if len(tasks) == 0 {
 		return nil
 	}
 	parsedTasks := index.ParseContent(body).Tasks
 	if len(parsedTasks) == 0 {
-		return tasks
+		out := make([]inboxLinkTask, 0, len(tasks))
+		for _, task := range tasks {
+			if task.LineNo <= 0 {
+				continue
+			}
+			out = append(out, inboxLinkTask{
+				DisplayLineNo: task.LineNo,
+				SourceLineNo:  task.LineNo,
+			})
+		}
+		return out
 	}
 	lineNosByHash := make(map[string][]int, len(parsedTasks))
 	for _, task := range parsedTasks {
@@ -7001,26 +7027,46 @@ func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []index.Task {
 		lineNosByHash[hash] = append(lineNosByHash[hash], task.LineNo)
 	}
 	if len(lineNosByHash) == 0 {
-		return tasks
+		out := make([]inboxLinkTask, 0, len(tasks))
+		for _, task := range tasks {
+			if task.LineNo <= 0 {
+				continue
+			}
+			out = append(out, inboxLinkTask{
+				DisplayLineNo: task.LineNo,
+				SourceLineNo:  task.LineNo,
+			})
+		}
+		return out
 	}
 	used := make(map[string]int, len(lineNosByHash))
-	remapped := make([]index.Task, 0, len(tasks))
+	remapped := make([]inboxLinkTask, 0, len(tasks))
 	for _, task := range tasks {
 		hash := strings.TrimSpace(task.Hash)
+		if task.LineNo <= 0 {
+			continue
+		}
 		if hash == "" {
-			remapped = append(remapped, task)
+			remapped = append(remapped, inboxLinkTask{
+				DisplayLineNo: task.LineNo,
+				SourceLineNo:  task.LineNo,
+			})
 			continue
 		}
 		lineNos := lineNosByHash[hash]
 		next := used[hash]
 		if next >= len(lineNos) {
-			remapped = append(remapped, task)
+			remapped = append(remapped, inboxLinkTask{
+				DisplayLineNo: task.LineNo,
+				SourceLineNo:  task.LineNo,
+			})
 			continue
 		}
-		mapped := task
-		mapped.LineNo = lineNos[next]
 		used[hash] = next + 1
-		remapped = append(remapped, mapped)
+		remapped = append(remapped, inboxLinkTask{
+			DisplayLineNo: lineNos[next],
+			SourceLineNo:  task.LineNo,
+		})
 	}
 	return remapped
 }
