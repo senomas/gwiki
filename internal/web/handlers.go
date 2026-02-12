@@ -379,6 +379,24 @@ func currentUserName(ctx context.Context) string {
 	return ""
 }
 
+type wikiLinkOwnerContextKey struct{}
+
+func withWikiLinkOwner(ctx context.Context, owner string) context.Context {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, wikiLinkOwnerContextKey{}, owner)
+}
+
+func wikiLinkOwner(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	owner, _ := ctx.Value(wikiLinkOwnerContextKey{}).(string)
+	return strings.TrimSpace(owner)
+}
+
 func (s *Server) ownerOptionsForUser(ctx context.Context) ([]OwnerOption, string, error) {
 	userName := currentUserName(ctx)
 	if userName == "" {
@@ -7099,6 +7117,9 @@ func (s *Server) renderNoteContentHTML(r *http.Request, renderCtx context.Contex
 	lines := strings.Split(body, "\n")
 	inboxTasks := remapTasksToBodyLineNumbers(body, tasks)
 	lines = injectInboxLinks(lines, noteID, baseURLForLinks(r, "/notes/new"), inboxTasks)
+	if ownerName, _, err := s.ownerFromNotePath(notePath); err == nil {
+		renderCtx = withWikiLinkOwner(renderCtx, ownerName)
+	}
 	rendered, err := s.renderNoteBody(renderCtx, []byte(strings.Join(lines, "\n")))
 	if err != nil {
 		return "", err
@@ -11598,16 +11619,14 @@ func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, no
 		http.Error(w, "missing wiki link", http.StatusBadRequest)
 		return
 	}
-	to = strings.TrimPrefix(to, "/notes/")
-	to = strings.TrimPrefix(to, "notes/")
-	to = strings.TrimPrefix(to, "/")
-	normalized, err := fs.NormalizeNotePath(to)
+	toRef := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(to, "/"), "notes/"), "notes/")
+	if parsed, ok := parseNoteRefForUser(toRef, currentUserName(r.Context())); ok {
+		toRef = parsed
+	}
+	normalized, wikilinkRef, err := wikiLinkRefForTarget(ownerName, toRef)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-	if !strings.HasSuffix(strings.ToLower(normalized), ".md") {
-		normalized = normalized + ".md"
 	}
 	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 	if err != nil {
@@ -11627,7 +11646,7 @@ func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, no
 	frontmatter := index.FrontmatterBlock(content)
 	body := index.StripFrontmatter(content)
 	re := regexp.MustCompile(`\[\[\s*` + regexp.QuoteMeta(from) + `\s*\]\]`)
-	updatedBody := re.ReplaceAllString(body, "[["+normalized+"]]")
+	updatedBody := re.ReplaceAllString(body, "[["+wikilinkRef+"]]")
 	if updatedBody == body {
 		http.Error(w, "wiki link not found", http.StatusConflict)
 		return
@@ -13424,32 +13443,47 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 	if ref == "" {
 		return "", "", nil
 	}
-	ref = normalizeNoteRef(ref)
-	if path, title, err := s.idx.PathTitleByUID(ctx, ref); err == nil {
-		return path, title, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return "", "", err
+	ownerName, scopedRef, explicitOwner := parseWikiLinkRef(ref)
+	if !explicitOwner {
+		ownerName = wikiLinkOwner(ctx)
+		if ownerName == "" {
+			ownerName = currentUserName(ctx)
+		}
+		scopedRef = normalizeNoteRef(ref)
 	}
-	if path, err := s.idx.PathByTitleNewest(ctx, ref); err == nil {
+	ownerName = strings.TrimSpace(ownerName)
+	scopedRef = strings.TrimSpace(normalizeNoteRef(scopedRef))
+	if ownerName == "" || scopedRef == "" {
+		return "", "", nil
+	}
+
+	if isUUIDLike(scopedRef) {
+		if path, title, err := s.idx.PathTitleByUID(ctx, scopedRef); err == nil {
+			if notePathOwnerEquals(path, ownerName) {
+				return path, title, nil
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return "", "", err
+		}
+	}
+	if path, err := s.idx.PathByTitleNewestForOwner(ctx, ownerName, scopedRef); err == nil {
 		return path, "", nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return "", "", err
 	}
 
-	candidates := []string{ref}
-	trimmed := strings.TrimPrefix(ref, "/notes/")
+	candidates := []string{scopedRef}
+	trimmed := strings.TrimPrefix(scopedRef, "/notes/")
 	trimmed = strings.TrimPrefix(trimmed, "notes/")
 	trimmed = strings.TrimPrefix(trimmed, "/")
 	trimmed = normalizeNoteRef(trimmed)
-	if trimmed != ref && trimmed != "" {
+	if trimmed != scopedRef && trimmed != "" {
 		candidates = append(candidates, trimmed)
 	}
-	candidates, err := s.expandWikiLinkCandidates(ctx, candidates)
-	if err != nil {
-		return "", "", err
-	}
+
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
+		candidate = ownerLocalPath(ownerName, candidate)
 		for _, variant := range []string{candidate, fs.EnsureMDExt(candidate)} {
 			if variant == "" {
 				continue
@@ -13474,60 +13508,47 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 	return "", "", nil
 }
 
-func (s *Server) expandWikiLinkCandidates(ctx context.Context, candidates []string) ([]string, error) {
-	owner := currentUserName(ctx)
-	if owner == "" {
-		return candidates, nil
+func parseWikiLinkRef(ref string) (ownerName string, scopedRef string, explicitOwner bool) {
+	scopedRef = normalizeNoteRef(ref)
+	canonical, ok := parseUserScopedNoteRef(ref)
+	if !ok {
+		return "", scopedRef, false
 	}
-	out := make([]string, 0, len(candidates)*2)
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		out = append(out, candidate)
-		first, ok := leadingPathSegment(candidate)
-		if ok {
-			isOwner, err := s.isOwnerName(ctx, first)
-			if err != nil {
-				return nil, err
-			}
-			if isOwner {
-				continue
-			}
-		}
-		out = append(out, owner+"/"+candidate)
+	parts := strings.SplitN(canonical, "/", 2)
+	if len(parts) != 2 {
+		return "", scopedRef, false
 	}
-	return out, nil
+	ownerName = strings.TrimSpace(parts[0])
+	scopedRef = strings.TrimSpace(parts[1])
+	if ownerName == "" || scopedRef == "" {
+		return "", scopedRef, false
+	}
+	return ownerName, scopedRef, true
 }
 
-func (s *Server) isOwnerName(ctx context.Context, name string) (bool, error) {
-	if strings.TrimSpace(name) == "" {
-		return false, nil
+func ownerLocalPath(ownerName string, value string) string {
+	ownerName = strings.TrimSpace(ownerName)
+	value = strings.TrimPrefix(strings.TrimSpace(value), "/")
+	if ownerName == "" || value == "" {
+		return value
 	}
-	_, err := s.idx.LookupOwnerIDs(ctx, name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+	prefix := ownerName + "/"
+	if strings.HasPrefix(value, prefix) {
+		return value
 	}
+	return prefix + value
+}
+
+func notePathOwnerEquals(notePath string, ownerName string) bool {
+	ownerName = strings.TrimSpace(ownerName)
+	if ownerName == "" {
+		return false
+	}
+	owner, _, err := fs.SplitOwnerNotePath(notePath)
 	if err != nil {
-		return false, err
+		return false
 	}
-	return true, nil
-}
-
-func leadingPathSegment(value string) (string, bool) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", false
-	}
-	parts := strings.SplitN(value, "/", 2)
-	if len(parts) < 2 {
-		return "", false
-	}
-	if strings.TrimSpace(parts[0]) == "" {
-		return "", false
-	}
-	return parts[0], true
+	return strings.EqualFold(owner, ownerName)
 }
 
 func slugify(input string) string {

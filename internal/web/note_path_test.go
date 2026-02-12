@@ -80,3 +80,55 @@ func TestParseNoteRefForUser(t *testing.T) {
 		}
 	}
 }
+
+func TestWikiLinkRefForTarget(t *testing.T) {
+	tests := []struct {
+		name        string
+		sourceOwner string
+		targetPath  string
+		wantPath    string
+		wantRef     string
+		wantErr     bool
+	}{
+		{
+			name:        "same owner uses local ref",
+			sourceOwner: "seno",
+			targetPath:  "seno/notes/a.md",
+			wantPath:    "seno/notes/a.md",
+			wantRef:     "notes/a.md",
+		},
+		{
+			name:        "other owner uses explicit ref",
+			sourceOwner: "seno",
+			targetPath:  "healing/notes/a.md",
+			wantPath:    "healing/notes/a.md",
+			wantRef:     "@healing/notes/a.md",
+		},
+		{
+			name:        "invalid path rejected",
+			sourceOwner: "seno",
+			targetPath:  "../etc/passwd",
+			wantErr:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPath, gotRef, err := wikiLinkRefForTarget(tt.sourceOwner, tt.targetPath)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("wikiLinkRefForTarget error: %v", err)
+			}
+			if gotPath != tt.wantPath {
+				t.Fatalf("wikiLinkRefForTarget path=%q want %q", gotPath, tt.wantPath)
+			}
+			if gotRef != tt.wantRef {
+				t.Fatalf("wikiLinkRefForTarget ref=%q want %q", gotRef, tt.wantRef)
+			}
+		})
+	}
+}

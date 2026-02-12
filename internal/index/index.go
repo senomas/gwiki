@@ -5186,6 +5186,37 @@ func (i *Index) PathByTitleNewest(ctx context.Context, title string) (string, er
 	return joinOwnerPath(ownerName, relPath), nil
 }
 
+func (i *Index) PathByTitleNewestForOwner(ctx context.Context, ownerName string, title string) (string, error) {
+	ownerName = strings.TrimSpace(ownerName)
+	title = strings.TrimSpace(title)
+	if ownerName == "" || title == "" {
+		return "", sql.ErrNoRows
+	}
+
+	ownerID, err := i.LookupOwnerIDs(ctx, ownerName)
+	if err != nil {
+		return "", err
+	}
+
+	var relPath string
+	var resolvedOwnerName string
+	clauses := []string{"files.user_id = ?", "lower(files.title)=lower(?)"}
+	args := []interface{}{ownerID, title}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	query := fmt.Sprintf(`
+		SELECT files.path, %s
+		FROM files
+		%s
+		WHERE %s
+		ORDER BY files.updated_at DESC
+		LIMIT 1`, ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+	if err := i.queryRowContext(ctx, query, args...).Scan(&relPath, &resolvedOwnerName); err != nil {
+		return "", err
+	}
+	return joinOwnerPath(resolvedOwnerName, relPath), nil
+}
+
 func (i *Index) DumpNoteList(ctx context.Context) ([]NoteSummary, error) {
 	query := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, %s FROM files %s", ownerNameExpr(), ownerJoins("files"))
 	args := []interface{}{}

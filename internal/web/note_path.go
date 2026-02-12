@@ -111,6 +111,25 @@ func parseNoteRefForUser(noteRef, currentUser string) (string, bool) {
 	return currentUser + "/" + noteRef, true
 }
 
+func wikiLinkRefForTarget(sourceOwner, targetPath string) (string, string, error) {
+	targetPath = strings.TrimPrefix(strings.TrimSpace(normalizeNoteRef(targetPath)), "/")
+	normalized, err := fs.NormalizeNotePath(targetPath)
+	if err != nil {
+		return "", "", err
+	}
+	normalized = fs.EnsureMDExt(normalized)
+
+	targetOwner, rel, err := fs.SplitOwnerNotePath(normalized)
+	if err != nil {
+		return "", "", err
+	}
+	sourceOwner = strings.TrimSpace(sourceOwner)
+	if sourceOwner != "" && strings.EqualFold(targetOwner, sourceOwner) {
+		return normalized, rel, nil
+	}
+	return normalized, "@"+targetOwner+"/"+rel, nil
+}
+
 func isUUIDLike(value string) bool {
 	if len(value) != 36 {
 		return false
