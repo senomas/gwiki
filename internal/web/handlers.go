@@ -6454,7 +6454,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		currentURL = quickLauncherURL(r)
 	}
 	basePath, _, _, _, _, _ := quickLauncherContext(currentURL)
-	notePath, hasNote := quickLauncherNotePath(basePath)
+	notePath, hasNote := quickLauncherNotePath(basePath, currentUserName(r.Context()))
 
 	actions := []QuickLauncherEntry{}
 	contextActions := []QuickLauncherEntry{}
@@ -6510,8 +6510,8 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Broken links", Hint: "Fix", Icon: "B", Href: "/broken"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Scroll to top", Hint: "Jump", Icon: "T", Href: "#top", Action: "scroll-top"})
 		if isAuth && hasNote {
-			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: noteHrefWithSuffix(notePath, "edit")})
-			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: noteHrefWithSuffix(notePath, "delete")})
+			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context()))})
+			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: noteHrefWithSuffix(notePath, "delete", currentUserName(r.Context()))})
 		}
 		if authEnabled {
 			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
@@ -6597,7 +6597,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 				Label:     label,
 				Hint:      note.Path,
 				Icon:      "N",
-				Href:      noteHref(note.Path),
+				Href:      noteHref(note.Path, currentUserName(r.Context())),
 				NotePath:  note.Path,
 				NoteTitle: note.Title,
 			})
@@ -6730,7 +6730,7 @@ func quickLauncherContext(parsed *url.URL) (string, []string, string, string, st
 	return path, activeTags, activeDate, activeSearch, activeFolder, activeRoot
 }
 
-func quickLauncherNotePath(path string) (string, bool) {
+func quickLauncherNotePath(path, currentUser string) (string, bool) {
 	if !strings.HasPrefix(path, "/notes/") {
 		return "", false
 	}
@@ -6744,7 +6744,7 @@ func quickLauncherNotePath(path string) (string, bool) {
 			return "", false
 		}
 	}
-	parsed, ok := parseUserScopedNoteRef(rest)
+	parsed, ok := parseNoteRefForUser(rest, currentUser)
 	if !ok {
 		return "", false
 	}
@@ -10109,7 +10109,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				DurationSeconds: 3,
 				CreatedAt:       time.Now(),
 			})
-			targetURL := noteHref(notePath)
+			targetURL := noteHref(notePath, currentUserName(r.Context()))
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
 				w.Header().Set("X-Redirect-Location", targetURL)
@@ -10523,7 +10523,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				DurationSeconds: 3,
 				CreatedAt:       time.Now(),
 			})
-			targetURL := noteHref(notePath)
+			targetURL := noteHref(notePath, currentUserName(r.Context()))
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
 				w.Header().Set("X-Redirect-Location", targetURL)
@@ -10647,7 +10647,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		DurationSeconds: 3,
 		CreatedAt:       time.Now(),
 	})
-	targetURL := noteHref(notePath)
+	targetURL := noteHref(notePath, currentUserName(r.Context()))
 	if isHTMX(r) {
 		w.Header().Set("HX-Redirect", targetURL)
 		w.Header().Set("X-Redirect-Location", targetURL)
@@ -10684,7 +10684,7 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resolveFromRoute := func(routeRef string) (string, bool) {
-		parsed, ok := parseUserScopedNoteRef(routeRef)
+		parsed, ok := parseNoteRefForUser(routeRef, currentUserName(r.Context()))
 		if !ok {
 			http.NotFound(w, r)
 			return "", false
@@ -11331,7 +11331,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		}
 	}
 
-	noteURL := baseURLForLinks(r, noteHref(notePath))
+	noteURL := baseURLForLinks(r, noteHref(notePath, currentUserName(r.Context())))
 
 	data := ViewData{
 		NotePath:              notePath,
@@ -11762,7 +11762,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit"), http.StatusSeeOther)
+	http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())), http.StatusSeeOther)
 }
 
 func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Request) {
@@ -11987,7 +11987,7 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit"), http.StatusSeeOther)
+	http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())), http.StatusSeeOther)
 }
 
 func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
@@ -12362,7 +12362,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			NotePath:        notePath,
 			RawContent:      r.Form.Get("content"),
 			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  noteHrefWithSuffix(notePath, "edit"),
+			ErrorReturnURL:  noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())),
 			ReturnURL:       returnURL,
 		}, http.StatusBadRequest)
 		return
@@ -12382,7 +12382,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: normalizeLineEndings(r.Form.Get("frontmatter")),
 			ReturnURL:        returnURL,
 			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
+			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())),
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -12406,7 +12406,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			RawContent:       "",
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     "content required",
-			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
+			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())),
 			ReturnURL:        returnURL,
 		}, http.StatusBadRequest)
 		return
@@ -12423,7 +12423,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				RawContent:       content,
 				FrontmatterBlock: frontmatter,
 				ErrorMessage:     "invalid priority",
-				ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
+				ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())),
 				ReturnURL:        returnURL,
 			}, http.StatusBadRequest)
 			return
@@ -12463,7 +12463,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				s.views.RenderTemplate(w, "toast", data)
 				return
 			}
-			http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit"), http.StatusSeeOther)
+			http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())), http.StatusSeeOther)
 			return
 		}
 		if isHTMX(r) {
@@ -12481,14 +12481,14 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     apiErr.message,
-			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
+			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())),
 			ReturnURL:        returnURL,
 		}, status)
 		return
 	}
 
 	if saveResult.NoChange {
-		targetURL := noteHref(saveResult.Path)
+		targetURL := noteHref(saveResult.Path, currentUserName(r.Context()))
 		if returnURL != "" {
 			targetURL = returnURL
 		}
@@ -12530,7 +12530,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 		slog.Debug("save note redirect owner", "note_path", notePath, "target_owner", targetOwner, "target_path", targetPath)
 	}
-	targetURL := noteHref(targetPath)
+	targetURL := noteHref(targetPath, currentUserName(r.Context()))
 	if returnURL != "" && targetOwner == ownerName && !saveResult.Moved && targetPath == notePath {
 		targetURL = returnURL
 	}
@@ -13398,7 +13398,7 @@ func (s *Server) expandWikiLinks(ctx context.Context, input string) string {
 			label = trimmed
 		}
 		if err == nil && target != "" {
-			return fmt.Sprintf("[%s](%s)", label, noteHref(target))
+			return fmt.Sprintf("[%s](%s)", label, noteHref(target, currentUserName(ctx)))
 		}
 		return fmt.Sprintf("[%s](/__missing__?ref=%s)", label, url.QueryEscape(trimmed))
 	})

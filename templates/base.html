@@ -1061,6 +1061,8 @@
         return value;
       }
 
+      var currentUserName = "{{.CurrentUser.Name}}".trim().toLowerCase();
+
       function toNoteRoute(path) {
         var value = (path || "").trim();
         if (!value) {
@@ -1075,8 +1077,14 @@
         if (value.charAt(0) === "@") {
           return value;
         }
-        if (value.indexOf("/") >= 0) {
-          return "@" + value;
+        var slashIndex = value.indexOf("/");
+        if (slashIndex >= 0) {
+          var owner = value.slice(0, slashIndex).trim();
+          var rel = value.slice(slashIndex + 1);
+          if (owner && rel && currentUserName && owner.toLowerCase() === currentUserName) {
+            return rel;
+          }
+          return "@" + owner + "/" + rel;
         }
         return value;
       }

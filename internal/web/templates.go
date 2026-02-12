@@ -66,11 +66,11 @@ func MustParseTemplates() *Templates {
 			}
 			return "#" + tag
 		},
-		"noteHref": func(notePath string) string {
-			return noteHref(notePath)
+		"noteHref": func(notePath string, currentUser ...string) string {
+			return noteHref(notePath, currentUser...)
 		},
-		"noteHrefWithSuffix": func(notePath string, suffix string) string {
-			return noteHrefWithSuffix(notePath, suffix)
+		"noteHrefWithSuffix": func(notePath string, suffix string, currentUser ...string) string {
+			return noteHrefWithSuffix(notePath, suffix, currentUser...)
 		},
 	})
 	t = template.Must(t.ParseGlob(glob))

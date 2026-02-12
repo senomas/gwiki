@@ -17,7 +17,7 @@ docker-build:
 	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t gwiki .
 
 test:
-	docker build --target test --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) .
+	CGO_ENABLED=1 GOCACHE=$(CURDIR)/.gocache go test -tags "sqlite_fts5" ./...
 
 test-http:
 	docker build --target test-http --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) .
