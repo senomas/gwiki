@@ -6,7 +6,7 @@
   {{range .SearchResults}}
     <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
       <h2 class="text-lg font-semibold text-slate-100">
-        <a class="js-search-result text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a>
+        <a class="js-search-result text-sky-300 hover:text-sky-200" href="{{noteHref .Path}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a>
       </h2>
       {{if .Snippet}}<div class="mt-2 text-sm text-slate-300">{{.Snippet}}</div>{{end}}
     </article>

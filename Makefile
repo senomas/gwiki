@@ -3,7 +3,7 @@
 -include .env.local
 export
 
-.PHONY: docker-build test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build test test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
 
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
@@ -18,6 +18,11 @@ docker-build:
 
 test:
 	docker build --target test --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) .
+
+test-http:
+	docker build --target test-http --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) .
+
+http-test: test-http
 
 GIT_SHA_SHORT := $(shell git rev-parse --short HEAD)
 GIT_COMMIT_TS_COMPACT := $(shell git show -s --format=%cd --date=format:'%Y%m%d%H%M%S' HEAD)

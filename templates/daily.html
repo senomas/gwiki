@@ -6,7 +6,7 @@
     <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
       <div class="space-y-3">
         <h2 class="text-xl font-semibold text-slate-100">
-          <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.DailyJournal.Path}}">{{.DailyJournal.Title}}</a>
+          <a class="text-sky-300 hover:text-sky-200" href="{{noteHref .DailyJournal.Path}}">{{.DailyJournal.Title}}</a>
         </h2>
         <div class="text-xs uppercase tracking-[0.2em] text-slate-500">
           {{if .DailyJournal.FolderLabel}}{{.DailyJournal.FolderLabel}}{{else}}{{if .DailyJournal.Meta.Folder}}{{.DailyJournal.Meta.Folder}}{{end}}{{end}}
@@ -34,7 +34,7 @@
       <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
         <div class="space-y-3">
           <h2 class="text-xl font-semibold text-slate-100">
-            <a class="text-sky-300 hover:text-sky-200" href="/notes/{{.Path}}">{{.Title}}</a>
+            <a class="text-sky-300 hover:text-sky-200" href="{{noteHref .Path}}">{{.Title}}</a>
           </h2>
           <div class="text-xs uppercase tracking-[0.2em] text-slate-500">
             {{if .FolderLabel}}{{.FolderLabel}}{{else}}{{if .Meta.Folder}}{{.Meta.Folder}}{{end}}{{end}}

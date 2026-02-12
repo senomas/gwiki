@@ -37,6 +37,9 @@ COPY templates ./templates
 FROM build-base AS test
 RUN CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
 
+FROM build-base AS test-http
+RUN CGO_ENABLED=1 go test -count=1 -tags "sqlite_fts5 http_test" ./internal/web
+
 FROM test AS build
 RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -ldflags="-X gwiki/internal/web.BuildVersion=${BUILD_VERSION}" -o /out/wiki ./cmd/wiki
 RUN CGO_ENABLED=1 go build -tags "sqlite_fts5" -o /out/user ./cmd/user

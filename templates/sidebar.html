@@ -83,7 +83,7 @@
     <ul class="mt-3 space-y-4 text-xs text-slate-300">
       {{range .Users}}
         <li class="px-0.5">
-          <a class="block leading-tight transition hover:text-slate-100" href="{{if and $.AuthEnabled $.IsAuthenticated (eq .Name $.CurrentUser.Name)}}/{{else}}/{{.Name}}{{end}}">{{.Name}} {{if gt .Count 0}}({{.Count}}){{end}}</a>
+          <a class="block leading-tight transition hover:text-slate-100" href="{{if and $.AuthEnabled $.IsAuthenticated (eq .Name $.CurrentUser.Name)}}/{{else}}/@{{.Name}}{{end}}">{{.Name}} {{if gt .Count 0}}({{.Count}}){{end}}</a>
           <div class="mt-1 space-y-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-600">
             <div>commit {{if .LastCommitAt}}{{.LastCommitAt}}{{else}}—{{end}}</div>
             <div>sync {{if .LastSuccessSync}}{{.LastSuccessSync}}{{else}}—{{end}}</div>

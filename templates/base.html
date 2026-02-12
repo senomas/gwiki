@@ -1061,8 +1061,28 @@
         return value;
       }
 
+      function toNoteRoute(path) {
+        var value = (path || "").trim();
+        if (!value) {
+          return value;
+        }
+        if (value.charAt(0) === "/") {
+          value = value.slice(1);
+        }
+        if (value.indexOf("notes/") === 0) {
+          value = value.slice("notes/".length);
+        }
+        if (value.charAt(0) === "@") {
+          return value;
+        }
+        if (value.indexOf("/") >= 0) {
+          return "@" + value;
+        }
+        return value;
+      }
+
       function buildNoteURL(path) {
-        return encodeURI("/notes/" + path);
+        return encodeURI("/notes/" + toNoteRoute(path));
       }
 
       function openWikiLauncher(ref, element) {
@@ -1293,9 +1313,9 @@
           submenu.setAttribute("aria-hidden", "true");
           return;
         }
-        noteOpen.setAttribute("href", "/notes/" + path);
-        noteEdit.setAttribute("href", "/notes/" + path + "/edit");
-        noteDelete.setAttribute("action", "/notes/" + path + "/delete");
+        noteOpen.setAttribute("href", buildNoteURL(path));
+        noteEdit.setAttribute("href", buildNoteURL(path) + "/edit");
+        noteDelete.setAttribute("action", buildNoteURL(path) + "/delete");
         submenu.classList.add("is-open");
         submenu.setAttribute("aria-hidden", "false");
         activateItem(submenuPanel, 0);
@@ -1685,7 +1705,7 @@
             if (wikiLinkElement) {
               var label = data.title || item.getAttribute("data-note-title") || path;
               wikiLinkElement.textContent = label;
-              wikiLinkElement.setAttribute("href", "/notes/" + data.path);
+              wikiLinkElement.setAttribute("href", buildNoteURL(data.path));
               wikiLinkElement.classList.remove("js-wiki-missing");
               wikiLinkElement.removeAttribute("data-wiki-ref");
             }
@@ -1741,9 +1761,9 @@
 
       function openModal(notePath, noteID, noteURL, showOpen) {
         var editTarget = noteID || notePath;
-        openLink.setAttribute("href", noteURL || ("/notes/" + notePath));
-        editLink.setAttribute("href", "/notes/" + editTarget + "/edit");
-        deleteForm.setAttribute("action", "/notes/" + editTarget + "/delete");
+        openLink.setAttribute("href", noteURL || buildNoteURL(notePath));
+        editLink.setAttribute("href", buildNoteURL(editTarget) + "/edit");
+        deleteForm.setAttribute("action", buildNoteURL(editTarget) + "/delete");
         if (showOpen) {
           openLink.classList.remove("hidden");
           defaultAction = openLink;
@@ -1759,18 +1779,10 @@
       }
 
       function isInNoteList(target) {
-        var list = document.querySelector("[data-note-list]");
-        if (!list || !target) {
+        if (!target) {
           return false;
         }
-        var el = target;
-        while (el) {
-          if (el === list) {
-            return true;
-          }
-          el = el.parentElement;
-        }
-        return false;
+        return !!closestElement(target, "[data-note-list]");
       }
 
       function closestElement(target, selector) {
@@ -2136,7 +2148,7 @@
           clearTimeout(collapseTimer);
         }
         collapseTimer = setTimeout(function () {
-          fetch("/notes/" + notePath + "/collapsed", {
+          fetch(buildNoteURL(notePath) + "/collapsed", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({collapsed: collectCollapsed(noteBody)}),

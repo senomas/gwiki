@@ -31,7 +31,8 @@ Non-goals (v1)
 4. **Security-by-default**
    - Single-user auth is required if exposed outside localhost.
 5. **Testing discipline**
-   - After completing any planned work, run the full test suite (e.g., `go test ./...`) before reporting.
+   - After completing any planned work, run `make test` before reporting.
+   - For `httptest`/HTTP-listener test coverage, also run `make test-http`.
    - Always run tests before any commit.
 6. **Logging discipline**
    - Add `WARN`/`ERROR` logs for unexpected results (e.g., failure to open files, database errors, external command failures).

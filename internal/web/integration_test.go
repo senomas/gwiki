@@ -1,3 +1,6 @@
+//go:build http_test
+// +build http_test
+
 package web
 
 import (
@@ -55,7 +58,8 @@ func TestIntegrationFlow(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	noteURL := "/notes/" + owner + "/my-note.md"
+	notePath := owner + "/my-note.md"
+	noteURL := "/notes/@" + notePath
 	resp, err = http.Get(ts.URL + noteURL + "/edit")
 	if err != nil {
 		t.Fatalf("get edit: %v", err)
@@ -83,6 +87,17 @@ func TestIntegrationFlow(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		t.Fatalf("get view status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	resp.Body.Close()
+
+	resp, err = http.Get(ts.URL + "/notes/" + notePath)
+	if err != nil {
+		t.Fatalf("get legacy view: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get legacy view status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	resp.Body.Close()
 
@@ -159,7 +174,7 @@ func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/notes/" + notePath + "/detail")
+	resp, err := http.Get(ts.URL + "/notes/@" + notePath + "/detail")
 	if err != nil {
 		t.Fatalf("get detail: %v", err)
 	}

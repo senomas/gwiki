@@ -5456,7 +5456,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		s.renderHomePage(w, r, ownerName, "/"+ownerName)
+		s.renderHomePage(w, r, ownerName, "/@"+ownerName)
 		return
 	}
 	ownerName := ""
@@ -5475,11 +5475,30 @@ func ownerHomeName(rawPath string) (string, bool) {
 	if trimmed == "" || strings.Contains(trimmed, "/") {
 		return "", false
 	}
-	lowered := strings.ToLower(trimmed)
+	if !strings.HasPrefix(trimmed, "@") {
+		return "", false
+	}
+	owner := strings.TrimPrefix(trimmed, "@")
+	if owner == "" {
+		return "", false
+	}
+	lowered := strings.ToLower(owner)
 	if _, reserved := reservedOwnerPaths[lowered]; reserved {
 		return "", false
 	}
-	return trimmed, true
+	return owner, true
+}
+
+func isValidOwnerName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.Contains(name, "/") || strings.HasPrefix(name, "@") {
+		return false
+	}
+	lowered := strings.ToLower(name)
+	if _, reserved := reservedOwnerPaths[lowered]; reserved {
+		return false
+	}
+	return true
 }
 
 var reservedOwnerPaths = map[string]struct{}{
@@ -6491,8 +6510,8 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Broken links", Hint: "Fix", Icon: "B", Href: "/broken"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Scroll to top", Hint: "Jump", Icon: "T", Href: "#top", Action: "scroll-top"})
 		if isAuth && hasNote {
-			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: "/notes/" + notePath + "/edit"})
-			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: "/notes/" + notePath + "/delete"})
+			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Edit", Hint: "Modify", Icon: "E", Href: noteHrefWithSuffix(notePath, "edit")})
+			addAction(&actions, QuickLauncherEntry{ID: "quick-action-delete", Kind: "form", Label: "Delete", Hint: "Remove", Icon: "D", Href: noteHrefWithSuffix(notePath, "delete")})
 		}
 		if authEnabled {
 			addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Logout", Hint: "Session", Icon: "L", Href: "/logout"})
@@ -6578,7 +6597,7 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 				Label:     label,
 				Hint:      note.Path,
 				Icon:      "N",
-				Href:      "/notes/" + note.Path,
+				Href:      noteHref(note.Path),
 				NotePath:  note.Path,
 				NoteTitle: note.Title,
 			})
@@ -6725,7 +6744,11 @@ func quickLauncherNotePath(path string) (string, bool) {
 			return "", false
 		}
 	}
-	return rest, true
+	parsed, ok := parseUserScopedNoteRef(rest)
+	if !ok {
+		return "", false
+	}
+	return parsed, true
 }
 
 func toggleTag(tags []string, target string) []string {
@@ -7232,12 +7255,11 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	ownerName := strings.TrimSpace(r.URL.Query().Get("o"))
 	if ownerName != "" {
-		normalized, ok := ownerHomeName("/" + ownerName)
-		if !ok {
+		if !isValidOwnerName(ownerName) {
 			http.NotFound(w, r)
 			return
 		}
-		if _, err := s.idx.LookupOwnerIDs(r.Context(), normalized); err != nil {
+		if _, err := s.idx.LookupOwnerIDs(r.Context(), ownerName); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.NotFound(w, r)
 				return
@@ -7245,7 +7267,6 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		ownerName = normalized
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -7253,7 +7274,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	activeDate := ""
 	basePath := "/"
 	if ownerName != "" {
-		basePath = "/" + ownerName
+		basePath = "/@" + ownerName
 	}
 	baseURL := baseURLForLinks(r, basePath)
 	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
@@ -7313,12 +7334,11 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	}
 	ownerName := strings.TrimSpace(r.URL.Query().Get("o"))
 	if ownerName != "" {
-		normalized, ok := ownerHomeName("/" + ownerName)
-		if !ok {
+		if !isValidOwnerName(ownerName) {
 			http.NotFound(w, r)
 			return
 		}
-		if _, err := s.idx.LookupOwnerIDs(r.Context(), normalized); err != nil {
+		if _, err := s.idx.LookupOwnerIDs(r.Context(), ownerName); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.NotFound(w, r)
 				return
@@ -7326,7 +7346,6 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		ownerName = normalized
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -7334,7 +7353,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	activeDate := ""
 	basePath := "/"
 	if ownerName != "" {
-		basePath = "/" + ownerName
+		basePath = "/@" + ownerName
 	}
 	baseURL := baseURLForLinks(r, basePath)
 	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
@@ -8887,7 +8906,7 @@ func (s *Server) handleSettingsUserCreate(w http.ResponseWriter, r *http.Request
 		fail("All fields are required.")
 		return
 	}
-	if _, ok := ownerHomeName("/" + username); !ok {
+	if !isValidOwnerName(username) {
 		fail("Invalid username.")
 		return
 	}
@@ -10090,7 +10109,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				DurationSeconds: 3,
 				CreatedAt:       time.Now(),
 			})
-			targetURL := "/notes/" + notePath
+			targetURL := noteHref(notePath)
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
 				w.Header().Set("X-Redirect-Location", targetURL)
@@ -10504,7 +10523,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				DurationSeconds: 3,
 				CreatedAt:       time.Now(),
 			})
-			targetURL := "/notes/" + notePath
+			targetURL := noteHref(notePath)
 			if isHTMX(r) {
 				w.Header().Set("HX-Redirect", targetURL)
 				w.Header().Set("X-Redirect-Location", targetURL)
@@ -10628,7 +10647,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		DurationSeconds: 3,
 		CreatedAt:       time.Now(),
 	})
-	targetURL := "/notes/" + notePath
+	targetURL := noteHref(notePath)
 	if isHTMX(r) {
 		w.Header().Set("HX-Redirect", targetURL)
 		w.Header().Set("X-Redirect-Location", targetURL)
@@ -10664,146 +10683,125 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		s.handleUploadTempAttachment(w, r)
 		return
 	}
+	resolveFromRoute := func(routeRef string) (string, bool) {
+		parsed, ok := parseUserScopedNoteRef(routeRef)
+		if !ok {
+			http.NotFound(w, r)
+			return "", false
+		}
+		resolved, err := s.resolveNotePath(r.Context(), parsed)
+		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", routeRef, "err", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return "", false
+		}
+		slog.Debug("notes handler resolved", "path", routeRef, "resolved", resolved)
+		return resolved, true
+	}
 	if strings.HasSuffix(pathPart, "/edit") {
 		base := strings.TrimSuffix(pathPart, "/edit")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleEditNote(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/save") {
 		base := strings.TrimSuffix(pathPart, "/save")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleSaveNote(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/upload") {
 		base := strings.TrimSuffix(pathPart, "/upload")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleUploadAttachment(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/attachments/delete") {
 		base := strings.TrimSuffix(pathPart, "/attachments/delete")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleDeleteAttachment(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/delete") {
 		base := strings.TrimSuffix(pathPart, "/delete")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleDeleteNote(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/wikilink") {
 		base := strings.TrimSuffix(pathPart, "/wikilink")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleUpdateWikiLink(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/collapsed") {
 		base := strings.TrimSuffix(pathPart, "/collapsed")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleCollapsedSections(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/preview") {
 		base := strings.TrimSuffix(pathPart, "/preview")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handlePreview(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/card") {
 		base := strings.TrimSuffix(pathPart, "/card")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleNoteCardFragment(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/detail") {
 		base := strings.TrimSuffix(pathPart, "/detail")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleNoteDetailFragment(w, r, resolved)
 		return
 	}
 	if strings.HasSuffix(pathPart, "/backlinks") {
 		base := strings.TrimSuffix(pathPart, "/backlinks")
-		resolved, err := s.resolveNotePath(r.Context(), base)
-		if err != nil {
-			slog.Warn("notes handler resolve failed", "path", base, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
 			return
 		}
-		slog.Debug("notes handler resolved", "path", base, "resolved", resolved)
 		s.handleNoteBacklinksFragment(w, r, resolved)
 		return
 	}
 
-	resolved, err := s.resolveNotePath(r.Context(), pathPart)
-	if err != nil {
-		slog.Warn("notes handler resolve failed", "path", pathPart, "err", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	resolved, ok := resolveFromRoute(pathPart)
+	if !ok {
 		return
 	}
-	slog.Debug("notes handler resolved", "path", pathPart, "resolved", resolved)
 	s.handleViewNote(w, r, resolved)
 }
 
@@ -11333,7 +11331,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 		}
 	}
 
-	noteURL := baseURLForLinks(r, "/notes/"+notePath)
+	noteURL := baseURLForLinks(r, noteHref(notePath))
 
 	data := ViewData{
 		NotePath:              notePath,
@@ -11356,7 +11354,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 }
 
 func (s *Server) resolveNotePath(ctx context.Context, noteRef string) (string, error) {
-	noteRef = strings.TrimPrefix(noteRef, "/")
+	noteRef = normalizeNoteRef(noteRef)
 	if noteRef == "" {
 		return noteRef, nil
 	}
@@ -11764,7 +11762,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit"), http.StatusSeeOther)
 }
 
 func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Request) {
@@ -11989,7 +11987,7 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+	http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit"), http.StatusSeeOther)
 }
 
 func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
@@ -12364,7 +12362,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			NotePath:        notePath,
 			RawContent:      r.Form.Get("content"),
 			ErrorMessage:    err.Error(),
-			ErrorReturnURL:  "/notes/" + notePath + "/edit",
+			ErrorReturnURL:  noteHrefWithSuffix(notePath, "edit"),
 			ReturnURL:       returnURL,
 		}, http.StatusBadRequest)
 		return
@@ -12384,7 +12382,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			FrontmatterBlock: normalizeLineEndings(r.Form.Get("frontmatter")),
 			ReturnURL:        returnURL,
 			ErrorMessage:     err.Error(),
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
 		}, http.StatusInternalServerError)
 		return
 	}
@@ -12408,7 +12406,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			RawContent:       "",
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     "content required",
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
 			ReturnURL:        returnURL,
 		}, http.StatusBadRequest)
 		return
@@ -12425,7 +12423,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				RawContent:       content,
 				FrontmatterBlock: frontmatter,
 				ErrorMessage:     "invalid priority",
-				ErrorReturnURL:   "/notes/" + notePath + "/edit",
+				ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
 				ReturnURL:        returnURL,
 			}, http.StatusBadRequest)
 			return
@@ -12465,7 +12463,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				s.views.RenderTemplate(w, "toast", data)
 				return
 			}
-			http.Redirect(w, r, "/notes/"+notePath+"/edit", http.StatusSeeOther)
+			http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit"), http.StatusSeeOther)
 			return
 		}
 		if isHTMX(r) {
@@ -12483,14 +12481,14 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 			RawContent:       content,
 			FrontmatterBlock: frontmatter,
 			ErrorMessage:     apiErr.message,
-			ErrorReturnURL:   "/notes/" + notePath + "/edit",
+			ErrorReturnURL:   noteHrefWithSuffix(notePath, "edit"),
 			ReturnURL:        returnURL,
 		}, status)
 		return
 	}
 
 	if saveResult.NoChange {
-		targetURL := "/notes/" + saveResult.Path
+		targetURL := noteHref(saveResult.Path)
 		if returnURL != "" {
 			targetURL = returnURL
 		}
@@ -12532,7 +12530,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		}
 		slog.Debug("save note redirect owner", "note_path", notePath, "target_owner", targetOwner, "target_path", targetPath)
 	}
-	targetURL := "/notes/" + targetPath
+	targetURL := noteHref(targetPath)
 	if returnURL != "" && targetOwner == ownerName && !saveResult.Moved && targetPath == notePath {
 		targetURL = returnURL
 	}
@@ -13400,7 +13398,7 @@ func (s *Server) expandWikiLinks(ctx context.Context, input string) string {
 			label = trimmed
 		}
 		if err == nil && target != "" {
-			return fmt.Sprintf("[%s](/notes/%s)", label, target)
+			return fmt.Sprintf("[%s](%s)", label, noteHref(target))
 		}
 		return fmt.Sprintf("[%s](/__missing__?ref=%s)", label, url.QueryEscape(trimmed))
 	})
@@ -13426,6 +13424,7 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 	if ref == "" {
 		return "", "", nil
 	}
+	ref = normalizeNoteRef(ref)
 	if path, title, err := s.idx.PathTitleByUID(ctx, ref); err == nil {
 		return path, title, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -13441,6 +13440,7 @@ func (s *Server) resolveWikiLink(ctx context.Context, ref string) (string, strin
 	trimmed := strings.TrimPrefix(ref, "/notes/")
 	trimmed = strings.TrimPrefix(trimmed, "notes/")
 	trimmed = strings.TrimPrefix(trimmed, "/")
+	trimmed = normalizeNoteRef(trimmed)
 	if trimmed != ref && trimmed != "" {
 		candidates = append(candidates, trimmed)
 	}

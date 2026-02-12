@@ -12,3 +12,4 @@ static/js/htmx.min.js
 static/fonts/ttf/
 truenas.sh
 *.log
+.gocache/

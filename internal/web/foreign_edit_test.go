@@ -35,10 +35,9 @@ func TestEditForeignNoteWithAccess(t *testing.T) {
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
-	noteUID := "63333a78-1030-46ee-9485-0cb236d3efa4"
 	notePath := filepath.Join(notesDir, "test-18.md")
 	content := `---
-id: ` + noteUID + `
+id: 63333a78-1030-46ee-9485-0cb236d3efa4
 ---
 # Test 18
 
@@ -101,7 +100,7 @@ Foreign note body.
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/notes/"+noteUID+"/edit", nil)
+	req := httptest.NewRequest(http.MethodGet, "/notes/@"+owner+"/test-18.md/edit", nil)
 	req = req.WithContext(WithUser(req.Context(), User{Name: "dev", Authenticated: true}))
 	rec := httptest.NewRecorder()
 	srv.handleNotes(rec, req)
