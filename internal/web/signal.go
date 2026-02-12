@@ -49,6 +49,11 @@ type signalEnvelope struct {
 					ID          string `json:"id"`
 				} `json:"image"`
 			} `json:"previews"`
+			Attachments []struct {
+				ContentType string `json:"contentType"`
+				Filename    string `json:"filename"`
+				ID          string `json:"id"`
+			} `json:"attachments"`
 		} `json:"dataMessage"`
 		TypingMessage struct {
 			GroupID string `json:"groupId"`
@@ -57,13 +62,14 @@ type signalEnvelope struct {
 }
 
 type signalMessage struct {
-	Sender   string
-	Text     string
-	GroupID  string
-	Group    string
-	TSMillis int64
-	Previews []signalPreview
-	RawJSON  string
+	Sender      string
+	Text        string
+	GroupID     string
+	Group       string
+	TSMillis    int64
+	Previews    []signalPreview
+	Attachments []signalAttachment
+	RawJSON     string
 }
 
 type signalPreview struct {
@@ -71,6 +77,12 @@ type signalPreview struct {
 	Title       string
 	Description string
 	ImageID     string
+	ContentType string
+	Filename    string
+}
+
+type signalAttachment struct {
+	ID          string
 	ContentType string
 	Filename    string
 }
@@ -153,7 +165,7 @@ func (p *signalPoller) tick() {
 			slog.Debug("signal skip message", "reason", "group_mismatch", "msg_group", msg.GroupID)
 			continue
 		}
-		if msg.Text == "" && len(msg.Previews) == 0 {
+		if msg.Text == "" && len(msg.Previews) == 0 && len(msg.Attachments) == 0 {
 			slog.Debug("signal skip message", "reason", "empty_text")
 			continue
 		}
@@ -166,7 +178,7 @@ func (p *signalPoller) tick() {
 			slog.Debug("signal message raw", "ts", msg.TSMillis, "raw_json", msg.RawJSON)
 		}
 		notePath := p.notePathForTimestamp(msg.TSMillis)
-		slog.Debug("signal append", "note_path", notePath, "sender", msg.Sender, "ts", msg.TSMillis, "previews", len(msg.Previews))
+		slog.Debug("signal append", "note_path", notePath, "sender", msg.Sender, "ts", msg.TSMillis, "previews", len(msg.Previews), "attachments", len(msg.Attachments))
 		if err := p.appendMessage(ctx, notePath, msg); err != nil {
 			slog.Warn("signal append message failed", "err", err)
 			continue
@@ -263,6 +275,9 @@ func (p *signalPoller) writeSignalDebugMessage(msg signalMessage) {
 	}
 	if len(msg.Previews) > 0 {
 		dump["previews"] = len(msg.Previews)
+	}
+	if len(msg.Attachments) > 0 {
+		dump["attachments"] = len(msg.Attachments)
 	}
 	dump["text"] = text
 	if msg.RawJSON != "" {
@@ -421,13 +436,26 @@ func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
 				Filename:    strings.TrimSpace(preview.Image.Filename),
 			})
 		}
+		attachments := make([]signalAttachment, 0, len(env.Envelope.Data.Attachments))
+		for _, attachment := range env.Envelope.Data.Attachments {
+			attachmentID := strings.TrimSpace(attachment.ID)
+			if attachmentID == "" {
+				continue
+			}
+			attachments = append(attachments, signalAttachment{
+				ID:          attachmentID,
+				ContentType: strings.TrimSpace(attachment.ContentType),
+				Filename:    strings.TrimSpace(attachment.Filename),
+			})
+		}
 		msg := signalMessage{
-			Sender:   strings.TrimSpace(env.Envelope.Source),
-			Text:     strings.TrimSpace(env.Envelope.Data.Message),
-			GroupID:  strings.TrimSpace(env.Envelope.Data.GroupInfo.GroupID),
-			Group:    strings.TrimSpace(env.Envelope.Data.GroupInfo.Name),
-			Previews: previews,
-			RawJSON:  string(raw),
+			Sender:      strings.TrimSpace(env.Envelope.Source),
+			Text:        strings.TrimSpace(env.Envelope.Data.Message),
+			GroupID:     strings.TrimSpace(env.Envelope.Data.GroupInfo.GroupID),
+			Group:       strings.TrimSpace(env.Envelope.Data.GroupInfo.Name),
+			Previews:    previews,
+			Attachments: attachments,
+			RawJSON:     string(raw),
 		}
 		if msg.GroupID == "" {
 			msg.GroupID = strings.TrimSpace(env.Envelope.TypingMessage.GroupID)
@@ -436,7 +464,7 @@ func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
 		if ts > 0 {
 			msg.TSMillis = normalizeSignalTimestamp(ts)
 		}
-		if msg.Text != "" || msg.GroupID != "" || len(msg.Previews) > 0 {
+		if msg.Text != "" || msg.GroupID != "" || len(msg.Previews) > 0 || len(msg.Attachments) > 0 {
 			return msg, true
 		}
 	}
@@ -535,9 +563,10 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 			hasImagePreview = true
 		}
 	}
+	hasAttachments := len(msg.Attachments) > 0
 
 	// For captioned image messages, render as a regular inbox task then image(s).
-	if text != "" && hasImagePreview && !hasLinkPreview {
+	if text != "" && (hasImagePreview || hasAttachments) && !hasLinkPreview {
 		lines := []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}
 		if noteID == "" {
 			return lines, nil
@@ -549,6 +578,16 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 			attachmentName, ok, err := p.ensureSignalPreviewImage(ctx, noteID, preview)
 			if err != nil {
 				slog.Warn("signal preview image", "err", err)
+				continue
+			}
+			if ok {
+				lines = append(lines, "  ![](/attachments/"+noteID+"/"+attachmentName+")")
+			}
+		}
+		for _, attachment := range msg.Attachments {
+			attachmentName, ok, err := p.ensureSignalMessageAttachment(ctx, noteID, attachment)
+			if err != nil {
+				slog.Warn("signal attachment image", "err", err)
 				continue
 			}
 			if ok {
@@ -586,13 +625,39 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 			}
 		}
 		if len(lines) > 0 {
+			if noteID != "" {
+				for _, attachment := range msg.Attachments {
+					attachmentName, ok, err := p.ensureSignalMessageAttachment(ctx, noteID, attachment)
+					if err != nil {
+						slog.Warn("signal attachment image", "err", err)
+						continue
+					}
+					if ok {
+						lines = append(lines, "", "  ![](/attachments/"+noteID+"/"+attachmentName+")")
+					}
+				}
+			}
 			return lines, nil
 		}
 	}
 	if text == "" {
 		return nil, nil
 	}
-	return []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}, nil
+	lines = []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}
+	if noteID == "" {
+		return lines, nil
+	}
+	for _, attachment := range msg.Attachments {
+		attachmentName, ok, err := p.ensureSignalMessageAttachment(ctx, noteID, attachment)
+		if err != nil {
+			slog.Warn("signal attachment image", "err", err)
+			continue
+		}
+		if ok {
+			lines = append(lines, "  ![](/attachments/"+noteID+"/"+attachmentName+")")
+		}
+	}
+	return lines, nil
 }
 
 func normalizeSignalText(text string) string {
@@ -604,18 +669,26 @@ func normalizeSignalText(text string) string {
 }
 
 func (p *signalPoller) ensureSignalPreviewImage(ctx context.Context, noteID string, preview signalPreview) (string, bool, error) {
-	attachmentID := strings.TrimSpace(preview.ImageID)
+	return p.ensureSignalAttachment(ctx, noteID, preview.ImageID, preview.Filename, preview.ContentType)
+}
+
+func (p *signalPoller) ensureSignalMessageAttachment(ctx context.Context, noteID string, attachment signalAttachment) (string, bool, error) {
+	return p.ensureSignalAttachment(ctx, noteID, attachment.ID, attachment.Filename, attachment.ContentType)
+}
+
+func (p *signalPoller) ensureSignalAttachment(ctx context.Context, noteID string, attachmentID string, filename string, contentType string) (string, bool, error) {
+	attachmentID = strings.TrimSpace(attachmentID)
 	if attachmentID == "" {
 		return "", false, nil
 	}
-	name := sanitizeAttachmentName(preview.Filename)
+	name := sanitizeAttachmentName(filename)
 	if name == "" {
 		name = sanitizeAttachmentName(attachmentID)
 	}
 	if name == "" {
 		return "", false, nil
 	}
-	if ext := extensionFromContentType(preview.ContentType); ext != "" && !strings.HasSuffix(strings.ToLower(name), ext) {
+	if ext := extensionFromContentType(contentType); ext != "" && !strings.HasSuffix(strings.ToLower(name), ext) {
 		name += ext
 	}
 	attachmentsDir := p.server.noteAttachmentsDir(p.cfg.SignalOwner, noteID)

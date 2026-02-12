@@ -145,6 +145,44 @@ func TestDecodeSignalMessage_ImageOnlyPreviewWithText(t *testing.T) {
 	}
 }
 
+func TestDecodeSignalMessage_DataMessageAttachmentsWithText(t *testing.T) {
+	raw := []byte(`{
+		"envelope": {
+			"source": "+628129555265",
+			"timestamp": 1770876198291,
+			"dataMessage": {
+				"message": "Sate klathal",
+				"groupInfo": {"groupId": "group-a", "name": "gwiki"},
+				"attachments": [{
+					"contentType": "image/jpeg",
+					"filename": null,
+					"id": "eOvZWIZP8IRLCoKX8ABn.jpg"
+				}]
+			}
+		}
+	}`)
+
+	msg, ok := decodeSignalMessage(raw)
+	if !ok {
+		t.Fatalf("expected message to decode")
+	}
+	if msg.Text != "Sate klathal" {
+		t.Fatalf("unexpected text: %q", msg.Text)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("expected one attachment, got %d", len(msg.Attachments))
+	}
+	if msg.Attachments[0].ID != "eOvZWIZP8IRLCoKX8ABn.jpg" {
+		t.Fatalf("unexpected attachment id: %q", msg.Attachments[0].ID)
+	}
+	if msg.Attachments[0].ContentType != "image/jpeg" {
+		t.Fatalf("unexpected attachment content type: %q", msg.Attachments[0].ContentType)
+	}
+	if !strings.Contains(msg.RawJSON, `"attachments"`) {
+		t.Fatalf("expected raw json to include attachments, got: %q", msg.RawJSON)
+	}
+}
+
 func TestBuildSignalNoteLines_ImageWithTextTemplate(t *testing.T) {
 	tmpDir := t.TempDir()
 	owner := "seno"
@@ -184,6 +222,50 @@ func TestBuildSignalNoteLines_ImageWithTextTemplate(t *testing.T) {
 		t.Fatalf("unexpected first line: %q", lines[0])
 	}
 	if lines[1] != "  ![](/attachments/note-123/photo.jpg)" {
+		t.Fatalf("unexpected image line: %q", lines[1])
+	}
+}
+
+func TestBuildSignalNoteLines_DataMessageAttachmentsWithText(t *testing.T) {
+	tmpDir := t.TempDir()
+	owner := "seno"
+	noteID := "note-123"
+	attachmentsDir := filepath.Join(tmpDir, owner, "notes", "attachments", noteID)
+	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
+		t.Fatalf("mkdir attachments: %v", err)
+	}
+	attachmentFile := "image-attachment-123.jpg"
+	if err := os.WriteFile(filepath.Join(attachmentsDir, attachmentFile), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+
+	cfg := config.Config{
+		RepoPath:    tmpDir,
+		SignalOwner: owner,
+	}
+	poller := signalPoller{
+		cfg:    cfg,
+		server: &Server{cfg: cfg},
+	}
+
+	lines, err := poller.buildSignalNoteLines(context.Background(), signalMessage{
+		Text: "my caption",
+		Attachments: []signalAttachment{{
+			ID:          "image-attachment-123",
+			ContentType: "image/jpeg",
+		}},
+	}, noteID)
+	if err != nil {
+		t.Fatalf("build lines: %v", err)
+	}
+
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %#v", len(lines), lines)
+	}
+	if lines[0] != "- [ ] my caption #inbox #signal" {
+		t.Fatalf("unexpected first line: %q", lines[0])
+	}
+	if lines[1] != "  ![](/attachments/note-123/"+attachmentFile+")" {
 		t.Fatalf("unexpected image line: %q", lines[1])
 	}
 }
