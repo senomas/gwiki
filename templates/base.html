@@ -1092,6 +1092,7 @@
       function buildNoteURL(path) {
         return encodeURI("/notes/" + toNoteRoute(path));
       }
+      window.buildNoteURL = buildNoteURL;
 
       function openWikiLauncher(ref, element) {
         wikiLinkMode = true;
@@ -1825,14 +1826,12 @@
         if (!notePath) {
           return;
         }
-        console.log("[note-actions] click", notePath);
         event.preventDefault();
         if (noteActionClickTimer) {
           clearTimeout(noteActionClickTimer);
         }
         noteActionClickTimer = setTimeout(function () {
           noteActionClickTimer = null;
-          console.log("[note-actions] open modal", notePath);
           openModal(notePath, target.getAttribute("data-note-id") || "", target.getAttribute("data-note-url") || "", isInNoteList(target));
         }, 200);
       });
@@ -1846,7 +1845,6 @@
         if (!notePath) {
           return;
         }
-        console.log("[note-actions] dblclick", notePath);
         event.preventDefault();
         if (noteActionClickTimer) {
           clearTimeout(noteActionClickTimer);
