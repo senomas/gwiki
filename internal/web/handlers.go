@@ -845,6 +845,247 @@ func listAttachmentNames(dir string) []string {
 	return names
 }
 
+type attachmentFileMeta struct {
+	name       string
+	modUnix    int64
+	commitUnix int64
+	committed  bool
+}
+
+func sortAttachmentGroupMeta(items []attachmentFileMeta, useCommitTime bool) {
+	sort.Slice(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		var leftUnix int64
+		var rightUnix int64
+		if useCommitTime {
+			leftUnix = left.commitUnix
+			rightUnix = right.commitUnix
+		} else {
+			leftUnix = left.modUnix
+			rightUnix = right.modUnix
+		}
+		if leftUnix == rightUnix {
+			return left.name < right.name
+		}
+		return leftUnix > rightUnix
+	})
+}
+
+func toAttachmentItems(items []attachmentFileMeta, useCommitTime bool) []AttachmentListItem {
+	out := make([]AttachmentListItem, 0, len(items))
+	for _, item := range items {
+		ts := item.modUnix
+		if useCommitTime {
+			ts = item.commitUnix
+		}
+		dateLabel := ""
+		if ts > 0 {
+			dateLabel = time.Unix(ts, 0).Format("2006-01-02 15:04:05")
+		}
+		out = append(out, AttachmentListItem{
+			Name:      item.name,
+			DateLabel: dateLabel,
+		})
+	}
+	return out
+}
+
+func (s *Server) attachmentCommitUnix(ownerName, noteID, attachmentName string) (int64, bool) {
+	ownerName = strings.TrimSpace(ownerName)
+	noteID = strings.TrimSpace(noteID)
+	attachmentName = strings.TrimSpace(attachmentName)
+	if ownerName == "" || noteID == "" || attachmentName == "" {
+		return 0, false
+	}
+	repoPath := filepath.Join(s.cfg.RepoPath, ownerName)
+	relPath := filepath.ToSlash(filepath.Join("notes", "attachments", noteID, attachmentName))
+	out, err := exec.Command("git", "-C", repoPath, "log", "-1", "--format=%ct", "--", relPath).CombinedOutput()
+	if err != nil {
+		return 0, false
+	}
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		return 0, false
+	}
+	return v, true
+}
+
+func parseGitStatusPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if idx := strings.Index(raw, " -> "); idx >= 0 {
+		raw = strings.TrimSpace(raw[idx+4:])
+	}
+	if strings.HasPrefix(raw, "\"") {
+		if unquoted, err := strconv.Unquote(raw); err == nil {
+			raw = unquoted
+		}
+	}
+	return filepath.ToSlash(strings.TrimSpace(raw))
+}
+
+func (s *Server) attachmentUncommittedSet(ownerName, noteID string) (map[string]struct{}, bool) {
+	ownerName = strings.TrimSpace(ownerName)
+	noteID = strings.TrimSpace(noteID)
+	if ownerName == "" || noteID == "" {
+		return nil, false
+	}
+	repoPath := filepath.Join(s.cfg.RepoPath, ownerName)
+	relDir := filepath.ToSlash(filepath.Join("notes", "attachments", noteID))
+	out, err := exec.Command("git", "-C", repoPath, "status", "--porcelain", "--untracked-files=all", "--", relDir+"/").CombinedOutput()
+	if err != nil {
+		slog.Warn("attachment status read failed", "owner", ownerName, "note_id", noteID, "err", err, "output", strings.TrimSpace(string(out)))
+		return nil, false
+	}
+	set := map[string]struct{}{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if len(line) < 4 {
+			continue
+		}
+		statusPath := parseGitStatusPath(line[3:])
+		if statusPath == "" {
+			continue
+		}
+		name := statusPath
+		prefix := relDir + "/"
+		if strings.HasPrefix(name, prefix) {
+			name = strings.TrimPrefix(name, prefix)
+		} else {
+			name = path.Base(name)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" || strings.Contains(name, "/") {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	return set, true
+}
+
+func (s *Server) buildAttachmentGroups(ownerName, dir, noteID string, names []string) []AttachmentGroup {
+	if len(names) == 0 {
+		return nil
+	}
+	meta := make([]attachmentFileMeta, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		item := attachmentFileMeta{name: name}
+		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			item.modUnix = fi.ModTime().Unix()
+		}
+		meta = append(meta, item)
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+
+	if noteID != "" {
+		uncommittedSet, ok := s.attachmentUncommittedSet(ownerName, noteID)
+		if !ok {
+			uncommittedSet = map[string]struct{}{}
+			for _, item := range meta {
+				uncommittedSet[item.name] = struct{}{}
+			}
+		}
+		committedNames := make([]string, 0, len(meta))
+		committedSet := map[string]struct{}{}
+		for _, item := range meta {
+			if _, isUncommitted := uncommittedSet[item.name]; isUncommitted {
+				continue
+			}
+			committedNames = append(committedNames, item.name)
+			committedSet[item.name] = struct{}{}
+		}
+		commitByName := map[string]int64{}
+		if len(committedNames) > 0 && s.idx != nil {
+			cached, err := s.idx.AttachmentCommitUnixMap(context.Background(), ownerName, noteID, committedNames)
+			if err != nil {
+				slog.Warn("attachment commit cache lookup failed", "owner", ownerName, "note_id", noteID, "err", err)
+			} else {
+				commitByName = cached
+			}
+		}
+		cacheUpdates := map[string]int64{}
+		for _, name := range committedNames {
+			if commitByName[name] > 0 {
+				continue
+			}
+			commitUnix, ok := s.attachmentCommitUnix(ownerName, noteID, name)
+			if !ok {
+				delete(committedSet, name)
+				continue
+			}
+			commitByName[name] = commitUnix
+			cacheUpdates[name] = commitUnix
+		}
+		if len(cacheUpdates) > 0 && s.idx != nil {
+			if err := s.idx.UpsertAttachmentCommitUnixBatch(context.Background(), ownerName, noteID, cacheUpdates); err != nil {
+				slog.Warn("attachment commit cache upsert failed", "owner", ownerName, "note_id", noteID, "err", err)
+			}
+		}
+		for idx := range meta {
+			name := meta[idx].name
+			if _, ok := committedSet[name]; !ok {
+				continue
+			}
+			commitUnix := commitByName[name]
+			if commitUnix <= 0 {
+				continue
+			}
+			meta[idx].committed = true
+			meta[idx].commitUnix = commitUnix
+		}
+	}
+
+	committed := make([]attachmentFileMeta, 0, len(meta))
+	uncommitted := make([]attachmentFileMeta, 0, len(meta))
+	for _, item := range meta {
+		if item.committed {
+			committed = append(committed, item)
+		} else {
+			uncommitted = append(uncommitted, item)
+		}
+	}
+	groups := make([]AttachmentGroup, 0, 2)
+	if len(committed) > 0 {
+		sortAttachmentGroupMeta(committed, true)
+		groups = append(groups, AttachmentGroup{
+			Label: "Committed",
+			Items: toAttachmentItems(committed, true),
+		})
+	}
+	if len(uncommitted) > 0 {
+		sortAttachmentGroupMeta(uncommitted, false)
+		groups = append(groups, AttachmentGroup{
+			Label: "Uncommitted",
+			Items: toAttachmentItems(uncommitted, false),
+		})
+	}
+	return groups
+}
+
+func (s *Server) attachmentGroupsForToken(ownerName, token string, names []string) []AttachmentGroup {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil
+	}
+	if isTempNoteID(token) {
+		return s.buildAttachmentGroups(ownerName, s.noteAttachmentsDir(ownerName, token), token, names)
+	}
+	return s.buildAttachmentGroups(ownerName, s.tempAttachmentsDir(ownerName, token), "", names)
+}
+
 func (s *Server) attachmentsRoot(owner string) string {
 	return filepath.Join(s.cfg.RepoPath, owner, "notes", "attachments")
 }
@@ -879,12 +1120,15 @@ func newTempNoteID() string {
 	return "TEMP-" + now + "-" + seed
 }
 
-func (s *Server) tempAttachmentView(ownerName, token string) ([]string, string) {
+func (s *Server) tempAttachmentView(ownerName, token string) ([]string, string, []AttachmentGroup) {
 	if isTempNoteID(token) {
-		return listAttachmentNames(s.noteAttachmentsDir(ownerName, token)),
-			"/" + filepath.ToSlash(filepath.Join("attachments", token))
+		attachments := listAttachmentNames(s.noteAttachmentsDir(ownerName, token))
+		return attachments,
+			"/" + filepath.ToSlash(filepath.Join("attachments", token)),
+			s.attachmentGroupsForToken(ownerName, token, attachments)
 	}
-	return listAttachmentNames(s.tempAttachmentsDir(ownerName, token)), ""
+	attachments := listAttachmentNames(s.tempAttachmentsDir(ownerName, token))
+	return attachments, "", s.attachmentGroupsForToken(ownerName, token, attachments)
 }
 
 func (s *Server) moveTempAttachments(ownerName, tempID, newID string) error {
@@ -9843,7 +10087,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		tempFrontmatter := fmt.Sprintf("---\nid: %s\n---\n", uploadToken)
-		attachments, attachmentBase := s.tempAttachmentView(selectedOwner, uploadToken)
+		attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(selectedOwner, uploadToken)
 		data := ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -9858,6 +10102,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			UploadToken:      uploadToken,
 			Attachments:      attachments,
 			AttachmentBase:   attachmentBase,
+			AttachmentGroups: attachmentGroups,
 		}
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
@@ -9881,7 +10126,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		if ownerName == "" {
 			ownerName = defaultOwner
 		}
-		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+		attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, uploadToken)
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -9893,6 +10138,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			UploadToken:      uploadToken,
 			Attachments:      attachments,
 			AttachmentBase:   attachmentBase,
+			AttachmentGroups: attachmentGroups,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9918,7 +10164,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.ensureOwnerNotesDir(ownerName); err != nil {
 		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+		attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, uploadToken)
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -9930,6 +10176,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			UploadToken:      uploadToken,
 			Attachments:      attachments,
 			AttachmentBase:   attachmentBase,
+			AttachmentGroups: attachmentGroups,
 			ErrorMessage:     err.Error(),
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusInternalServerError)
@@ -9940,7 +10187,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	priorityInput := strings.TrimSpace(r.Form.Get("priority"))
 	if content == "" {
 		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+		attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, uploadToken)
 		s.renderEditError(w, r, ViewData{
 			Title:            "New note",
 			ContentTemplate:  "edit",
@@ -9952,6 +10199,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			UploadToken:      uploadToken,
 			Attachments:      attachments,
 			AttachmentBase:   attachmentBase,
+			AttachmentGroups: attachmentGroups,
 			ErrorMessage:     "content required",
 			ErrorReturnURL:   "/notes/new",
 		}, http.StatusBadRequest)
@@ -9994,7 +10242,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if duplicateAction == "rename" {
 		if duplicateName == "" {
 			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-			attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+			attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, uploadToken)
 			s.renderEditError(w, r, ViewData{
 				Title:               "New note",
 				ContentTemplate:     "edit",
@@ -10006,6 +10254,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				UploadToken:         uploadToken,
 				Attachments:         attachments,
 				AttachmentBase:      attachmentBase,
+				AttachmentGroups:    attachmentGroups,
 				ErrorMessage:        "filename required",
 				ErrorReturnURL:      "/notes/new",
 				DuplicateNotePrompt: true,
@@ -10017,7 +10266,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		customFilename = slugify(duplicateName)
 		if customFilename == "" {
 			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-			attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+			attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, uploadToken)
 			s.renderEditError(w, r, ViewData{
 				Title:               "New note",
 				ContentTemplate:     "edit",
@@ -10029,6 +10278,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				UploadToken:         uploadToken,
 				Attachments:         attachments,
 				AttachmentBase:      attachmentBase,
+				AttachmentGroups:    attachmentGroups,
 				ErrorMessage:        "invalid filename",
 				ErrorReturnURL:      "/notes/new",
 				DuplicateNotePrompt: true,
@@ -10409,7 +10659,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			appendBody := strings.TrimSpace(stripLeadingH1(content))
 			if appendBody == "" {
 				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-				attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+				attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, uploadToken)
 				s.renderEditError(w, r, ViewData{
 					Title:               "New note",
 					ContentTemplate:     "edit",
@@ -10421,6 +10671,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 					UploadToken:         uploadToken,
 					Attachments:         attachments,
 					AttachmentBase:      attachmentBase,
+					AttachmentGroups:    attachmentGroups,
 					ErrorMessage:        "append content required",
 					ErrorReturnURL:      "/notes/new",
 					DuplicateNotePrompt: true,
@@ -10574,7 +10825,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-		attachments, attachmentBase := s.tempAttachmentView(ownerName, uploadToken)
+		attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, uploadToken)
 		displayFolder, displayName := duplicateDefaults(ownerName, notePath)
 		if duplicateFolder == "" {
 			duplicateFolder = displayFolder
@@ -10593,6 +10844,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			UploadToken:         uploadToken,
 			Attachments:         attachments,
 			AttachmentBase:      attachmentBase,
+			AttachmentGroups:    attachmentGroups,
 			ErrorReturnURL:      "/notes/new",
 			DuplicateNotePrompt: true,
 			DuplicateFromPath:   notePath,
@@ -11489,11 +11741,13 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 
 	meta := index.ParseContent(string(content))
 	attachments := []string(nil)
+	attachmentGroups := []AttachmentGroup(nil)
 	metaAttrs := index.FrontmatterAttributes(string(content))
 	attachmentBase := ""
 	if metaAttrs.ID != "" {
 		attachments = listAttachmentNames(s.noteAttachmentsDir(ownerName, metaAttrs.ID))
 		attachmentBase = "/" + filepath.ToSlash(filepath.Join("attachments", metaAttrs.ID))
+		attachmentGroups = s.attachmentGroupsForToken(ownerName, metaAttrs.ID, attachments)
 	}
 	returnURL := sanitizeReturnURL(r, r.URL.Query().Get("return"))
 	if returnURL == "" {
@@ -11535,6 +11789,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		FolderOptions:    s.folderOptions(r.Context()),
 		Attachments:      attachments,
 		AttachmentBase:   attachmentBase,
+		AttachmentGroups: attachmentGroups,
 		ReturnURL:        returnURL,
 		OwnerOptions:     ownerOptions,
 		SelectedOwner:    selectedOwner,
@@ -11791,10 +12046,12 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 	if isHTMX(r) {
 		attachments := listAttachmentNames(s.noteAttachmentsDir(ownerName, meta.ID))
 		attachmentBase := "/" + filepath.ToSlash(filepath.Join("attachments", meta.ID))
+		attachmentGroups := s.attachmentGroupsForToken(ownerName, meta.ID, attachments)
 		data := ViewData{
-			NotePath:       notePath,
-			Attachments:    attachments,
-			AttachmentBase: attachmentBase,
+			NotePath:         notePath,
+			Attachments:      attachments,
+			AttachmentBase:   attachmentBase,
+			AttachmentGroups: attachmentGroups,
 		}
 		s.views.RenderTemplate(w, "attachments_list", data)
 		return
@@ -11893,13 +12150,14 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 	}
 
 	if isHTMX(r) {
-		attachments, attachmentBase := s.tempAttachmentView(ownerName, token)
+		attachments, attachmentBase, attachmentGroups := s.tempAttachmentView(ownerName, token)
 		data := ViewData{
-			Attachments:    attachments,
-			AttachmentBase: attachmentBase,
-			UploadToken:    token,
-			OwnerOptions:   []OwnerOption{{Name: ownerName, Label: ownerName}},
-			SelectedOwner:  ownerName,
+			Attachments:      attachments,
+			AttachmentBase:   attachmentBase,
+			AttachmentGroups: attachmentGroups,
+			UploadToken:      token,
+			OwnerOptions:     []OwnerOption{{Name: ownerName, Label: ownerName}},
+			SelectedOwner:    ownerName,
 		}
 		s.views.RenderTemplate(w, "attachments_list", data)
 		return

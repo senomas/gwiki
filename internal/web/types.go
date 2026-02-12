@@ -86,6 +86,7 @@ type ViewData struct {
 	Backlinks              []BacklinkView
 	SearchQueryParam       string
 	Attachments            []string
+	AttachmentGroups       []AttachmentGroup
 	AttachmentBase         string
 	FolderTree             []FolderNode
 	ActiveFolder           string
@@ -138,6 +139,16 @@ type ViewData struct {
 	QuickEntries           []QuickLauncherEntry
 	GitRemoteCreds         []GitRemoteCred
 	Users                  []UserLink
+}
+
+type AttachmentGroup struct {
+	Label string
+	Items []AttachmentListItem
+}
+
+type AttachmentListItem struct {
+	Name      string
+	DateLabel string
 }
 
 type OwnerOption struct {

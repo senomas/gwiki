@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 33
+const schemaVersion = 35
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -167,6 +167,15 @@ CREATE TABLE IF NOT EXISTS file_cleanup (
 );
 
 CREATE INDEX IF NOT EXISTS file_cleanup_expires ON file_cleanup(user_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS attachment_dates (
+	owner_user_id INTEGER NOT NULL,
+	note_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	commit_unix INTEGER NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(owner_user_id, note_id, name)
+);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 	user_id UNINDEXED,

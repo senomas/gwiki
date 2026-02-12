@@ -679,6 +679,18 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 33
+		case 33:
+			slog.Info("schema migration", "from", 33, "to", 34)
+			if err := i.migrate33To34(ctx); err != nil {
+				return err
+			}
+			version = 34
+		case 34:
+			slog.Info("schema migration", "from", 34, "to", 35)
+			if err := i.migrate34To35(ctx); err != nil {
+				return err
+			}
+			version = 35
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1101,6 +1113,47 @@ func (i *Index) migrate32To33(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (i *Index) migrate33To34(ctx context.Context) error {
+	_, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS attachment_dates (
+			owner_user_id INTEGER NOT NULL,
+			note_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			commit_unix INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(owner_user_id, note_id, name)
+		)
+	`)
+	return err
+}
+
+func (i *Index) migrate34To35(ctx context.Context) error {
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS attachment_dates_new (
+			owner_user_id INTEGER NOT NULL,
+			note_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			commit_unix INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(owner_user_id, note_id, name)
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `
+		INSERT INTO attachment_dates_new(owner_user_id, note_id, name, commit_unix, updated_at)
+		SELECT owner_user_id, note_id, name, commit_unix, updated_at
+		FROM attachment_dates
+	`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `DROP TABLE IF EXISTS attachment_dates`); err != nil {
+		return err
+	}
+	_, err := i.execContext(ctx, `ALTER TABLE attachment_dates_new RENAME TO attachment_dates`)
+	return err
 }
 
 type ownerRoot struct {
