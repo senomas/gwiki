@@ -1058,18 +1058,18 @@ func (s *Server) buildAttachmentGroups(ownerName, dir, noteID string, names []st
 		}
 	}
 	groups := make([]AttachmentGroup, 0, 2)
-	if len(committed) > 0 {
-		sortAttachmentGroupMeta(committed, true)
-		groups = append(groups, AttachmentGroup{
-			Label: "Committed",
-			Items: toAttachmentItems(committed, true),
-		})
-	}
 	if len(uncommitted) > 0 {
 		sortAttachmentGroupMeta(uncommitted, false)
 		groups = append(groups, AttachmentGroup{
 			Label: "Uncommitted",
 			Items: toAttachmentItems(uncommitted, false),
+		})
+	}
+	if len(committed) > 0 {
+		sortAttachmentGroupMeta(committed, true)
+		groups = append(groups, AttachmentGroup{
+			Label: "Committed",
+			Items: toAttachmentItems(committed, true),
 		})
 	}
 	return groups
@@ -1081,8 +1081,10 @@ func (s *Server) attachmentGroupsForToken(ownerName, token string, names []strin
 		return nil
 	}
 	if isTempNoteID(token) {
-		return s.buildAttachmentGroups(ownerName, s.noteAttachmentsDir(ownerName, token), token, names)
+		// TEMP-* notes are not committed yet; use filesystem mtime ordering only.
+		return s.buildAttachmentGroups(ownerName, s.noteAttachmentsDir(ownerName, token), "", names)
 	}
+	// Non-temp upload tokens point to temporary attachment staging.
 	return s.buildAttachmentGroups(ownerName, s.tempAttachmentsDir(ownerName, token), "", names)
 }
 
@@ -11747,7 +11749,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	if metaAttrs.ID != "" {
 		attachments = listAttachmentNames(s.noteAttachmentsDir(ownerName, metaAttrs.ID))
 		attachmentBase = "/" + filepath.ToSlash(filepath.Join("attachments", metaAttrs.ID))
-		attachmentGroups = s.attachmentGroupsForToken(ownerName, metaAttrs.ID, attachments)
+		attachmentGroups = s.buildAttachmentGroups(ownerName, s.noteAttachmentsDir(ownerName, metaAttrs.ID), metaAttrs.ID, attachments)
 	}
 	returnURL := sanitizeReturnURL(r, r.URL.Query().Get("return"))
 	if returnURL == "" {
@@ -12046,7 +12048,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 	if isHTMX(r) {
 		attachments := listAttachmentNames(s.noteAttachmentsDir(ownerName, meta.ID))
 		attachmentBase := "/" + filepath.ToSlash(filepath.Join("attachments", meta.ID))
-		attachmentGroups := s.attachmentGroupsForToken(ownerName, meta.ID, attachments)
+		attachmentGroups := s.buildAttachmentGroups(ownerName, s.noteAttachmentsDir(ownerName, meta.ID), meta.ID, attachments)
 		data := ViewData{
 			NotePath:         notePath,
 			Attachments:      attachments,
