@@ -1695,9 +1695,13 @@
         if (!path || !wikiLinkNotePath || !wikiLinkRef) {
           return;
         }
+        var targetRef = toNoteRoute(path);
+        if (!targetRef) {
+          return;
+        }
         var payload = {
           from: wikiLinkRef,
-          to: path,
+          to: targetRef,
         };
         fetch(buildNoteURL(wikiLinkNotePath) + "/wikilink", {
           method: "POST",
