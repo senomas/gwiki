@@ -63,6 +63,7 @@ type signalMessage struct {
 	Group    string
 	TSMillis int64
 	Previews []signalPreview
+	RawJSON  string
 }
 
 type signalPreview struct {
@@ -161,6 +162,9 @@ func (p *signalPoller) tick() {
 			continue
 		}
 		p.writeSignalDebugMessage(msg)
+		if signalDebugEnabled() && msg.RawJSON != "" {
+			slog.Debug("signal message raw", "ts", msg.TSMillis, "raw_json", msg.RawJSON)
+		}
 		notePath := p.notePathForTimestamp(msg.TSMillis)
 		slog.Debug("signal append", "note_path", notePath, "sender", msg.Sender, "ts", msg.TSMillis, "previews", len(msg.Previews))
 		if err := p.appendMessage(ctx, notePath, msg); err != nil {
@@ -222,9 +226,9 @@ func (p *signalPoller) writeSignalDebugMessage(msg signalMessage) {
 		path string
 	)
 	for i := 0; i < 1000; i++ {
-		name := baseName + ".txt"
+		name := baseName + ".json"
 		if i > 0 {
-			name = fmt.Sprintf("%s-%d.txt", baseName, i+1)
+			name = fmt.Sprintf("%s-%d.json", baseName, i+1)
 		}
 		candidate := filepath.Join(dir, name)
 		created, err := os.OpenFile(candidate, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
@@ -245,35 +249,38 @@ func (p *signalPoller) writeSignalDebugMessage(msg signalMessage) {
 	}
 	defer file.Close()
 
-	var builder strings.Builder
-	builder.WriteString("timestamp=")
-	builder.WriteString(timestamp.Format(time.RFC3339Nano))
-	builder.WriteByte('\n')
-	if msg.Sender != "" {
-		builder.WriteString("sender=")
-		builder.WriteString(msg.Sender)
-		builder.WriteByte('\n')
+	dump := map[string]any{
+		"timestamp": timestamp.Format(time.RFC3339Nano),
 	}
 	if msg.Group != "" {
-		builder.WriteString("group=")
-		builder.WriteString(msg.Group)
-		builder.WriteByte('\n')
+		dump["group"] = msg.Group
 	}
 	if msg.GroupID != "" {
-		builder.WriteString("group_id=")
-		builder.WriteString(msg.GroupID)
-		builder.WriteByte('\n')
+		dump["group_id"] = msg.GroupID
+	}
+	if msg.Sender != "" {
+		dump["sender"] = msg.Sender
 	}
 	if len(msg.Previews) > 0 {
-		builder.WriteString("previews=")
-		builder.WriteString(fmt.Sprintf("%d", len(msg.Previews)))
-		builder.WriteByte('\n')
+		dump["previews"] = len(msg.Previews)
 	}
-	builder.WriteByte('\n')
-	builder.WriteString(text)
-	builder.WriteByte('\n')
+	dump["text"] = text
+	if msg.RawJSON != "" {
+		var raw any
+		if err := json.Unmarshal([]byte(msg.RawJSON), &raw); err == nil {
+			dump["raw"] = raw
+		} else {
+			dump["raw_text"] = msg.RawJSON
+		}
+	}
+	pretty, err := json.MarshalIndent(dump, "", "  ")
+	if err != nil {
+		slog.Warn("signal debug marshal failed", "path", path, "err", err)
+		return
+	}
+	pretty = append(pretty, '\n')
 
-	if _, err := file.WriteString(builder.String()); err != nil {
+	if _, err := file.Write(pretty); err != nil {
 		slog.Warn("signal debug write failed", "path", path, "err", err)
 		return
 	}
@@ -281,7 +288,7 @@ func (p *signalPoller) writeSignalDebugMessage(msg signalMessage) {
 	if absPath, err := filepath.Abs(path); err == nil {
 		displayPath = absPath
 	}
-	slog.Debug("signal debug dump written", "path", displayPath, "chars", len(text))
+	slog.Debug("signal debug dump written", "path", displayPath, "bytes", len(pretty))
 }
 
 func (p *signalPoller) resolveGroupID(ctx context.Context) (string, string, error) {
@@ -420,6 +427,7 @@ func decodeSignalMessage(raw json.RawMessage) (signalMessage, bool) {
 			GroupID:  strings.TrimSpace(env.Envelope.Data.GroupInfo.GroupID),
 			Group:    strings.TrimSpace(env.Envelope.Data.GroupInfo.Name),
 			Previews: previews,
+			RawJSON:  string(raw),
 		}
 		if msg.GroupID == "" {
 			msg.GroupID = strings.TrimSpace(env.Envelope.TypingMessage.GroupID)

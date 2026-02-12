@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,23 +44,42 @@ func TestSignalPollerWriteSignalDebugMessage(t *testing.T) {
 		GroupID:  "group-id",
 		Group:    "gwiki",
 		TSMillis: ts.UnixMilli(),
+		RawJSON:  `{"envelope":{"source":"+628123456789","dataMessage":{"message":"test inbox from signal"}}}`,
 	}
 
 	var poller signalPoller
 	poller.writeSignalDebugMessage(msg)
 
-	expectedName := "signal-" + time.UnixMilli(msg.TSMillis).Format("060102150405") + ".txt"
+	expectedName := "signal-" + time.UnixMilli(msg.TSMillis).Format("060102150405") + ".json"
 	expectedPath := filepath.Join(tmpDir, "log", expectedName)
 	data, err := os.ReadFile(expectedPath)
 	if err != nil {
 		t.Fatalf("read debug file: %v", err)
 	}
-	content := string(data)
-	if !strings.Contains(content, "sender=+628123456789") {
-		t.Fatalf("expected sender in debug file, got: %s", content)
+	var dump map[string]any
+	if err := json.Unmarshal(data, &dump); err != nil {
+		t.Fatalf("unmarshal debug json: %v; data=%s", err, string(data))
 	}
-	if !strings.Contains(content, "test inbox from signal") {
-		t.Fatalf("expected message text in debug file, got: %s", content)
+	if got, _ := dump["sender"].(string); got != "+628123456789" {
+		t.Fatalf("expected sender in debug file, got: %v", dump["sender"])
+	}
+	if got, _ := dump["text"].(string); got != "test inbox from signal" {
+		t.Fatalf("expected message text in debug file, got: %v", dump["text"])
+	}
+	raw, ok := dump["raw"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected raw object in debug file, got: %#v", dump["raw"])
+	}
+	env, ok := raw["envelope"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected envelope in raw object, got: %#v", raw["envelope"])
+	}
+	dataMsg, ok := env["dataMessage"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected dataMessage in raw envelope, got: %#v", env["dataMessage"])
+	}
+	if got, _ := dataMsg["message"].(string); got != "test inbox from signal" {
+		t.Fatalf("expected raw message text, got: %v", dataMsg["message"])
 	}
 }
 
@@ -76,7 +96,7 @@ func TestSignalPollerWriteSignalDebugMessage_DisabledWithoutDev(t *testing.T) {
 	var poller signalPoller
 	poller.writeSignalDebugMessage(msg)
 
-	matches, err := filepath.Glob(filepath.Join(tmpDir, "log", "signal-*.txt"))
+	matches, err := filepath.Glob(filepath.Join(tmpDir, "log", "signal-*.json"))
 	if err != nil {
 		t.Fatalf("glob signal debug files: %v", err)
 	}
@@ -119,6 +139,9 @@ func TestDecodeSignalMessage_ImageOnlyPreviewWithText(t *testing.T) {
 	}
 	if msg.Previews[0].ImageID != "image-123" {
 		t.Fatalf("unexpected image id: %q", msg.Previews[0].ImageID)
+	}
+	if !strings.Contains(msg.RawJSON, `"message": "caption from signal"`) {
+		t.Fatalf("expected raw json to include message, got: %q", msg.RawJSON)
 	}
 }
 
