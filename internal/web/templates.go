@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -112,13 +113,13 @@ func (t *Templates) RenderPage(w http.ResponseWriter, data ViewData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var content bytes.Buffer
 	if err := t.all.ExecuteTemplate(&content, data.ContentTemplate, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		renderTemplateInternalError(w, "content:"+data.ContentTemplate, err)
 		return
 	}
 	pageData := data
 	pageData.ContentHTML = template.HTML(content.String())
 	if err := t.all.ExecuteTemplate(w, "base", pageData); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		renderTemplateInternalError(w, "base", err)
 	}
 }
 
@@ -126,7 +127,7 @@ func (t *Templates) RenderTemplate(w http.ResponseWriter, name string, data View
 	setNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.all.ExecuteTemplate(w, name, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		renderTemplateInternalError(w, name, err)
 	}
 }
 
@@ -134,8 +135,13 @@ func (t *Templates) RenderTemplateWithCache(w http.ResponseWriter, name string, 
 	setCacheHeaders(w, cacheControl)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.all.ExecuteTemplate(w, name, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		renderTemplateInternalError(w, name, err)
 	}
+}
+
+func renderTemplateInternalError(w http.ResponseWriter, templateName string, err error) {
+	slog.Error("template render failed", "template", templateName, "err", err)
+	http.Error(w, "Something went wrong. Please try again.", http.StatusInternalServerError)
 }
 
 func setNoCacheHeaders(w http.ResponseWriter) {

@@ -150,6 +150,10 @@ func writeAPIError(w http.ResponseWriter, status int, message string) {
 	if status == 0 {
 		status = http.StatusInternalServerError
 	}
+	if status >= http.StatusInternalServerError {
+		slog.Error("api request failed", "status", status, "err", message)
+		message = "internal server error"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = io.WriteString(w, `{"error":"`+jsonEscape(message)+`"}`)

@@ -470,7 +470,7 @@ func (s *Server) requireWriteAccess(w http.ResponseWriter, r *http.Request, owne
 		if isHTMX(r) {
 			s.renderToastError(w, r, err.Error())
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 		}
 		return false
 	}
@@ -518,7 +518,7 @@ func (s *Server) requireWriteAccessForRelPath(w http.ResponseWriter, r *http.Req
 		if isHTMX(r) {
 			s.renderToastError(w, r, err.Error())
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 		}
 		return false
 	}
@@ -557,6 +557,23 @@ func (s *Server) renderToastError(w http.ResponseWriter, r *http.Request, messag
 	http.Error(w, message, http.StatusForbidden)
 }
 
+func (s *Server) internalServerError(w http.ResponseWriter, r *http.Request, err error) {
+	if r != nil {
+		slog.Error("internal server error", "method", r.Method, "path", r.URL.String(), "err", err)
+	} else {
+		slog.Error("internal server error", "err", err)
+	}
+	http.Error(w, "Something went wrong. Please try again.", http.StatusInternalServerError)
+}
+
+func (s *Server) statusError(w http.ResponseWriter, r *http.Request, status int, err error) {
+	if status >= http.StatusInternalServerError {
+		s.internalServerError(w, r, err)
+		return
+	}
+	s.statusError(w, r, status, err)
+}
+
 type apiError struct {
 	status  int
 	message string
@@ -573,7 +590,8 @@ func (s *Server) apiWriteAccessForRelPath(ctx context.Context, ownerName, relPat
 	}
 	canWrite, err := s.idx.CanWritePath(ctx, ownerName, relPath, userName)
 	if err != nil {
-		return &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		slog.Error("api write access check failed", "owner", ownerName, "path", relPath, "user", userName, "err", err)
+		return &apiError{status: http.StatusInternalServerError, message: "internal server error"}
 	}
 	if !canWrite {
 		return &apiError{status: http.StatusForbidden, message: "forbidden"}
@@ -588,7 +606,8 @@ func (s *Server) apiWriteAccessForOwner(ctx context.Context, ownerName string) *
 	}
 	canWrite, err := s.idx.CanWriteOwner(ctx, ownerName, userName)
 	if err != nil {
-		return &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		slog.Error("api write access check failed", "owner", ownerName, "user", userName, "err", err)
+		return &apiError{status: http.StatusInternalServerError, message: "internal server error"}
 	}
 	if !canWrite {
 		return &apiError{status: http.StatusForbidden, message: "forbidden"}
@@ -5471,7 +5490,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		s.renderHomePage(w, r, ownerName, "/@"+ownerName)
@@ -5577,7 +5596,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	allowed := map[string]struct{}{}
@@ -5586,14 +5605,14 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	if isAuth {
 		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, ownerName)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, ownerName)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		for _, tag := range filteredTags {
@@ -5604,13 +5623,13 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
 	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot, ownerName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, baseURL, noteTags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, ownerName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagQuery := buildTagsQuery(urlTags)
@@ -5618,12 +5637,12 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
 	priorityNotes, err := s.loadHomeSectionNotes(r.Context(), "priority", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	todayNotes, err := s.loadHomeSectionNotes(r.Context(), "today", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	plannedNotes := []NoteCard(nil)
@@ -5638,13 +5657,13 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now(), ownerName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	title := "Home"
@@ -5702,14 +5721,14 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	displayDate := parsedDate.Format("02 Jan 2006")
 	journalSummary, hasJournal, err := s.idx.JournalNoteByDate(r.Context(), date)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	journalCard := (*NoteCard)(nil)
 	if hasJournal {
 		card, err := s.buildNoteCard(r, journalSummary.Path)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		journalCard = &card
@@ -5740,7 +5759,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	}
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	allowed := map[string]struct{}{}
@@ -5749,14 +5768,14 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	if isAuth {
 		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		for _, tag := range filteredTags {
@@ -5776,14 +5795,14 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		Offset:      0,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	noteCards := make([]NoteCard, 0, len(notes))
 	for _, note := range notes {
 		card, err := s.buildNoteCard(r, note.Path)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		noteCards = append(noteCards, card)
@@ -5791,13 +5810,13 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
 	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, baseURL, noteTags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagQuery := buildTagsQuery(urlTags)
@@ -5805,13 +5824,13 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	calendar := buildCalendarMonth(parsedDate, updateDays, baseURL, calendarDate)
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), parsedDate, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	data := ViewData{
@@ -5914,7 +5933,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.auth.CreateToken(user)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -6141,7 +6160,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		var err error
 		results, err = s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 50)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 	}
@@ -6174,7 +6193,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	allowed := map[string]struct{}{}
@@ -6183,14 +6202,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if isAuth {
 		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		for _, tag := range filteredTags {
@@ -6200,13 +6219,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
 	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, baseURL, noteTags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagQuery := buildTagsQuery(urlTags)
@@ -6214,13 +6233,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 
@@ -6258,7 +6277,7 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	tags, err := s.idx.ListTags(r.Context(), 200, "", false, false, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	queryLower := strings.ToLower(query)
@@ -6303,7 +6322,7 @@ func (s *Server) handleUserSuggest(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	users, err := s.idx.ListUsers(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	queryLower := strings.ToLower(query)
@@ -6351,7 +6370,7 @@ func (s *Server) handleQuickNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := s.idx.Search(r.Context(), ftsQuery, 10)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	matches := make([]index.NoteSummary, 0, len(results))
@@ -6379,7 +6398,7 @@ func (s *Server) handleQuickLauncher(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := s.quickLauncherEntries(r, query, currentURL)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	data := ViewData{QuickEntries: entries}
@@ -6395,7 +6414,7 @@ func (s *Server) handleQuickEditActions(w http.ResponseWriter, r *http.Request) 
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	entries, err := s.quickEditActionsEntries(r, query)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	data := ViewData{QuickEntries: entries}
@@ -7192,7 +7211,7 @@ func (s *Server) handleJournalYear(w http.ResponseWriter, r *http.Request) {
 	}
 	dates, err := s.idx.JournalDates(r.Context(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	index := buildJournalIndex(dates)
@@ -7237,7 +7256,7 @@ func (s *Server) handleJournalMonth(w http.ResponseWriter, r *http.Request) {
 	year, month, _ := parsed.Date()
 	dates, err := s.idx.JournalDates(r.Context(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	index := buildJournalIndex(dates)
@@ -7285,7 +7304,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 	}
@@ -7309,7 +7328,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, noteTags, activeDate, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	priorityNotes, todayNotes, plannedNotes, weekNotes, monthNotes, yearNotes, lastYearNotes, otherNotes := splitHomeSections(homeNotes)
@@ -7364,7 +7383,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 				http.NotFound(w, r)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 	}
@@ -7405,7 +7424,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	case "planned":
 		plannedNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "planned", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomePlannedNotes = plannedNotes
@@ -7420,27 +7439,27 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	case "rest":
 		weekNotes, weekNextOffset, weekHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		monthNotes, monthNextOffset, monthHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		yearNotes, yearNextOffset, yearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		lastYearNotes, lastYearNextOffset, lastYearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		otherNotes, otherNextOffset, otherHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeWeekNotes = weekNotes
@@ -7463,7 +7482,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	case "week":
 		weekNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeWeekNotes = weekNotes
@@ -7474,7 +7493,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	case "month":
 		monthNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeMonthNotes = monthNotes
@@ -7485,7 +7504,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	case "year":
 		yearNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeYearNotes = yearNotes
@@ -7496,7 +7515,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	case "lastYear":
 		lastYearNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeLastYearNotes = lastYearNotes
@@ -7507,7 +7526,7 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	case "others":
 		otherNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeOtherNotes = otherNotes
@@ -7542,7 +7561,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	var err error
 	tasks, err = s.idx.OpenTasks(r.Context(), noteTags, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if len(tasks) > 1 {
@@ -7585,19 +7604,19 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	allowed := map[string]struct{}{}
 	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		for _, tag := range filteredTags {
@@ -7608,13 +7627,13 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
 	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, baseURL, noteTags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagQuery := buildTagsQuery(urlTags)
@@ -7622,13 +7641,13 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	data := ViewData{
@@ -7706,7 +7725,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		todoNotesPageSize,
 	)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	urlTags := append([]string{}, noteTags...)
@@ -7716,19 +7735,19 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	}
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	allowed := map[string]struct{}{}
 	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, mentionTagsFilter, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, currentUser)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if len(activeTags) > 0 || activeDate != "" {
 		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		for _, tag := range filteredTags {
@@ -7739,13 +7758,13 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
 	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, baseURL, noteTags)
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tagQuery := buildTagsQuery(urlTags)
@@ -7753,13 +7772,13 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
 	folders, hasRoot, err := s.idx.ListFolders(r.Context(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
 	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now(), "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	data := ViewData{
@@ -7834,7 +7853,7 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 		todoNotesPageSize,
 	)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	urlTags := append([]string{}, noteTags...)
@@ -8108,7 +8127,7 @@ func (s *Server) handleBroken(w http.ResponseWriter, r *http.Request) {
 	}
 	links, err := s.idx.BrokenLinks(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	groups := make([]BrokenLinkGroup, 0)
@@ -8211,7 +8230,7 @@ func (s *Server) handleSyncUser(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	data := ViewData{
@@ -8377,7 +8396,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.populateSidebarData(r, "/", &data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	s.attachViewData(r, &data)
@@ -9145,7 +9164,7 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if !s.requireWriteAccessForPath(w, r, notePath) {
@@ -9158,7 +9177,7 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	contentBytes, err := os.ReadFile(fullPath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	content := normalizeLineEndings(string(contentBytes))
@@ -9202,13 +9221,13 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	updatedContent = normalizeLineEndings(updatedContent)
 	updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, time.Now(), s.cfg.UpdatedHistoryMax, "", historyUser(r.Context()))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	unlock := s.locker.Lock(notePath)
 	if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
 		unlock()
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	unlock()
@@ -9303,7 +9322,7 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	renderedBody, err := s.renderNoteContentHTML(r, renderCtx, notePath, meta.ID, renderSource, tasksForNote)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	noteBody := fmt.Sprintf(
@@ -9372,7 +9391,7 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 		ContentTemplate: "sidebar",
 	}
 	if err := s.populateSidebarData(sidebarReq, basePath, &data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	s.attachViewData(sidebarReq, &data)
@@ -9411,7 +9430,7 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(query.Get("f"))
 	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	calendar := buildCalendarMonth(calendarReferenceDate(&pageReq), updateDays, baseURL, activeDate)
@@ -9714,7 +9733,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		ownerOptions, defaultOwner, err := s.ownerOptionsForUser(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		selectedOwner := strings.TrimSpace(r.URL.Query().Get("owner"))
@@ -9856,7 +9875,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}
 		ownerOptions, defaultOwner, optionsErr := s.ownerOptionsForUser(r.Context())
 		if optionsErr != nil {
-			http.Error(w, optionsErr.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, optionsErr)
 			return
 		}
 		if ownerName == "" {
@@ -10713,7 +10732,7 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		resolved, err := s.resolveNotePath(r.Context(), parsed)
 		if err != nil {
 			slog.Warn("notes handler resolve failed", "path", routeRef, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return "", false
 		}
 		slog.Debug("notes handler resolved", "path", routeRef, "resolved", resolved)
@@ -10837,7 +10856,7 @@ func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath
 			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, err.Error(), status)
+		s.statusError(w, r, status, err)
 		return
 	}
 	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
@@ -10870,7 +10889,7 @@ func (s *Server) handleNoteDetailFragment(w http.ResponseWriter, r *http.Request
 			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, err.Error(), status)
+		s.statusError(w, r, status, err)
 		return
 	}
 	s.attachViewData(r, &data)
@@ -10898,7 +10917,7 @@ func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Requ
 			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, err.Error(), status)
+		s.statusError(w, r, status, err)
 		return
 	}
 	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
@@ -10931,7 +10950,7 @@ func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, 
 			s.renderLoginPrompt(w, r, sanitizeReturnURL(r, r.URL.RequestURI()), "", http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, err.Error(), status)
+		s.statusError(w, r, status, err)
 		return
 	}
 	s.attachViewData(r, &data)
@@ -11431,7 +11450,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 			return
 		}
 		slog.Error("edit note read failed", "path", notePath, "err", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if !index.HasFrontmatter(string(content)) {
@@ -11442,14 +11461,14 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		updated, err := index.EnsureFrontmatterWithTitleAndUser(string(content), time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 		if err != nil {
 			slog.Error("edit note frontmatter ensure failed", "path", notePath, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		unlock := s.locker.Lock(notePath)
 		if err := fs.WriteFileAtomic(fullPath, []byte(updated), 0o644); err != nil {
 			unlock()
 			slog.Error("edit note frontmatter write failed", "path", notePath, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		unlock()
@@ -11463,7 +11482,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	if info, err := os.Stat(fullPath); err == nil {
 		if err := s.idx.IndexNoteIfChanged(r.Context(), notePath, content, info.ModTime(), info.Size()); err != nil {
 			slog.Error("edit note index refresh failed", "path", notePath, "err", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 	}
@@ -11486,7 +11505,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 	ownerOptions, defaultOwner, err := s.ownerOptionsForUser(r.Context())
 	if err != nil {
 		slog.Error("edit note owner options failed", "path", notePath, "err", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	selectedOwner := ownerName
@@ -11545,7 +11564,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	}
 	content, err := os.ReadFile(fullPath)
 	if err != nil && !os.IsNotExist(err) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	attachmentPath := ""
@@ -11557,7 +11576,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 	}
 	writeLock, err := s.acquireNoteWriteLock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	defer writeLock.Release()
@@ -11566,7 +11585,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 		commitPaths = append(commitPaths, attachmentPath)
 	}
 	if err := commitRepoIfDirty(ctx, s.ownerRepoPath(ownerName), "auto: backup before delete", commitPaths...); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	unlock := s.locker.Lock(notePath)
@@ -11577,7 +11596,7 @@ func (s *Server) handleDeleteNote(w http.ResponseWriter, r *http.Request, notePa
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if attachmentPath != "" {
@@ -11639,7 +11658,7 @@ func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, no
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	content := normalizeLineEndings(string(contentBytes))
@@ -11658,23 +11677,23 @@ func (s *Server) handleUpdateWikiLink(w http.ResponseWriter, r *http.Request, no
 	mergedContent = normalizeLineEndings(mergedContent)
 	mergedContent, err = index.EnsureFrontmatterWithTitleAndUser(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, "", historyUser(r.Context()))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	writeLock, err := s.acquireNoteWriteLock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	defer writeLock.Release()
 	if err := commitRepoIfDirty(r.Context(), s.ownerRepoPath(ownerName), "auto: backup before edit", fullPath); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	unlock := s.locker.Lock(notePath)
 	if err := fs.WriteFileAtomic(fullPath, []byte(mergedContent), 0o644); err != nil {
 		unlock()
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	unlock()
@@ -11721,7 +11740,7 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 	}
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	meta := index.FrontmatterAttributes(string(content))
@@ -11742,30 +11761,30 @@ func (s *Server) handleUploadAttachment(w http.ResponseWriter, r *http.Request, 
 
 	attachmentsDir := s.noteAttachmentsDir(ownerName, meta.ID)
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	targetPath := filepath.Join(attachmentsDir, filename)
 	tmpFile, err := os.CreateTemp(attachmentsDir, ".upload-*")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tmpPath := tmpFile.Name()
 	if _, err := io.Copy(tmpFile, file); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if err := os.Rename(tmpPath, targetPath); err != nil {
 		_ = os.Remove(tmpPath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 
@@ -11841,35 +11860,35 @@ func (s *Server) handleUploadTempAttachment(w http.ResponseWriter, r *http.Reque
 		attachmentsDir = s.noteAttachmentsDir(ownerName, token)
 	}
 	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	targetPath := filepath.Join(attachmentsDir, filename)
 	tmpFile, err := os.CreateTemp(attachmentsDir, ".upload-*")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	tmpPath := tmpFile.Name()
 	if _, err := io.Copy(tmpFile, file); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
 		_ = os.Remove(tmpPath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if err := os.Rename(tmpPath, targetPath); err != nil {
 		_ = os.Remove(tmpPath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 
@@ -11943,7 +11962,7 @@ func (s *Server) handleDeleteTempAttachment(w http.ResponseWriter, r *http.Reque
 		targetPath = filepath.Join(s.noteAttachmentsDir(ownerName, token), name)
 	}
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	redirectURL := "/notes/new?upload_token=" + url.QueryEscape(token)
@@ -11992,7 +12011,7 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	meta := index.FrontmatterAttributes(string(content))
@@ -12003,7 +12022,7 @@ func (s *Server) handleDeleteAttachment(w http.ResponseWriter, r *http.Request, 
 
 	targetPath := filepath.Join(s.noteAttachmentsDir(ownerName, meta.ID), name)
 	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	http.Redirect(w, r, noteHrefWithSuffix(notePath, "edit", currentUserName(r.Context())), http.StatusSeeOther)
@@ -12069,7 +12088,7 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if info.IsDir() {
@@ -12115,7 +12134,7 @@ func (s *Server) handleAssetFile(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if info.IsDir() {
@@ -12623,7 +12642,8 @@ func (s *Server) handleAPINotes(w http.ResponseWriter, r *http.Request) {
 	noteRef := strings.TrimPrefix(strings.TrimSpace(payload.Path), "/")
 	notePath, err := s.resolveNotePath(r.Context(), noteRef)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("api notes resolve path failed", "path", payload.Path, "err", err)
+		writeAPIError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if notePath == "" {
@@ -13127,7 +13147,7 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	meta := index.FrontmatterAttributes(string(content))
@@ -13138,7 +13158,7 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 	if r.Method == http.MethodGet {
 		sections, err := s.idx.CollapsedSections(r.Context(), meta.ID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.internalServerError(w, r, err)
 			return
 		}
 		payload := collapsedSectionsPayload{Collapsed: make([]collapsedSectionPayloadItem, 0, len(sections))}
@@ -13165,7 +13185,7 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 	}
 	writeLock, err := s.acquireNoteWriteLock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	defer writeLock.Release()
@@ -13175,7 +13195,7 @@ func (s *Server) handleCollapsedSections(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 	if info, err := os.Stat(fullPath); err == nil {
@@ -13346,7 +13366,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, _ string)
 
 	htmlStr, err := s.renderMarkdown(r.Context(), []byte(content))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalServerError(w, r, err)
 		return
 	}
 

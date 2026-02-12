@@ -37,6 +37,7 @@ Non-goals (v1)
 6. **Logging discipline**
    - Add `WARN`/`ERROR` logs for unexpected results (e.g., failure to open files, database errors, external command failures).
    - Include the relevant path, SQL query, or operation context in the log message.
+   - Never expose raw internal/template/runtime error details to end users; log full details server-side and return a generic user-facing error message.
 7. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
    - After finishing work and committing, check `git status -sb` to confirm a clean tree.
