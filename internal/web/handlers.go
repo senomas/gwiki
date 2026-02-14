@@ -1436,10 +1436,10 @@ func scanAttachmentRefs(content string) []attachmentRef {
 	return refs
 }
 
-func (s *Server) localizeAttachmentLinks(owner, noteID, content string) (string, error) {
+func (s *Server) localizeAttachmentLinks(ctx context.Context, owner, noteID, content string) (string, error) {
 	owner = strings.TrimSpace(owner)
 	noteID = strings.TrimSpace(noteID)
-	if owner == "" || noteID == "" {
+	if owner == "" {
 		return content, nil
 	}
 	refs := scanAttachmentRefs(content)
@@ -1452,28 +1452,60 @@ func (s *Server) localizeAttachmentLinks(owner, noteID, content string) (string,
 		}
 		return refs[i].start < refs[j].start
 	})
-	attachmentsDir := s.noteAttachmentsDir(owner, noteID)
-	if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
-		return content, err
+	attachmentsDir := ""
+	if noteID != "" {
+		attachmentsDir = s.noteAttachmentsDir(owner, noteID)
+		if err := os.MkdirAll(attachmentsDir, 0o755); err != nil {
+			return content, err
+		}
 	}
 	type copyInfo struct {
 		srcNote string
 		rel     string
 		dstRel  string
 	}
+	refLabel := func(ref attachmentRef) string {
+		return ref.prefix + ref.noteID + "/" + ref.rel
+	}
+	invalidRefErr := func(ref attachmentRef, reason string, err error) error {
+		label := refLabel(ref)
+		if err != nil {
+			return fmt.Errorf("invalid attachment link %q: %s (%v)", label, reason, err)
+		}
+		return fmt.Errorf("invalid attachment link %q: %s", label, reason)
+	}
+	refOwners := map[string]string{}
+	if noteID != "" {
+		refOwners[noteID] = owner
+	}
 	copies := map[string]copyInfo{}
 	for _, ref := range refs {
-		if ref.noteID == noteID {
+		cachedOwner, ok := refOwners[ref.noteID]
+		if !ok {
+			resolvedOwner, _, err := s.ownerFromNoteID(ctx, ref.noteID)
+			if err != nil {
+				return content, invalidRefErr(ref, "source note not found", err)
+			}
+			cachedOwner = strings.TrimSpace(resolvedOwner)
+			if cachedOwner == "" {
+				return content, invalidRefErr(ref, "source note owner not found", nil)
+			}
+			refOwners[ref.noteID] = cachedOwner
+		}
+		srcOwner := cachedOwner
+		srcDir := s.noteAttachmentsDir(srcOwner, ref.noteID)
+		srcPath := filepath.Join(srcDir, filepath.FromSlash(ref.rel))
+		if _, err := os.Stat(srcPath); err != nil {
+			if os.IsNotExist(err) {
+				return content, invalidRefErr(ref, "attachment file not found", nil)
+			}
+			return content, invalidRefErr(ref, "unable to access attachment file", err)
+		}
+		if noteID == "" || ref.noteID == noteID {
 			continue
 		}
 		key := ref.noteID + "::" + ref.rel
 		if _, ok := copies[key]; ok {
-			continue
-		}
-		srcDir := s.noteAttachmentsDir(owner, ref.noteID)
-		srcPath := filepath.Join(srcDir, filepath.FromSlash(ref.rel))
-		if _, err := os.Stat(srcPath); err != nil {
-			slog.Warn("attachment source missing", "note_id", ref.noteID, "path", ref.rel, "err", err)
 			continue
 		}
 		dstRel := ref.rel
@@ -10345,12 +10377,27 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			unlock := s.locker.Lock(notePath)
-			if attrs := index.FrontmatterAttributes(updatedContent); attrs.ID != "" {
-				if updated, err := s.localizeAttachmentLinks(ownerName, attrs.ID, updatedContent); err != nil {
-					slog.Warn("localize attachment links", "owner", ownerName, "note_id", attrs.ID, "err", err)
-				} else {
-					updatedContent = updated
-				}
+			attrs := index.FrontmatterAttributes(updatedContent)
+			if updated, err := s.localizeAttachmentLinks(r.Context(), ownerName, attrs.ID, updatedContent); err != nil {
+				unlock()
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusBadRequest)
+				return
+			} else {
+				updatedContent = updated
 			}
 			if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
 				unlock()
@@ -10505,12 +10552,26 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if attrs := index.FrontmatterAttributes(mergedContent); attrs.ID != "" {
-		if updated, err := s.localizeAttachmentLinks(ownerName, attrs.ID, mergedContent); err != nil {
-			slog.Warn("localize attachment links", "owner", ownerName, "note_id", attrs.ID, "err", err)
-		} else {
-			mergedContent = updated
-		}
+	attrs := index.FrontmatterAttributes(mergedContent)
+	if updated, err := s.localizeAttachmentLinks(r.Context(), ownerName, attrs.ID, mergedContent); err != nil {
+		ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+		s.renderEditError(w, r, ViewData{
+			Title:            "New note",
+			ContentTemplate:  "edit",
+			RawContent:       content,
+			FrontmatterBlock: frontmatter,
+			OwnerOptions:     ownerOptions,
+			SelectedOwner:    ownerName,
+			SaveAction:       "/notes/new",
+			UploadToken:      uploadToken,
+			Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+			AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+			ErrorMessage:     err.Error(),
+			ErrorReturnURL:   "/notes/new",
+		}, http.StatusBadRequest)
+		return
+	} else {
+		mergedContent = updated
 	}
 	folder, err := normalizeFolderPath(folderInput)
 	if err != nil {
@@ -10780,8 +10841,24 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			unlock := s.locker.Lock(notePath)
-			if updated, err := s.localizeAttachmentLinks(ownerName, existingID, updatedContent); err != nil {
-				slog.Warn("localize attachment links", "owner", ownerName, "note_id", existingID, "err", err)
+			if updated, err := s.localizeAttachmentLinks(r.Context(), ownerName, existingID, updatedContent); err != nil {
+				unlock()
+				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+				s.renderEditError(w, r, ViewData{
+					Title:            "New note",
+					ContentTemplate:  "edit",
+					RawContent:       content,
+					FrontmatterBlock: frontmatter,
+					OwnerOptions:     ownerOptions,
+					SelectedOwner:    ownerName,
+					SaveAction:       "/notes/new",
+					UploadToken:      uploadToken,
+					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+					ErrorMessage:     err.Error(),
+					ErrorReturnURL:   "/notes/new",
+				}, http.StatusBadRequest)
+				return
 			} else {
 				updatedContent = updated
 			}
@@ -13092,6 +13169,13 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	autoMove := !preserveUpdated && pathChanged
 	slog.Debug("save common move", "note_path", notePath, "desired_path", desiredPath, "path_changed", pathChanged, "auto_move", autoMove, "rename_decision", decision, "cross_owner", crossOwnerMove)
 
+	preMetaAttrs := index.FrontmatterAttributes(mergedContent)
+	if updated, err := s.localizeAttachmentLinks(ctx, targetOwner, preMetaAttrs.ID, mergedContent); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+	} else {
+		mergedContent = updated
+	}
+
 	if !crossOwnerMove && err == nil && hadFrontmatter && mergedContent == existingContentNormalized {
 		return saveNoteResult{
 			Path:       notePath,
@@ -13114,12 +13198,10 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	}
 
 	metaAttrs := index.FrontmatterAttributes(mergedContent)
-	if metaAttrs.ID != "" {
-		if updated, err := s.localizeAttachmentLinks(targetOwner, metaAttrs.ID, mergedContent); err != nil {
-			slog.Warn("localize attachment links", "owner", targetOwner, "note_id", metaAttrs.ID, "err", err)
-		} else {
-			mergedContent = updated
-		}
+	if updated, err := s.localizeAttachmentLinks(ctx, targetOwner, metaAttrs.ID, mergedContent); err != nil {
+		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: err.Error()}
+	} else {
+		mergedContent = updated
 	}
 
 	unlock := s.locker.Lock(notePath)

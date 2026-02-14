@@ -320,11 +320,16 @@ func TestCleanupUnusedAttachments(t *testing.T) {
 
 func TestLocalizeAttachmentLinks(t *testing.T) {
 	repo := t.TempDir()
-	owner := "local"
-	notesDir := filepath.Join(repo, owner, "notes")
+	targetOwner := "local"
+	sourceOwner := "remote"
+	targetNotesDir := filepath.Join(repo, targetOwner, "notes")
+	sourceNotesDir := filepath.Join(repo, sourceOwner, "notes")
 	dataDir := filepath.Join(repo, ".wiki")
-	if err := os.MkdirAll(notesDir, 0o755); err != nil {
-		t.Fatalf("mkdir notes: %v", err)
+	if err := os.MkdirAll(targetNotesDir, 0o755); err != nil {
+		t.Fatalf("mkdir target notes: %v", err)
+	}
+	if err := os.MkdirAll(sourceNotesDir, 0o755); err != nil {
+		t.Fatalf("mkdir source notes: %v", err)
 	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir .wiki: %v", err)
@@ -332,12 +337,27 @@ func TestLocalizeAttachmentLinks(t *testing.T) {
 
 	sourceID := "src-note"
 	sourceRel := "image.png"
-	sourcePath := filepath.Join(notesDir, "attachments", sourceID, sourceRel)
+	sourcePath := filepath.Join(sourceNotesDir, "attachments", sourceID, sourceRel)
 	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
 		t.Fatalf("mkdir source: %v", err)
 	}
 	if err := os.WriteFile(sourcePath, []byte("source-data"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
+	}
+	sourceNoteRel := "source.md"
+	sourceNotePath := filepath.Join(sourceNotesDir, sourceNoteRel)
+	sourceNote := strings.Join([]string{
+		"---",
+		"id: " + sourceID,
+		"title: Source",
+		"visibility: public",
+		"---",
+		"",
+		"# Source",
+		"",
+	}, "\n")
+	if err := os.WriteFile(sourceNotePath, []byte(sourceNote), 0o644); err != nil {
+		t.Fatalf("write source note: %v", err)
 	}
 
 	targetID := "target-note"
@@ -361,6 +381,132 @@ func TestLocalizeAttachmentLinks(t *testing.T) {
 	if err := idx.Init(ctx, repo); err != nil {
 		t.Fatalf("init index: %v", err)
 	}
+	sourceInfo, err := os.Stat(sourceNotePath)
+	if err != nil {
+		t.Fatalf("stat source note: %v", err)
+	}
+	sourceIndexPath := filepath.ToSlash(filepath.Join(sourceOwner, sourceNoteRel))
+	if err := idx.IndexNote(ctx, sourceIndexPath, []byte(sourceNote), sourceInfo.ModTime(), sourceInfo.Size()); err != nil {
+		t.Fatalf("index source note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	noteCtx := WithUser(context.Background(), User{Name: targetOwner, Authenticated: true})
+	_, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
+		NotePath:       filepath.ToSlash(filepath.Join(targetOwner, "test.md")),
+		TargetOwner:    targetOwner,
+		Content:        content,
+		Frontmatter:    frontmatter,
+		RenameDecision: "cancel",
+	})
+	if apiErr != nil {
+		t.Fatalf("save note: %v", apiErr)
+	}
+
+	updatedPath := filepath.Join(targetNotesDir, "test.md")
+	raw, err := os.ReadFile(updatedPath)
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if !strings.Contains(string(raw), "/attachments/"+targetID+"/"+sourceRel) {
+		t.Fatalf("expected link to be localized, got:\n%s", string(raw))
+	}
+	copied := filepath.Join(targetNotesDir, "attachments", targetID, sourceRel)
+	if _, err := os.Stat(copied); err != nil {
+		t.Fatalf("expected copied attachment, got err=%v", err)
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		t.Fatalf("expected source to remain, got err=%v", err)
+	}
+}
+
+func TestSaveNoteCommonRejectsInvalidAttachmentLink(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	noteCtx := WithUser(context.Background(), User{Name: owner, Authenticated: true})
+	frontmatter := strings.Join([]string{
+		"---",
+		"id: target-note",
+		"title: Target",
+		"---",
+		"",
+	}, "\n")
+	_, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
+		NotePath:       filepath.ToSlash(filepath.Join(owner, "test.md")),
+		TargetOwner:    owner,
+		Content:        "See ![](/attachments/missing-note/image.png)\n",
+		Frontmatter:    frontmatter,
+		RenameDecision: "cancel",
+	})
+	if apiErr == nil {
+		t.Fatalf("expected save error for invalid attachment link")
+	}
+	if apiErr.status != http.StatusBadRequest {
+		t.Fatalf("expected bad request status, got %d", apiErr.status)
+	}
+	if !strings.Contains(apiErr.message, "invalid attachment link") {
+		t.Fatalf("unexpected error message: %q", apiErr.message)
+	}
+	if _, err := os.Stat(filepath.Join(notesDir, "test.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected note not written on invalid attachment, err=%v", err)
+	}
+}
+
+func TestSaveNoteCommonRejectsInvalidAttachmentLinkWithoutTargetID(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
 
 	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
 	srv, err := NewServer(cfg, idx)
@@ -372,28 +518,92 @@ func TestLocalizeAttachmentLinks(t *testing.T) {
 	_, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
 		NotePath:       filepath.ToSlash(filepath.Join(owner, "test.md")),
 		TargetOwner:    owner,
-		Content:        content,
+		Content:        "# Test\n\n![](/attachments/missing-note/image.png)\n",
+		Frontmatter:    "",
+		RenameDecision: "cancel",
+	})
+	if apiErr == nil {
+		t.Fatalf("expected save error for invalid attachment link")
+	}
+	if apiErr.status != http.StatusBadRequest {
+		t.Fatalf("expected bad request status, got %d", apiErr.status)
+	}
+	if !strings.Contains(apiErr.message, "invalid attachment link") {
+		t.Fatalf("unexpected error message: %q", apiErr.message)
+	}
+	if _, err := os.Stat(filepath.Join(notesDir, "test.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected note not written on invalid attachment, err=%v", err)
+	}
+}
+
+func TestSaveNoteCommonRejectsInvalidAttachmentLinkWhenUnchanged(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	frontmatter := strings.Join([]string{
+		"---",
+		"id: target-note",
+		"title: Test",
+		"visibility: public",
+		"---",
+		"",
+	}, "\n")
+	body := "# Test\n\n![](/attachments/missing-note/image.png)\n"
+	notePath := filepath.Join(notesDir, "test.md")
+	if err := os.WriteFile(notePath, []byte(frontmatter+body), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+	info, err := os.Stat(notePath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	indexPath := filepath.ToSlash(filepath.Join(owner, "test.md"))
+	if err := idx.IndexNote(ctx, indexPath, []byte(frontmatter+body), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	noteCtx := WithUser(context.Background(), User{Name: owner, Authenticated: true})
+	_, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
+		NotePath:       indexPath,
+		TargetOwner:    owner,
+		Content:        body,
 		Frontmatter:    frontmatter,
 		RenameDecision: "cancel",
 	})
-	if apiErr != nil {
-		t.Fatalf("save note: %v", apiErr)
+	if apiErr == nil {
+		t.Fatalf("expected save error for unchanged invalid attachment link")
 	}
-
-	updatedPath := filepath.Join(notesDir, "test.md")
-	raw, err := os.ReadFile(updatedPath)
-	if err != nil {
-		t.Fatalf("read note: %v", err)
+	if apiErr.status != http.StatusBadRequest {
+		t.Fatalf("expected bad request status, got %d", apiErr.status)
 	}
-	if !strings.Contains(string(raw), "/attachments/"+targetID+"/"+sourceRel) {
-		t.Fatalf("expected link to be localized, got:\n%s", string(raw))
-	}
-	copied := filepath.Join(notesDir, "attachments", targetID, sourceRel)
-	if _, err := os.Stat(copied); err != nil {
-		t.Fatalf("expected copied attachment, got err=%v", err)
-	}
-	if _, err := os.Stat(sourcePath); err != nil {
-		t.Fatalf("expected source to remain, got err=%v", err)
+	if !strings.Contains(apiErr.message, "invalid attachment link") {
+		t.Fatalf("unexpected error message: %q", apiErr.message)
 	}
 }
 
