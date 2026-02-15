@@ -4685,13 +4685,18 @@ func (i *Index) CountNotesWithDueTasksByDate(ctx context.Context, tags []string,
 }
 
 func (i *Index) Backlinks(ctx context.Context, notePath string, title string, uid string) ([]Backlink, error) {
+	ownerName := ""
 	relPath := notePath
-	if _, rel, err := splitOwnerPath(notePath); err == nil {
+	if owner, rel, err := splitOwnerPath(notePath); err == nil {
+		ownerName = owner
 		relPath = rel
 	}
 	candidates := backlinkCandidates(relPath, title, uid)
 	if notePath != relPath {
 		candidates = append(candidates, backlinkCandidates(notePath, title, uid)...)
+	}
+	if ownerName != "" {
+		candidates = append(candidates, backlinkOwnerCandidates(ownerName, relPath)...)
 	}
 	if len(candidates) > 0 {
 		seen := make(map[string]struct{}, len(candidates))
@@ -4725,19 +4730,30 @@ func (i *Index) Backlinks(ctx context.Context, notePath string, title string, ui
 	if len(accessClauses) > 0 {
 		accessClause = " AND " + strings.Join(accessClauses, " AND ")
 	}
+	excludeClause := " AND files.path != ?"
+	if ownerName != "" {
+		excludeClause = " AND NOT (files.path = ? AND lower(u.name) = ?)"
+	}
 	query := fmt.Sprintf(`
 		SELECT files.path, files.title, links.line_no, links.line, links.kind, %s
 		FROM links
 		JOIN files ON files.id = links.from_file_id
 		%s
-		WHERE lower(links.to_ref) IN (`+placeholders+`) AND files.path != ?`+visibilityClause+accessClause+`
+		WHERE lower(links.to_ref) IN (`+placeholders+`)`+excludeClause+visibilityClause+accessClause+`
 		ORDER BY files.updated_at DESC, files.title`, ownerNameExpr(), ownerJoins("files"))
 
-	args := make([]interface{}, 0, len(candidates)+2+len(accessArgs))
+	argsCap := len(candidates) + 2 + len(accessArgs)
+	if ownerName != "" {
+		argsCap++
+	}
+	args := make([]interface{}, 0, argsCap)
 	for _, candidate := range candidates {
 		args = append(args, strings.ToLower(candidate))
 	}
 	args = append(args, relPath)
+	if ownerName != "" {
+		args = append(args, strings.ToLower(ownerName))
+	}
 	if publicOnly(ctx) {
 		args = append(args, "public")
 	}
@@ -4839,6 +4855,38 @@ func backlinkCandidates(notePath string, title string, uid string) []string {
 	seen := map[string]struct{}{}
 	unique := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
+		key := strings.ToLower(candidate)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, candidate)
+	}
+	return unique
+}
+
+func backlinkOwnerCandidates(ownerName string, relPath string) []string {
+	ownerName = strings.TrimSpace(ownerName)
+	relPath = strings.TrimSpace(strings.TrimPrefix(relPath, "/"))
+	if ownerName == "" || relPath == "" {
+		return nil
+	}
+	noExt := strings.TrimSuffix(relPath, ".md")
+	candidates := []string{
+		"@" + ownerName + "/" + relPath,
+		"@" + ownerName + "/" + noExt,
+		"/notes/@" + ownerName + "/" + relPath,
+		"/notes/@" + ownerName + "/" + noExt,
+		"notes/@" + ownerName + "/" + relPath,
+		"notes/@" + ownerName + "/" + noExt,
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	unique := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
 		key := strings.ToLower(candidate)
 		if _, ok := seen[key]; ok {
 			continue
