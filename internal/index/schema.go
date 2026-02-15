@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 35
+const schemaVersion = 36
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -181,6 +181,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 	user_id UNINDEXED,
 	path,
 	title,
+	h1,
+	h2,
+	h3,
+	h4,
+	h5,
+	h6,
 	body,
 	tokenize='trigram'
 );

@@ -92,6 +92,85 @@ Body without the term.
 	}
 }
 
+func TestFTSSearchRankingPrefersStructuredFields(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	files := map[string]string{
+		"title.md": `# rankfocus
+
+Plain body text.
+`,
+		"h1.md": `# Intro
+
+# rankfocus
+
+Plain body text.
+`,
+		"h2.md": `# Intro
+
+## rankfocus
+
+Plain body text.
+`,
+		"h3.md": `# Intro
+
+### rankfocus
+
+Plain body text.
+`,
+		"body.md": `# Intro
+
+Plain body rankfocus text.
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(notesDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	idx, err := Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx := context.Background()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	results, err := idx.Search(ctx, "rankfocus", 10)
+	if err != nil {
+		t.Fatalf("search rankfocus: %v", err)
+	}
+
+	want := []string{
+		"local/title.md",
+		"local/h1.md",
+		"local/h2.md",
+		"local/h3.md",
+		"local/body.md",
+	}
+	if len(results) < len(want) {
+		t.Fatalf("expected at least %d results, got %+v", len(want), results)
+	}
+	for i, path := range want {
+		if results[i].Path != path {
+			t.Fatalf("unexpected rank at %d: want=%s got=%s full=%+v", i, path, results[i].Path, results)
+		}
+	}
+}
+
 func TestFTSSearchWithShortTokens(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

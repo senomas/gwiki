@@ -138,6 +138,7 @@ type fileRecord struct {
 }
 
 const secondsPerDay = 86400
+const ftsRankSQL = "bm25(fts, 0.2, 12.0, 10.0, 8.0, 6.0, 4.0, 3.0, 2.0, 1.0)"
 
 var journalPathRE = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
 
@@ -691,6 +692,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 35
+		case 35:
+			slog.Info("schema migration", "from", 35, "to", 36)
+			if err := i.migrate35To36(ctx); err != nil {
+				return err
+			}
+			version = 36
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1156,6 +1163,58 @@ func (i *Index) migrate34To35(ctx context.Context) error {
 	return err
 }
 
+func (i *Index) migrate35To36(ctx context.Context) error {
+	if _, err := i.execContext(ctx, `DROP TABLE IF EXISTS fts_backup`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE fts_backup (
+			user_id INTEGER NOT NULL,
+			path TEXT NOT NULL,
+			title TEXT,
+			body TEXT
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `
+		INSERT INTO fts_backup(user_id, path, title, body)
+		SELECT user_id, path, title, body
+		FROM fts
+	`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `DROP TABLE IF EXISTS fts`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `
+		CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
+			user_id UNINDEXED,
+			path,
+			title,
+			h1,
+			h2,
+			h3,
+			h4,
+			h5,
+			h6,
+			body,
+			tokenize='trigram'
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `
+		INSERT INTO fts(user_id, path, title, h1, h2, h3, h4, h5, h6, body)
+		SELECT user_id, path, title, '', '', '', '', '', '', body
+		FROM fts_backup
+	`); err != nil {
+		return err
+	}
+	_, err := i.execContext(ctx, `DROP TABLE IF EXISTS fts_backup`)
+	return err
+}
+
 type ownerRoot struct {
 	name      string
 	notesRoot string
@@ -1578,7 +1637,11 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		return err
 	}
 	body := StripFrontmatter(string(content))
-	if _, err := i.execContextTx(ctx, tx, "INSERT INTO fts(user_id, path, title, body) VALUES(?, ?, ?, ?)", userID, relPath, meta.Title, body); err != nil {
+	headings := parseHeadingBuckets(body)
+	if _, err := i.execContextTx(ctx, tx, `
+		INSERT INTO fts(user_id, path, title, h1, h2, h3, h4, h5, h6, body)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, userID, relPath, meta.Title, headings[0], headings[1], headings[2], headings[3], headings[4], headings[5], body); err != nil {
 		return err
 	}
 
@@ -1721,7 +1784,7 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 	groupBy := false
 
 	if query != "" {
-		joins = append(joins, "JOIN fts ON fts.path = files.path")
+		joins = append(joins, "JOIN fts ON fts.path = files.path AND fts.user_id = files.user_id")
 		clauses = append(clauses, "fts MATCH ?")
 		args = append(args, query)
 	}
@@ -1837,7 +1900,9 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		sqlStr += " HAVING COUNT(DISTINCT tags.name) = ?"
 		args = append(args, len(tagList))
 	}
-	if filter.HomeSections {
+	if query != "" {
+		sqlStr += " ORDER BY " + ftsRankSQL + " ASC, files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
+	} else if filter.HomeSections {
 		sqlStr += " ORDER BY section_rank ASC, files.priority ASC, files.updated_at DESC LIMIT ? OFFSET ?"
 	} else if filter.UpdatedAsc {
 		sqlStr += " ORDER BY files.updated_at ASC, files.priority ASC LIMIT ? OFFSET ?"
@@ -2831,11 +2896,12 @@ func (i *Index) Search(ctx context.Context, query string, limit int) ([]SearchRe
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	queryStr := fmt.Sprintf(`
-		SELECT files.path, files.title, snippet(fts, 2, '', '', '...', 10), %s
+		SELECT files.path, files.title, snippet(fts, 9, '', '', '...', 10), %s
 		FROM fts
 		%s
 		WHERE %s
-		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "))
+		ORDER BY %s ASC, files.updated_at DESC
+		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "), ftsRankSQL)
 	args = append(args, limit)
 	rows, err := i.queryContext(ctx, queryStr, args...)
 	if err != nil {
@@ -2871,18 +2937,19 @@ func (i *Index) SearchWithShortTokens(ctx context.Context, query string, shortTo
 		if token == "" {
 			continue
 		}
-		clauses = append(clauses, "(fts.title LIKE ? OR fts.body LIKE ? OR fts.path LIKE ?)")
+		clauses = append(clauses, "(fts.title LIKE ? OR fts.h1 LIKE ? OR fts.h2 LIKE ? OR fts.h3 LIKE ? OR fts.h4 LIKE ? OR fts.h5 LIKE ? OR fts.h6 LIKE ? OR fts.body LIKE ? OR fts.path LIKE ?)")
 		like := "%" + token + "%"
-		args = append(args, like, like, like)
+		args = append(args, like, like, like, like, like, like, like, like, like)
 	}
 	applyAccessFilter(ctx, &clauses, &args, "files")
 	applyVisibilityFilter(ctx, &clauses, &args, "files")
 	queryStr := fmt.Sprintf(`
-		SELECT files.path, files.title, snippet(fts, 2, '', '', '...', 10), %s
+		SELECT files.path, files.title, snippet(fts, 9, '', '', '...', 10), %s
 		FROM fts
 		%s
 		WHERE %s
-		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "))
+		ORDER BY %s ASC, files.updated_at DESC
+		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "), ftsRankSQL)
 	args = append(args, limit)
 	rows, err := i.queryContext(ctx, queryStr, args...)
 	if err != nil {

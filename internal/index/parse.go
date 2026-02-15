@@ -639,6 +639,65 @@ func parseTitle(body string, fm map[string]string) string {
 	return ""
 }
 
+func parseHeadingBuckets(body string) [6]string {
+	var levels [6][]string
+	for _, line := range nonCodeLines(body) {
+		level, text, ok := parseATXHeading(line)
+		if !ok {
+			continue
+		}
+		levels[level-1] = append(levels[level-1], text)
+	}
+	var out [6]string
+	for i := range levels {
+		out[i] = strings.Join(levels[i], "\n")
+	}
+	return out
+}
+
+func parseATXHeading(line string) (int, string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return 0, "", false
+	}
+	level := 0
+	for level < len(trimmed) && trimmed[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || len(trimmed) == level {
+		return 0, "", false
+	}
+	if trimmed[level] != ' ' && trimmed[level] != '\t' {
+		return 0, "", false
+	}
+	text := strings.TrimSpace(trimmed[level:])
+	if text == "" {
+		return 0, "", false
+	}
+	text = trimATXHeadingClosingHashes(text)
+	if text == "" {
+		return 0, "", false
+	}
+	return level, text, true
+}
+
+func trimATXHeadingClosingHashes(text string) string {
+	text = strings.TrimSpace(text)
+	i := len(text) - 1
+	for i >= 0 && text[i] == '#' {
+		i--
+	}
+	if i < len(text)-1 {
+		if i < 0 {
+			return ""
+		}
+		if text[i] == ' ' || text[i] == '\t' {
+			text = strings.TrimRight(text[:i], " \t")
+		}
+	}
+	return strings.TrimSpace(text)
+}
+
 func parseTagsFromFrontmatter(fm map[string]string) []string {
 	if fm == nil {
 		return nil
