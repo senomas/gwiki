@@ -32,7 +32,8 @@ Non-goals (v1)
    - Single-user auth is required if exposed outside localhost.
 5. **Testing discipline**
    - After completing any planned work, run `make test` before reporting.
-   - For `httptest`/HTTP-listener test coverage, also run `make test-http`.
+   - Do not run `go test` directly as the default validation path; `make test` is the canonical command.
+   - `make test` must include unit/integration tests and `http_test` coverage via Docker.
    - Always run tests before any commit.
 6. **Logging discipline**
    - Add `WARN`/`ERROR` logs for unexpected results (e.g., failure to open files, database errors, external command failures).

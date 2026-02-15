@@ -112,6 +112,156 @@ func TestIntegrationFlow(t *testing.T) {
 	}
 }
 
+func TestSearchHashQueryUsesTagFuzzyOnly(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	files := map[string]string{
+		"tagged.md": `# Tagged Note
+
+Tagged via #wellness only.
+`,
+		"body.md": `# Body Note
+
+This has wellness in body but no tag.
+`,
+	}
+	for name, content := range files {
+		full := filepath.Join(notesDir, name)
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		notePath := filepath.ToSlash(filepath.Join(owner, name))
+		if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+			t.Fatalf("index %s: %v", name, err)
+		}
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/search?q=%23wlns")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+	if !strings.Contains(html, "#wellness") {
+		t.Fatalf("expected tag suggestion in results, got %s", html)
+	}
+	if strings.Contains(html, "Tagged Note") || strings.Contains(html, "Body Note") {
+		t.Fatalf("expected tag-only results when query starts with #, got %s", html)
+	}
+}
+
+func TestQuickLauncherHashQueryReturnsTagsOnly(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(filepath.Join(notesDir, "demo-folder"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	files := map[string]string{
+		"demo-tagged.md": `# Demo Tag Note
+
+Tagged with #demo.
+`,
+		"demo-folder/demo-body.md": `# Demo Body Note
+
+Contains demo text in body.
+`,
+	}
+	for relPath, content := range files {
+		full := filepath.Join(notesDir, relPath)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", relPath, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", relPath, err)
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			t.Fatalf("stat %s: %v", relPath, err)
+		}
+		notePath := filepath.ToSlash(filepath.Join(owner, relPath))
+		if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+			t.Fatalf("index %s: %v", relPath, err)
+		}
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/quick/launcher?q=%23dmo&uri=%2F")
+	if err != nil {
+		t.Fatalf("quick launcher: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+	if !strings.Contains(html, `data-tag="demo"`) {
+		t.Fatalf("expected tag entry in quick launcher, got %s", html)
+	}
+	if strings.Contains(html, `data-note-path=`) {
+		t.Fatalf("expected no note entries when query starts with #, got %s", html)
+	}
+	if strings.Contains(html, ">Folder</span>") {
+		t.Fatalf("expected no folder entries when query starts with #, got %s", html)
+	}
+}
+
 func TestCollapsedSectionsRenderFromStore(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

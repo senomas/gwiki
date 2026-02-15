@@ -3,7 +3,9 @@
 -include .env.local
 export
 
-.PHONY: docker-build test test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build test test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+
+TEST_DOCKER_BUILD_ARGS = --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION)
 
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
@@ -16,11 +18,13 @@ COMPOSE := docker compose $(COMPOSE_ENV_FILES)
 docker-build:
 	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t gwiki .
 
-test:
-	CGO_ENABLED=1 GOCACHE=$(CURDIR)/.gocache go test -tags "sqlite_fts5" ./...
+test: test-unit test-http
+
+test-unit:
+	docker build --target test $(TEST_DOCKER_BUILD_ARGS) .
 
 test-http:
-	docker build --target test-http --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) .
+	docker build --target test-http $(TEST_DOCKER_BUILD_ARGS) .
 
 http-test: test-http
 

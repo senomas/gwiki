@@ -3,17 +3,30 @@
   <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Results for {{.SearchQuery}}</div>
 {{end}}
 <div class="space-y-4">
-  {{range .SearchResults}}
-    <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
-      <h2 class="text-lg font-semibold text-slate-100">
-        <a class="js-search-result text-sky-300 hover:text-sky-200" href="{{noteHref .Path $.CurrentUser.Name}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a>
-      </h2>
-      {{if .Snippet}}<div class="mt-2 text-sm text-slate-300">{{.Snippet}}</div>{{end}}
-    </article>
+  {{if .SearchTagsOnly}}
+    {{range .SearchTagResults}}
+      <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+        <a class="text-sky-300 hover:text-sky-200" href="{{.URL}}">#{{tagLabel .Name}}</a>
+        <div class="mt-1 text-xs text-slate-400">{{.Count}} note{{if ne .Count 1}}s{{end}}</div>
+      </article>
+    {{else}}
+      <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+        No tags.
+      </div>
+    {{end}}
   {{else}}
-    <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
-      No results.
-    </div>
+    {{range .SearchResults}}
+      <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+        <h2 class="text-lg font-semibold text-slate-100">
+          <a class="js-search-result text-sky-300 hover:text-sky-200" href="{{noteHref .Path $.CurrentUser.Name}}">{{if .Title}}{{.Title}}{{else}}{{.Path}}{{end}}</a>
+        </h2>
+        {{if .Snippet}}<div class="mt-2 text-sm text-slate-300">{{.Snippet}}</div>{{end}}
+      </article>
+    {{else}}
+      <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+        No results.
+      </div>
+    {{end}}
   {{end}}
 </div>
 {{end}}

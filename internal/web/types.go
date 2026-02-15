@@ -39,6 +39,8 @@ type ViewData struct {
 	NoteHash               string
 	NoteEtagTime           int64
 	SearchResults          []index.SearchResult
+	SearchTagsOnly         bool
+	SearchTagResults       []TagLink
 	RecentNotes            []index.NoteSummary
 	HomeNotes              []NoteCard
 	HomePriorityNotes      []NoteCard

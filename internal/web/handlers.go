@@ -6584,20 +6584,33 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	_, shortTokens := splitSearchTokens(query)
-	ftsQuery := ftsPrefixQuery(query)
+	searchTagsOnly := strings.HasPrefix(query, "#")
 	var results []index.SearchResult
-	if ftsQuery != "" {
+	var searchTags []TagLink
+	if searchTagsOnly {
 		var err error
-		results, err = s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 50)
+		searchTags, err = s.searchTagsByQuery(r.Context(), query, 50)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
+	} else {
+		_, shortTokens := splitSearchTokens(query)
+		ftsQuery := ftsPrefixQuery(query)
+		if ftsQuery != "" {
+			var err error
+			results, err = s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 50)
+			if err != nil {
+				s.internalServerError(w, r, err)
+				return
+			}
+		}
 	}
 	data := ViewData{
-		SearchQuery:   query,
-		SearchResults: results,
+		SearchQuery:      query,
+		SearchResults:    results,
+		SearchTagsOnly:   searchTagsOnly,
+		SearchTagResults: searchTags,
 	}
 	s.attachViewData(r, &data)
 	if r.Header.Get("HX-Request") == "true" {
@@ -6695,6 +6708,52 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	data.JournalSidebar = journalSidebar
 	applyCalendarLinks(&data, baseURL)
 	s.views.RenderPage(w, data)
+}
+
+func (s *Server) searchTagsByQuery(ctx context.Context, query string, limit int) ([]TagLink, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	term := normalizeFuzzyTerm(strings.ToLower(strings.TrimSpace(strings.TrimPrefix(query, "#"))))
+	tags, err := s.idx.ListTags(ctx, 200, "", false, false, "")
+	if err != nil {
+		return nil, err
+	}
+	results := make([]TagLink, 0, limit)
+	for _, tag := range tags {
+		name := strings.TrimSpace(tag.Name)
+		if name == "" || strings.HasPrefix(name, "@") {
+			continue
+		}
+		if !fuzzyMatchTag(term, strings.ToLower(name)) {
+			continue
+		}
+		results = append(results, TagLink{
+			Name:   name,
+			Count:  tag.Count,
+			URL:    setTagsURL("/", []string{name}),
+			Active: false,
+		})
+		if len(results) >= limit {
+			break
+		}
+	}
+	if len(results) >= limit {
+		return results, nil
+	}
+	journalCount, err := s.idx.CountJournalNotes(ctx, "", false, "")
+	if err == nil && journalCount > 0 && fuzzyMatchTag(term, strings.ToLower(journalTagName)) {
+		results = append(results, TagLink{
+			Name:   journalTagName,
+			Count:  journalCount,
+			URL:    setTagsURL("/", []string{journalTagName}),
+			Active: false,
+		})
+		if len(results) > limit {
+			results = results[:limit]
+		}
+	}
+	return results, nil
 }
 
 func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
@@ -6914,8 +6973,20 @@ func ftsPrefixQuery(raw string) string {
 
 func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL *url.URL) ([]QuickLauncherEntry, error) {
 	query = strings.TrimSpace(query)
+	tagOnlyQuery := strings.HasPrefix(query, "#")
+	tagQuery := query
+	if tagOnlyQuery {
+		tagQuery = strings.TrimSpace(strings.TrimPrefix(query, "#"))
+	}
 	longTokens, shortTokens := splitSearchTokens(query)
+	if tagOnlyQuery {
+		longTokens = nil
+		shortTokens = nil
+	}
 	normalized := normalizeFuzzyTerm(strings.ToLower(query))
+	if tagOnlyQuery {
+		normalized = normalizeFuzzyTerm(strings.ToLower(tagQuery))
+	}
 	isAuth := IsAuthenticated(r.Context())
 	authEnabled := s.auth != nil
 	if currentURL == nil {
@@ -6990,9 +7061,15 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		return actions, nil
 	}
 
-	entries := make([]QuickLauncherEntry, 0, len(actions)+len(contextActions)+20)
-	entries = append(entries, actions...)
-	entries = append(entries, contextActions...)
+	capHint := 20
+	if !tagOnlyQuery {
+		capHint += len(actions) + len(contextActions)
+	}
+	entries := make([]QuickLauncherEntry, 0, capHint)
+	if !tagOnlyQuery {
+		entries = append(entries, actions...)
+		entries = append(entries, contextActions...)
+	}
 
 	tags, err := s.idx.ListTags(r.Context(), 200, "", false, false, "")
 	if err != nil {
@@ -7023,6 +7100,9 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Href:  tagHref,
 			Tag:   journalTagName,
 		})
+	}
+	if tagOnlyQuery {
+		return entries, nil
 	}
 
 	folders, _, err := s.idx.ListFolders(r.Context(), "")
