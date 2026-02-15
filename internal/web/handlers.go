@@ -2120,12 +2120,94 @@ func applyCalendarLinks(data *ViewData, baseURL string) {
 	}
 }
 
-func (s *Server) folderOptions(ctx context.Context) []string {
-	folders, _, err := s.idx.ListFolders(ctx, "")
+func (s *Server) folderOptions(ctx context.Context, ownerName string) []string {
+	folders, _, err := s.idx.ListFolders(ctx, strings.TrimSpace(ownerName))
 	if err != nil {
 		return nil
 	}
 	return folders
+}
+
+func (s *Server) tagSuggestions(ctx context.Context, ownerName string) []string {
+	tags, err := s.idx.ListTags(ctx, 200, "", false, false, strings.TrimSpace(ownerName))
+	if err != nil {
+		return nil
+	}
+	suggestions := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		name := strings.TrimSpace(tag.Name)
+		if name == "" {
+			continue
+		}
+		suggestions = append(suggestions, name)
+	}
+	return suggestions
+}
+
+func (s *Server) ownerScopedEditSuggestions(ctx context.Context, ownerOptions []OwnerOption) (map[string][]string, map[string][]string) {
+	owners := make([]string, 0, len(ownerOptions))
+	seen := make(map[string]struct{}, len(ownerOptions))
+	for _, option := range ownerOptions {
+		ownerName := strings.TrimSpace(option.Name)
+		if ownerName == "" {
+			continue
+		}
+		if _, ok := seen[ownerName]; ok {
+			continue
+		}
+		seen[ownerName] = struct{}{}
+		owners = append(owners, ownerName)
+	}
+	if len(owners) == 0 {
+		if userName := currentUserName(ctx); userName != "" {
+			owners = append(owners, userName)
+		}
+	}
+	foldersByOwner := make(map[string][]string, len(owners))
+	tagsByOwner := make(map[string][]string, len(owners))
+	for _, ownerName := range owners {
+		foldersByOwner[ownerName] = s.folderOptions(ctx, ownerName)
+		tagsByOwner[ownerName] = s.tagSuggestions(ctx, ownerName)
+	}
+	return foldersByOwner, tagsByOwner
+}
+
+func (s *Server) ensureEditOwnerScopedOptions(ctx context.Context, data *ViewData) {
+	if data == nil || data.ContentTemplate != "edit" {
+		return
+	}
+	selectedOwner := strings.TrimSpace(data.SelectedOwner)
+	currentOwner := currentUserName(ctx)
+	if selectedOwner == "" {
+		selectedOwner = currentOwner
+	}
+	if len(data.OwnerOptions) == 0 && selectedOwner != "" {
+		label := selectedOwner
+		if selectedOwner == currentOwner {
+			label = "Personal"
+		}
+		data.OwnerOptions = []OwnerOption{{Name: selectedOwner, Label: label}}
+	}
+	if selectedOwner == "" && len(data.OwnerOptions) > 0 {
+		selectedOwner = strings.TrimSpace(data.OwnerOptions[0].Name)
+	}
+	data.SelectedOwner = selectedOwner
+
+	if data.FolderOptionsByOwner == nil || data.TagSuggestionsByOwner == nil {
+		foldersByOwner, tagsByOwner := s.ownerScopedEditSuggestions(ctx, data.OwnerOptions)
+		if data.FolderOptionsByOwner == nil {
+			data.FolderOptionsByOwner = foldersByOwner
+		}
+		if data.TagSuggestionsByOwner == nil {
+			data.TagSuggestionsByOwner = tagsByOwner
+		}
+	}
+	if data.FolderOptions == nil && selectedOwner != "" && data.FolderOptionsByOwner != nil {
+		data.FolderOptions = append([]string(nil), data.FolderOptionsByOwner[selectedOwner]...)
+	}
+	if data.TagSuggestions == nil && selectedOwner != "" && data.TagSuggestionsByOwner != nil {
+		data.TagSuggestions = append([]string(nil), data.TagSuggestionsByOwner[selectedOwner]...)
+	}
 }
 
 type folderNode struct {
@@ -10129,7 +10211,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			RawContent:       rawContent,
 			FrontmatterBlock: tempFrontmatter,
 			NoteMeta:         noteMeta,
-			FolderOptions:    s.folderOptions(r.Context()),
+			FolderOptions:    s.folderOptions(r.Context(), selectedOwner),
 			OwnerOptions:     ownerOptions,
 			SelectedOwner:    selectedOwner,
 			SaveAction:       "/notes/new",
@@ -10138,6 +10220,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			AttachmentBase:   attachmentBase,
 			AttachmentGroups: attachmentGroups,
 		}
+		s.ensureEditOwnerScopedOptions(r.Context(), &data)
 		s.attachViewData(r, &data)
 		s.views.RenderPage(w, data)
 		return
@@ -11865,7 +11948,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		RawContent:       index.StripFrontmatter(string(content)),
 		FrontmatterBlock: index.FrontmatterBlock(string(content)),
 		NoteMeta:         metaAttrs,
-		FolderOptions:    s.folderOptions(r.Context()),
+		FolderOptions:    s.folderOptions(r.Context(), selectedOwner),
 		Attachments:      attachments,
 		AttachmentBase:   attachmentBase,
 		AttachmentGroups: attachmentGroups,
@@ -11873,6 +11956,7 @@ func (s *Server) handleEditNote(w http.ResponseWriter, r *http.Request, notePath
 		OwnerOptions:     ownerOptions,
 		SelectedOwner:    selectedOwner,
 	}
+	s.ensureEditOwnerScopedOptions(r.Context(), &data)
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }
@@ -13653,9 +13737,7 @@ func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data Vi
 		if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
 			data.NoteMeta = index.FrontmatterAttributes(data.FrontmatterBlock)
 		}
-		if data.ContentTemplate == "edit" && data.FolderOptions == nil {
-			data.FolderOptions = s.folderOptions(r.Context())
-		}
+		s.ensureEditOwnerScopedOptions(r.Context(), &data)
 		s.attachViewData(r, &data)
 		s.views.RenderTemplate(w, "edit", data)
 		return
@@ -13681,9 +13763,7 @@ func (s *Server) renderEditError(w http.ResponseWriter, r *http.Request, data Vi
 	if !data.NoteMeta.Has && data.FrontmatterBlock != "" {
 		data.NoteMeta = index.FrontmatterAttributes(data.FrontmatterBlock)
 	}
-	if data.ContentTemplate == "edit" && data.FolderOptions == nil {
-		data.FolderOptions = s.folderOptions(r.Context())
-	}
+	s.ensureEditOwnerScopedOptions(r.Context(), &data)
 	s.attachViewData(r, &data)
 	s.views.RenderPage(w, data)
 }

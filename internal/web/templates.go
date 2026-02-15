@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -72,6 +73,13 @@ func MustParseTemplates() *Templates {
 		},
 		"noteHrefWithSuffix": func(notePath string, suffix string, currentUser ...string) string {
 			return noteHrefWithSuffix(notePath, suffix, currentUser...)
+		},
+		"toJSON": func(value any) template.JS {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return template.JS("{}")
+			}
+			return template.JS(encoded)
 		},
 	})
 	t = template.Must(t.ParseGlob(glob))

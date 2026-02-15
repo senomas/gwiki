@@ -173,6 +173,8 @@
     </article>
     {{template "note_edit_actions" .}}
   </div>
+<script id="folder-options-by-owner-data" type="application/json">{{toJSON .FolderOptionsByOwner}}</script>
+<script id="tag-suggestions-by-owner-data" type="application/json">{{toJSON .TagSuggestionsByOwner}}</script>
 <script>
   (function () {
     var returnLink = document.querySelector("[data-return-link]");
@@ -197,8 +199,17 @@
         input.value = ownerSelect.value;
       });
     };
-    ownerSelect.addEventListener("change", updateOwnerInputs);
+    var notifyOwnerChange = function () {
+      document.dispatchEvent(new CustomEvent("gwiki:owner-change", {
+        detail: { owner: ownerSelect.value }
+      }));
+    };
+    ownerSelect.addEventListener("change", function () {
+      updateOwnerInputs();
+      notifyOwnerChange();
+    });
     updateOwnerInputs();
+    notifyOwnerChange();
   })();
 </script>
 <script>
@@ -830,8 +841,71 @@
     if (!input || !suggest) {
       return;
     }
-    var options = Array.from(suggest.querySelectorAll(".combobox-option"));
+    var ownerSelect = document.getElementById("owner-select");
+    var optionsContainer = suggest.querySelector(".max-h-56");
+    if (!optionsContainer) {
+      return;
+    }
+    var options = [];
     var activeIndex = -1;
+    function parseOwnerMap(scriptId) {
+      var node = document.getElementById(scriptId);
+      if (!node) {
+        return {};
+      }
+      try {
+        var parsed = JSON.parse(node.textContent || "{}");
+        if (!parsed || typeof parsed !== "object") {
+          return {};
+        }
+        return parsed;
+      } catch (_err) {
+        return {};
+      }
+    }
+    var foldersByOwner = parseOwnerMap("folder-options-by-owner-data");
+    var fallbackFolders = Array.from(optionsContainer.querySelectorAll(".combobox-option"))
+      .map(function (option) {
+        return (option.getAttribute("data-folder-name") || option.textContent || "").trim();
+      })
+      .filter(function (name) {
+        return name !== "";
+      });
+    function currentOwner() {
+      return ownerSelect ? ownerSelect.value : "";
+    }
+    function ownerFolders(ownerName) {
+      if (ownerName && Array.isArray(foldersByOwner[ownerName])) {
+        return foldersByOwner[ownerName];
+      }
+      if (ownerName === "" && Array.isArray(foldersByOwner[""])) {
+        return foldersByOwner[""];
+      }
+      if (!ownerName && fallbackFolders.length) {
+        return fallbackFolders;
+      }
+      return [];
+    }
+    function buildOption(name) {
+      var option = document.createElement("div");
+      option.className = "combobox-option flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-[#1c2430] hover:text-slate-100";
+      option.setAttribute("role", "option");
+      option.setAttribute("tabindex", "-1");
+      option.setAttribute("data-folder-option", "");
+      option.setAttribute("data-folder-name", name);
+      var span = document.createElement("span");
+      span.textContent = name;
+      option.appendChild(span);
+      return option;
+    }
+    function renderOptions(ownerName) {
+      optionsContainer.innerHTML = "";
+      ownerFolders(ownerName).forEach(function (name) {
+        optionsContainer.appendChild(buildOption(name));
+      });
+      options = Array.from(optionsContainer.querySelectorAll(".combobox-option"));
+      activeIndex = -1;
+    }
     function fuzzyMatch(term, candidate) {
       if (term === "") {
         return true;
@@ -918,6 +992,7 @@
       input.value = name;
       suggest.classList.add("hidden");
     }
+    renderOptions(currentOwner());
     input.addEventListener("focus", function () {
       applyFilter(input.value);
     });
@@ -975,17 +1050,112 @@
         setActive(idx);
       }
     });
+    document.addEventListener("gwiki:owner-change", function (event) {
+      var ownerName = "";
+      if (event && event.detail && typeof event.detail.owner === "string") {
+        ownerName = event.detail.owner;
+      }
+      renderOptions(ownerName);
+      applyFilter(input.value);
+    });
   })();
 </script>
 <script>
   (function () {
     var textarea = document.getElementById("note-content");
     var suggest = document.getElementById("tag-suggest");
-    if (!textarea || !suggest || !window.htmx) {
+    if (!textarea || !suggest) {
       return;
     }
     var lastQuery = "";
     var lastPrefix = "";
+    var lastOwner = "";
+    var ownerSelect = document.getElementById("owner-select");
+    function parseOwnerMap(scriptId) {
+      var node = document.getElementById(scriptId);
+      if (!node) {
+        return {};
+      }
+      try {
+        var parsed = JSON.parse(node.textContent || "{}");
+        if (!parsed || typeof parsed !== "object") {
+          return {};
+        }
+        return parsed;
+      } catch (_err) {
+        return {};
+      }
+    }
+    var tagsByOwner = parseOwnerMap("tag-suggestions-by-owner-data");
+    function currentOwner() {
+      return ownerSelect ? ownerSelect.value : "";
+    }
+    function ownerTags(ownerName) {
+      if (ownerName && Array.isArray(tagsByOwner[ownerName])) {
+        return tagsByOwner[ownerName];
+      }
+      if (ownerName === "" && Array.isArray(tagsByOwner[""])) {
+        return tagsByOwner[""];
+      }
+      return [];
+    }
+    function fuzzyMatch(term, candidate) {
+      if (term === "") {
+        return true;
+      }
+      var normalize = function (value) {
+        return value.replace(/[^a-z0-9]+/g, "");
+      };
+      var subseq = function (needle, haystack) {
+        var ni = 0;
+        var hi = 0;
+        while (ni < needle.length && hi < haystack.length) {
+          if (needle.charAt(ni) === haystack.charAt(hi)) {
+            ni += 1;
+          }
+          hi += 1;
+        }
+        return ni === needle.length;
+      };
+      var termClean = normalize(term);
+      var candidateClean = normalize(candidate);
+      if (subseq(termClean, candidateClean)) {
+        return true;
+      }
+      var initials = candidate
+        .split(/[^a-z0-9]+/g)
+        .filter(Boolean)
+        .map(function (part) {
+          return part.charAt(0);
+        })
+        .join("");
+      return subseq(termClean, initials);
+    }
+    function escapeHTML(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+    function renderLocalTagSuggestions(term, ownerName) {
+      var source = ownerTags(ownerName);
+      if (!source.length) {
+        return "";
+      }
+      var normalizedTerm = term.trim().toLowerCase();
+      var matched = source.filter(function (tag) {
+        return fuzzyMatch(normalizedTerm, String(tag || "").toLowerCase());
+      }).slice(0, 25);
+      if (!matched.length) {
+        return "";
+      }
+      return matched.map(function (tag) {
+        var safeTag = escapeHTML(tag);
+        return '<button class="rounded-full border border-slate-700/70 bg-[#15181c] px-2.5 py-1 text-xs text-slate-200 hover:border-slate-500" type="button" data-tag="' + safeTag + '">#' + safeTag + '</button>';
+      }).join("\n");
+    }
     function findTokenStart(value, caret, prefix) {
       var idx = value.lastIndexOf(prefix, caret - 1);
       while (idx !== -1) {
@@ -1081,6 +1251,7 @@
       if (!current) {
         lastQuery = "";
         lastPrefix = "";
+        lastOwner = "";
         suggest.innerHTML = "";
         suggest.classList.add("hidden");
         suggest.removeAttribute("data-tag-start");
@@ -1088,17 +1259,32 @@
         suggest.removeAttribute("data-tag-prefix");
         return;
       }
-      if (current.term === lastQuery && current.prefix === lastPrefix && current.term !== "") {
+      var ownerName = currentOwner();
+      if (current.term === lastQuery && current.prefix === lastPrefix && ownerName === lastOwner && current.term !== "") {
         return;
       }
       lastQuery = current.term;
       lastPrefix = current.prefix;
+      lastOwner = ownerName;
       suggest.dataset.tagStart = String(current.start);
       suggest.dataset.tagEnd = String(current.end);
       suggest.dataset.tagPrefix = current.prefix;
       positionSuggest();
-      var endpoint = current.prefix === "@" ? "/users/suggest?q=" : "/tags/suggest?q=";
-      htmx.ajax("GET", endpoint + encodeURIComponent(current.term), "#tag-suggest");
+      if (current.prefix === "#") {
+        suggest.innerHTML = renderLocalTagSuggestions(current.term, ownerName);
+        if (suggest.innerHTML.trim() === "") {
+          suggest.classList.add("hidden");
+          return;
+        }
+        suggest.classList.remove("hidden");
+        return;
+      }
+      if (!window.htmx) {
+        suggest.innerHTML = "";
+        suggest.classList.add("hidden");
+        return;
+      }
+      htmx.ajax("GET", "/users/suggest?q=" + encodeURIComponent(current.term), "#tag-suggest");
     }
     textarea.addEventListener("input", updateSuggest);
     textarea.addEventListener("click", updateSuggest);
@@ -1150,6 +1336,9 @@
       lastPrefix = prefix;
       suggest.innerHTML = "";
       suggest.classList.add("hidden");
+    });
+    document.addEventListener("gwiki:owner-change", function () {
+      updateSuggest();
     });
     document.body.addEventListener("htmx:afterSwap", function (event) {
       if (event.target !== suggest) {

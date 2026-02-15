@@ -100,10 +100,12 @@ type ViewData struct {
 	NoteURL                string
 	ReturnURL              string
 	FolderOptions          []string
+	FolderOptionsByOwner   map[string][]string
 	FolderLabel            string
 	OwnerOptions           []OwnerOption
 	SelectedOwner          string
 	TagSuggestions         []string
+	TagSuggestionsByOwner  map[string][]string
 	SuggestPrefix          string
 	DailyDate              string
 	DailyJournal           *NoteCard
