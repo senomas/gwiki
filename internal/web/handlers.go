@@ -5906,6 +5906,9 @@ const (
 )
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	if r.URL.Path != "/" {
 		ownerName, ok := ownerHomeName(r.URL.Path)
 		if !ok {
@@ -6128,6 +6131,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		DateQuery:         buildDateQuery(activeDate),
 		SearchQuery:       activeSearch,
 		SearchQueryParam:  buildSearchQuery(activeSearch),
+		ReturnURL:         sanitizeReturnURL(r, r.URL.RequestURI()),
 		UpdateDays:        updateDays,
 		CalendarMonth:     calendar,
 		JournalSidebar:    journalSidebar,
@@ -7714,6 +7718,9 @@ func (s *Server) handleJournalMonth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
@@ -7788,6 +7795,9 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	section := strings.TrimSpace(r.URL.Query().Get("name"))
 	if section == "" {
 		http.Error(w, "missing section", http.StatusBadRequest)
@@ -8230,6 +8240,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		DateQuery:        buildDateQuery(activeDate),
 		SearchQuery:      activeSearch,
 		SearchQueryParam: buildSearchQuery(activeSearch),
+		ReturnURL:        sanitizeReturnURL(r, r.URL.RequestURI()),
 		UpdateDays:       updateDays,
 		CalendarMonth:    calendar,
 		JournalSidebar:   journalSidebar,
