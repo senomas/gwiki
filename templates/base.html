@@ -645,6 +645,23 @@
       background-size: 220% 100%;
       animation: note-skeleton-shimmer 1.4s ease-in-out infinite;
     }
+    .note-body img.note-image-skeleton {
+      border-radius: 0.75rem;
+      background: linear-gradient(90deg, rgba(30, 41, 59, 0.35), rgba(59, 130, 246, 0.2), rgba(30, 41, 59, 0.35));
+      background-size: 220% 100%;
+      animation: note-skeleton-shimmer 1.4s ease-in-out infinite;
+      min-height: clamp(96px, 18vw, 220px);
+    }
+    .note-body img.note-image-skeleton.is-loading {
+      opacity: 0;
+    }
+    .note-body img.note-image-skeleton.is-loaded {
+      opacity: 1;
+      animation: none;
+      background: transparent;
+      min-height: 0;
+      transition: opacity 0.2s ease;
+    }
     .note-skeleton-line--short {
       width: 45%;
     }
@@ -1762,6 +1779,58 @@
         }
       });
       window.addEventListener("resize", syncSidebarDetails);
+    })();
+  </script>
+  <script>
+    (function () {
+      function markImage(img) {
+        if (!(img instanceof HTMLImageElement)) {
+          return;
+        }
+        if (img.dataset.skeletonBound === "1") {
+          return;
+        }
+        img.dataset.skeletonBound = "1";
+        img.classList.add("note-image-skeleton", "is-loading");
+
+        function onDone() {
+          img.classList.remove("is-loading");
+          img.classList.add("is-loaded");
+        }
+
+        if (img.complete) {
+          onDone();
+          return;
+        }
+        img.addEventListener("load", onDone, {once: true});
+        img.addEventListener("error", onDone, {once: true});
+      }
+
+      function initImageSkeleton(scope) {
+        var root = scope && scope.nodeType === 1 ? scope : document;
+        if (root.matches && root.matches("img") && root.closest(".note-body")) {
+          markImage(root);
+        }
+        if (!root.querySelectorAll) {
+          return;
+        }
+        root.querySelectorAll(".note-body img").forEach(markImage);
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", function () {
+          initImageSkeleton(document);
+        }, {once: true});
+      } else {
+        initImageSkeleton(document);
+      }
+
+      document.body.addEventListener("htmx:afterSwap", function (event) {
+        if (!event || !event.target) {
+          return;
+        }
+        initImageSkeleton(event.target);
+      });
     })();
   </script>
   <script>
