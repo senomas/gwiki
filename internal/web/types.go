@@ -2,6 +2,7 @@ package web
 
 import (
 	"html/template"
+	"time"
 
 	"gwiki/internal/index"
 )
@@ -84,6 +85,8 @@ type ViewData struct {
 	ActiveDate             string
 	DateQuery              string
 	Backlinks              []BacklinkView
+	NoteGitHistory         []NoteGitHistoryEntry
+	NoteGitHistoryError    string
 	SearchQueryParam       string
 	Attachments            []string
 	AttachmentGroups       []AttachmentGroup
@@ -201,6 +204,12 @@ type BacklinkView struct {
 	FromTitle string
 	LineNo    int
 	LineHTML  template.HTML
+}
+
+type NoteGitHistoryEntry struct {
+	CommitUnix int64
+	CommitAt   time.Time
+	ShortHash  string
 }
 
 type BrokenLinkGroup struct {

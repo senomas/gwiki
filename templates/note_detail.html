@@ -46,6 +46,16 @@
             {{end}}
           </div>
         {{end}}
+        {{if .NotePath}}
+          <span class="uppercase tracking-[0.18em] text-slate-600">Git History</span>
+          <div
+            hx-get="{{noteHrefWithSuffix .NotePath "history" .CurrentUser.Name}}"
+            hx-trigger="revealed"
+            hx-swap="innerHTML"
+          >
+            <span class="text-slate-600">Loading...</span>
+          </div>
+        {{end}}
       </div>
     </details>
   {{end}}

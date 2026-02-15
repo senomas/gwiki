@@ -1,0 +1,16 @@
+{{define "note_git_history"}}
+{{if .NoteGitHistoryError}}
+  <span class="text-rose-400">{{.NoteGitHistoryError}}</span>
+{{else if gt (len .NoteGitHistory) 0}}
+  <div class="space-y-1">
+    {{range .NoteGitHistory}}
+      <div>
+        <span>{{.CommitAt.Format "02/01/2006 15:04:05"}}</span>
+        <span class="ml-2 text-slate-600">{{.ShortHash}}</span>
+      </div>
+    {{end}}
+  </div>
+{{else}}
+  <span class="text-slate-600">No history yet.</span>
+{{end}}
+{{end}}

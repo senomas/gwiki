@@ -2522,6 +2522,73 @@ func latestRepoCommitUnix(ctx context.Context, repoPath string) (int64, error) {
 	return parsed, nil
 }
 
+func (s *Server) noteGitHistoryEntries(ctx context.Context, ownerName, noteRelPath, noteID string, limit int) ([]NoteGitHistoryEntry, error) {
+	ownerName = strings.TrimSpace(ownerName)
+	noteRelPath = strings.TrimPrefix(strings.TrimSpace(noteRelPath), "/")
+	noteID = strings.TrimSpace(noteID)
+	if ownerName == "" || noteRelPath == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	repoPath := s.ownerRepoPath(ownerName)
+	if repoPath == "" {
+		return nil, nil
+	}
+	pathspecs := []string{filepath.ToSlash(filepath.Join("notes", noteRelPath))}
+	if noteID != "" {
+		pathspecs = append(pathspecs, filepath.ToSlash(filepath.Join("notes", "attachments", noteID)))
+	}
+	args := []string{"-C", repoPath, "log", fmt.Sprintf("--max-count=%d", limit), "--format=%ct|%h", "--"}
+	args = append(args, pathspecs...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "does not have any commits yet") ||
+			strings.Contains(lower, "unknown revision or path not in the working tree") ||
+			strings.Contains(lower, "not a git repository") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("git history lookup failed: %s", msg)
+	}
+	raw := strings.TrimSpace(string(output))
+	if raw == "" {
+		return nil, nil
+	}
+	lines := strings.Split(raw, "\n")
+	entries := make([]NoteGitHistoryEntry, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		commitUnix, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+		if err != nil || commitUnix <= 0 {
+			continue
+		}
+		shortHash := strings.TrimSpace(parts[1])
+		if shortHash == "" {
+			continue
+		}
+		entries = append(entries, NoteGitHistoryEntry{
+			CommitUnix: commitUnix,
+			CommitAt:   time.Unix(commitUnix, 0).In(time.Local),
+			ShortHash:  shortHash,
+		})
+	}
+	return entries, nil
+}
+
 func (s *Server) loadSpecialTagCounts(r *http.Request, noteTags []string, mentionTags []string, activeTodo bool, activeDue bool, activeDate string, folder string, rootOnly bool, journalOnly bool, ownerName string) (int, int, error) {
 	_ = activeTodo
 	_ = activeDue
@@ -7135,7 +7202,7 @@ func quickLauncherNotePath(path, currentUser string) (string, bool) {
 	if rest == "" {
 		return "", false
 	}
-	blocked := []string{"/edit", "/preview", "/save", "/wikilink", "/detail", "/card", "/collapsed", "/backlinks"}
+	blocked := []string{"/edit", "/preview", "/save", "/wikilink", "/detail", "/card", "/collapsed", "/backlinks", "/history"}
 	for _, suffix := range blocked {
 		if strings.HasSuffix(rest, suffix) {
 			return "", false
@@ -11251,6 +11318,15 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		s.handleNoteBacklinksFragment(w, r, resolved)
 		return
 	}
+	if strings.HasSuffix(pathPart, "/history") {
+		base := strings.TrimSuffix(pathPart, "/history")
+		resolved, ok := resolveFromRoute(base)
+		if !ok {
+			return
+		}
+		s.handleNoteGitHistoryFragment(w, r, resolved)
+		return
+	}
 
 	resolved, ok := resolveFromRoute(pathPart)
 	if !ok {
@@ -11353,6 +11429,21 @@ func (s *Server) handleNoteBacklinksFragment(w http.ResponseWriter, r *http.Requ
 	s.views.RenderTemplate(w, "note_backlinks", data)
 }
 
+func (s *Server) handleNoteGitHistoryFragment(w http.ResponseWriter, r *http.Request, notePath string) {
+	entries, status, err := s.buildNoteGitHistoryData(r, notePath, 20)
+	data := ViewData{}
+	if err != nil {
+		if status >= http.StatusInternalServerError {
+			slog.Error("note git history failed", "path", notePath, "err", err)
+		}
+		data.NoteGitHistoryError = "History unavailable."
+	} else {
+		data.NoteGitHistory = entries
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "note_git_history", data)
+}
+
 func (s *Server) handleNoteCardFragment(w http.ResponseWriter, r *http.Request, notePath string) {
 	data, status, err := s.buildNoteCardData(r, notePath, true)
 	if err != nil {
@@ -11416,6 +11507,43 @@ func (s *Server) buildNoteCard(r *http.Request, notePath string) (NoteCard, erro
 		Meta:         data.NoteMeta,
 		FolderLabel:  data.FolderLabel,
 	}, nil
+}
+
+func (s *Server) buildNoteGitHistoryData(r *http.Request, notePath string, limit int) ([]NoteGitHistoryEntry, int, error) {
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if !IsAuthenticated(r.Context()) {
+				return nil, http.StatusUnauthorized, errors.New("unauthorized")
+			}
+			return nil, http.StatusNotFound, err
+		}
+		return nil, http.StatusInternalServerError, err
+	}
+	if !IsAuthenticated(r.Context()) {
+		publicCtx := index.WithPublicVisibility(r.Context())
+		visible, err := s.idx.NoteExists(publicCtx, notePath)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if !visible {
+			return nil, http.StatusUnauthorized, errors.New("unauthorized")
+		}
+	}
+	ownerName, relPath, err := s.ownerFromNotePath(notePath)
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	noteID := index.FrontmatterAttributes(string(content)).ID
+	entries, err := s.noteGitHistoryEntries(r.Context(), ownerName, relPath, noteID, limit)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return entries, http.StatusOK, nil
 }
 
 func noteVisibilityDisplay(declared, effective string) string {
