@@ -47,6 +47,15 @@ type FilteredSnippet struct {
 	Hidden         []HiddenBlock
 }
 
+type NoteBlock struct {
+	ID        int
+	ParentID  int
+	Level     int
+	StartLine int
+	EndLine   int
+	Markdown  string
+}
+
 type snippetLine struct {
 	LineNo int
 	Text   string
@@ -134,6 +143,286 @@ func ParseContent(input string) Metadata {
 	}
 
 	return meta
+}
+
+func ParseNoteBlocks(input string) []NoteBlock {
+	body := StripFrontmatter(input)
+	lines := strings.Split(body, "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil
+	}
+
+	type blockBuilder struct {
+		NoteBlock
+		startIndent int
+		isList      bool
+	}
+
+	builders := make([]blockBuilder, 0, 24)
+	nextID := 1
+
+	appendBlock := func(parentID, level, startLine, endLine, startIndent int, isList bool) int {
+		builder := blockBuilder{
+			NoteBlock: NoteBlock{
+				ID:        nextID,
+				ParentID:  parentID,
+				Level:     level,
+				StartLine: startLine,
+				EndLine:   endLine,
+			},
+			startIndent: startIndent,
+			isList:      isList,
+		}
+		builders = append(builders, builder)
+		nextID++
+		return len(builders) - 1
+	}
+
+	rootIdx := appendBlock(0, 0, 1, len(lines), 0, false)
+	headerStack := []int{rootIdx}
+	textStack := make([]int, 0, 16)
+
+	closeTextStack := func(endLine int) {
+		if endLine < 1 {
+			endLine = 1
+		}
+		for len(textStack) > 0 {
+			idx := textStack[len(textStack)-1]
+			textStack = textStack[:len(textStack)-1]
+			if endLine < builders[idx].StartLine {
+				builders[idx].EndLine = builders[idx].StartLine
+				continue
+			}
+			builders[idx].EndLine = endLine
+		}
+	}
+	closeTextWhile := func(fn func(idx int) bool, endLine int) {
+		if endLine < 1 {
+			endLine = 1
+		}
+		for len(textStack) > 0 {
+			topIdx := textStack[len(textStack)-1]
+			if !fn(topIdx) {
+				break
+			}
+			textStack = textStack[:len(textStack)-1]
+			if endLine < builders[topIdx].StartLine {
+				builders[topIdx].EndLine = builders[topIdx].StartLine
+				continue
+			}
+			builders[topIdx].EndLine = endLine
+		}
+	}
+	currentContainerIdx := func() int {
+		if len(textStack) > 0 {
+			return textStack[len(textStack)-1]
+		}
+		return headerStack[len(headerStack)-1]
+	}
+	appendTextBlock := func(parentIdx, lineNo, indent int, isList bool) int {
+		parent := builders[parentIdx]
+		return appendBlock(parent.ID, parent.Level+1, lineNo, lineNo, indent, isList)
+	}
+	updateActiveEnd := func(lineNo int) {
+		for _, idx := range textStack {
+			if builders[idx].EndLine < lineNo {
+				builders[idx].EndLine = lineNo
+			}
+		}
+	}
+
+	for i, line := range lines {
+		lineNo := i + 1
+		indent := countIndentColumns(line)
+		trimmed := strings.TrimSpace(line)
+		isNonEmpty := trimmed != ""
+		headingLevel, _, isHeading := parseATXHeading(line)
+		isSeparator := isBlockSeparatorLine(line)
+		isList := isListMarkerLine(line)
+
+		if isHeading {
+			closeTextStack(lineNo - 1)
+			for len(headerStack) > 0 {
+				topIdx := headerStack[len(headerStack)-1]
+				if topIdx == rootIdx {
+					break
+				}
+				if builders[topIdx].Level < headingLevel {
+					break
+				}
+				headerStack = headerStack[:len(headerStack)-1]
+			}
+			parentIdx := headerStack[len(headerStack)-1]
+			parentID := builders[parentIdx].ID
+			idx := appendBlock(parentID, headingLevel, lineNo, lineNo, indent, false)
+			headerStack = append(headerStack, idx)
+			continue
+		}
+
+		if isSeparator {
+			closeTextStack(lineNo - 1)
+			parentIdx := currentContainerIdx()
+			parent := builders[parentIdx]
+			appendBlock(parent.ID, parent.Level+1, lineNo, lineNo, indent, false)
+			continue
+		}
+
+		// For positive-indented blocks: dedent on non-empty lines closes nested text blocks.
+		if isNonEmpty {
+			closeTextWhile(func(idx int) bool {
+				if builders[idx].isList && !isList {
+					return indent <= builders[idx].startIndent
+				}
+				return builders[idx].startIndent > 0 && indent < builders[idx].startIndent
+			}, lineNo-1)
+		}
+
+		if isList {
+			closeTextWhile(func(idx int) bool {
+				return builders[idx].startIndent > indent
+			}, lineNo-1)
+			closeTextWhile(func(idx int) bool {
+				return builders[idx].startIndent == indent
+			}, lineNo-1)
+			parentIdx := currentContainerIdx()
+			idx := appendTextBlock(parentIdx, lineNo, indent, true)
+			textStack = append(textStack, idx)
+			updateActiveEnd(lineNo)
+			continue
+		}
+
+		if len(textStack) == 0 {
+			parentIdx := currentContainerIdx()
+			idx := appendTextBlock(parentIdx, lineNo, indent, false)
+			textStack = append(textStack, idx)
+			updateActiveEnd(lineNo)
+			continue
+		}
+
+		if isNonEmpty {
+			for {
+				topIdx := textStack[len(textStack)-1]
+				top := builders[topIdx]
+				if indent <= top.startIndent {
+					break
+				}
+
+				triggerIndent := top.startIndent + 1
+				if top.isList {
+					// Keep list continuation lines (usually startIndent+2) in parent list block.
+					triggerIndent = top.startIndent + 3
+				}
+				if indent < triggerIndent {
+					break
+				}
+
+				childIdx := appendTextBlock(topIdx, lineNo, indent, false)
+				textStack = append(textStack, childIdx)
+			}
+		}
+
+		updateActiveEnd(lineNo)
+	}
+
+	closeTextStack(len(lines))
+
+	type headerSpan struct {
+		builderIdx int
+		level      int
+		startLine  int
+	}
+	headerSpans := make([]headerSpan, 0, 8)
+	for i, builder := range builders {
+		if builder.Level <= 0 || builder.StartLine <= 0 || builder.StartLine > len(lines) {
+			continue
+		}
+		level, _, ok := parseATXHeading(lines[builder.StartLine-1])
+		if !ok {
+			continue
+		}
+		headerSpans = append(headerSpans, headerSpan{
+			builderIdx: i,
+			level:      level,
+			startLine:  builder.StartLine,
+		})
+	}
+	for i := range headerSpans {
+		endLine := len(lines)
+		for j := i + 1; j < len(headerSpans); j++ {
+			if headerSpans[j].level <= headerSpans[i].level {
+				endLine = headerSpans[j].startLine - 1
+				break
+			}
+		}
+		builderIdx := headerSpans[i].builderIdx
+		if endLine < builders[builderIdx].StartLine {
+			endLine = builders[builderIdx].StartLine
+		}
+		builders[builderIdx].EndLine = endLine
+	}
+
+	blocks := make([]NoteBlock, 0, len(builders))
+	for _, builder := range builders {
+		block := builder.NoteBlock
+		if block.StartLine <= 0 || block.StartLine > len(lines) {
+			continue
+		}
+		if block.EndLine < block.StartLine {
+			block.EndLine = block.StartLine
+		}
+		if block.EndLine > len(lines) {
+			block.EndLine = len(lines)
+		}
+		startLine := block.StartLine
+		endLine := block.EndLine
+		for startLine <= endLine && strings.TrimSpace(lines[startLine-1]) == "" {
+			startLine++
+		}
+		for endLine >= startLine && strings.TrimSpace(lines[endLine-1]) == "" {
+			endLine--
+		}
+		if startLine > endLine {
+			continue
+		}
+		block.StartLine = startLine
+		block.EndLine = endLine
+		block.Markdown = strings.Join(lines[startLine-1:endLine], "\n")
+		if strings.TrimSpace(block.Markdown) == "" {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
+func isBlockSeparatorLine(line string) bool {
+	return strings.TrimSpace(line) == "---"
+}
+
+func isListMarkerLine(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	if len(trimmed) >= 2 {
+		switch trimmed[0] {
+		case '-', '*', '+':
+			if trimmed[1] == ' ' || trimmed[1] == '\t' {
+				return true
+			}
+		}
+	}
+	i := 0
+	for i < len(trimmed) && trimmed[i] >= '0' && trimmed[i] <= '9' {
+		i++
+	}
+	if i == 0 || i+1 >= len(trimmed) {
+		return false
+	}
+	if trimmed[i] != '.' && trimmed[i] != ')' {
+		return false
+	}
+	if trimmed[i+1] != ' ' && trimmed[i+1] != '\t' {
+		return false
+	}
+	return true
 }
 
 func nonCodeLines(body string) []string {
@@ -546,6 +835,21 @@ func countIndentSpaces(line string) int {
 		count++
 	}
 	return count
+}
+
+func countIndentColumns(line string) int {
+	columns := 0
+	for _, r := range line {
+		switch r {
+		case ' ':
+			columns++
+		case '\t':
+			columns += 4
+		default:
+			return columns
+		}
+	}
+	return columns
 }
 
 func TaskLineHash(line string) string {

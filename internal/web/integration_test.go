@@ -184,6 +184,197 @@ This has wellness in body but no tag.
 	}
 }
 
+func TestDevNotesPageShowsParsedBlocks(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	noteRel := "debug-blocks.md"
+	content := strings.Join([]string{
+		"# Root",
+		"line one",
+		"  nested detail",
+		"---",
+		"  indented block",
+		" dedent split",
+	}, "\n")
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/dev/notes/@" + notePath)
+	if err != nil {
+		t.Fatalf("get dev blocks: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get dev blocks status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+	if !strings.Contains(html, "Debug Note Blocks") {
+		t.Fatalf("expected debug page title, got %s", html)
+	}
+	if !strings.Contains(html, "block #1") {
+		t.Fatalf("expected block metadata, got %s", html)
+	}
+	if !strings.Contains(html, "parent=") {
+		t.Fatalf("expected parent metadata, got %s", html)
+	}
+	if !strings.Contains(html, "line one") {
+		t.Fatalf("expected raw markdown content, got %s", html)
+	}
+}
+
+func TestDevTagPageShowsMatchAndAncestorPrefix(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	noteRel := "debug-tag.md"
+	content := strings.Join([]string{
+		"# demo",
+		"",
+		"- data",
+		"  xx",
+		"  - other",
+		"    should-hide",
+		"  - sub-data",
+		"    this is yyy #tag1",
+		"",
+		"  #tag2",
+	}, "\n")
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/dev/tag/tag1")
+	if err != nil {
+		t.Fatalf("get dev tag: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get dev tag status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+
+	if !strings.Contains(html, "Debug Tag Blocks") {
+		t.Fatalf("expected debug tag page title, got %s", html)
+	}
+	if !strings.Contains(html, "selected lines:") {
+		t.Fatalf("expected selected line metadata, got %s", html)
+	}
+	if !strings.Contains(html, "note-body") {
+		t.Fatalf("expected rendered markdown container, got %s", html)
+	}
+	if !strings.Contains(html, "<li>data") || !strings.Contains(html, "xx") {
+		t.Fatalf("expected ancestor prefix rendered lines, got %s", html)
+	}
+	if !strings.Contains(html, "this is yyy #tag1") {
+		t.Fatalf("expected matching block lines, got %s", html)
+	}
+	if !strings.Contains(html, "sub-data") {
+		t.Fatalf("expected matching block parent line, got %s", html)
+	}
+	if !strings.Contains(html, "<h1") || !strings.Contains(html, "demo</h1>") {
+		t.Fatalf("expected ancestor heading context, got %s", html)
+	}
+	if strings.Contains(html, ">other<") || strings.Contains(html, "should-hide") {
+		t.Fatalf("expected non-matching sibling block excluded, got %s", html)
+	}
+	if strings.Contains(html, "#tag2") {
+		t.Fatalf("expected suffix lines after matched block excluded, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/dev/tag/%23tag1")
+	if err != nil {
+		t.Fatalf("get dev tag encoded hash: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get dev tag encoded hash status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	resp.Body.Close()
+}
+
 func TestQuickLauncherHashQueryReturnsTagsOnly(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

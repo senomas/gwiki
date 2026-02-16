@@ -16,6 +16,10 @@ type ViewData struct {
 	IsAdmin                bool
 	CurrentUser            User
 	NotePath               string
+	DevNotePath            string
+	DevNoteBlocks          []index.NoteBlock
+	DevTagQuery            string
+	DevTagNotes            []DevTagNote
 	NoteTitle              string
 	NoteFileName           string
 	RawContent             string
@@ -206,6 +210,28 @@ type BacklinkView struct {
 	FromTitle string
 	LineNo    int
 	LineHTML  template.HTML
+}
+
+type DevTagNote struct {
+	NotePath              string
+	NoteTitle             string
+	NoteURL               string
+	NoteMeta              index.FrontmatterAttrs
+	NoteVisibilityDisplay string
+	FolderLabel           string
+	SelectedLines         []int
+	SelectedMarkdown      string
+	SelectedHTML          template.HTML
+}
+
+type DevTagBlock struct {
+	BlockID   int
+	ParentID  int
+	Level     int
+	StartLine int
+	EndLine   int
+	Kind      string
+	Markdown  string
 }
 
 type NoteGitHistoryEntry struct {

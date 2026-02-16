@@ -71,6 +71,21 @@ type SearchResult struct {
 	Snippet string
 }
 
+type NoteBlockTagMatch struct {
+	FileID  int
+	Path    string
+	Title   string
+	BlockID int
+}
+
+type NoteBlockSpan struct {
+	BlockID       int
+	ParentBlockID int
+	Level         int
+	StartLine     int
+	EndLine       int
+}
+
 type TagSummary struct {
 	Name  string
 	Count int
@@ -408,6 +423,8 @@ func (i *Index) RemoveNoteByPath(ctx context.Context, path string) error {
 	stmts := []string{
 		"DELETE FROM file_histories WHERE file_id=?",
 		"DELETE FROM file_tags WHERE file_id=?",
+		"DELETE FROM note_block_tags WHERE file_id=?",
+		"DELETE FROM note_blocks WHERE file_id=?",
 		"DELETE FROM links WHERE from_file_id=? OR to_file_id=?",
 		"DELETE FROM task_tags WHERE task_id IN (SELECT id FROM tasks WHERE file_id=?)",
 		"DELETE FROM tasks WHERE file_id=?",
@@ -698,6 +715,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 36
+		case 36:
+			slog.Info("schema migration", "from", 36, "to", 37)
+			if err := i.migrate36To37(ctx); err != nil {
+				return err
+			}
+			version = 37
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1215,6 +1238,37 @@ func (i *Index) migrate35To36(ctx context.Context) error {
 	return err
 }
 
+func (i *Index) migrate36To37(ctx context.Context) error {
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS note_blocks (
+			file_id INTEGER NOT NULL,
+			block_id INTEGER NOT NULL,
+			parent_block_id INTEGER NOT NULL,
+			level INTEGER NOT NULL,
+			start_line INTEGER NOT NULL,
+			end_line INTEGER NOT NULL,
+			PRIMARY KEY(file_id, block_id)
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS note_blocks_by_parent ON note_blocks(file_id, parent_block_id)"); err != nil {
+		return err
+	}
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS note_block_tags (
+			file_id INTEGER NOT NULL,
+			block_id INTEGER NOT NULL,
+			tag TEXT NOT NULL,
+			PRIMARY KEY(file_id, block_id, tag)
+		)
+	`); err != nil {
+		return err
+	}
+	_, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS note_block_tags_by_file_tag ON note_block_tags(file_id, tag)")
+	return err
+}
+
 type ownerRoot struct {
 	name      string
 	notesRoot string
@@ -1265,6 +1319,8 @@ func (i *Index) RebuildFromFSWithStats(ctx context.Context, repoPath string) (in
 		"DELETE FROM embed_cache",
 		"DELETE FROM file_histories",
 		"DELETE FROM file_tags",
+		"DELETE FROM note_block_tags",
+		"DELETE FROM note_blocks",
 		"DELETE FROM tags",
 		"DELETE FROM links",
 		"DELETE FROM tasks",
@@ -1412,6 +1468,9 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	}
 	meta := ParseContent(string(content))
 	attrs := FrontmatterAttributes(string(content))
+	body := StripFrontmatter(string(content))
+	blocks := ParseNoteBlocks(string(content))
+	blockTags := directBlockTagsByID(body, blocks)
 	uid := strings.TrimSpace(attrs.ID)
 	if strings.HasPrefix(uid, "TEMP-") {
 		return nil
@@ -1489,6 +1548,12 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_tags WHERE file_id=?", existingID); err != nil {
 		return err
 	}
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM note_block_tags WHERE file_id=?", existingID); err != nil {
+		return err
+	}
+	if _, err := i.execContextTx(ctx, tx, "DELETE FROM note_blocks WHERE file_id=?", existingID); err != nil {
+		return err
+	}
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM task_tags WHERE task_id IN (SELECT id FROM tasks WHERE file_id=?)", existingID); err != nil {
 		return err
 	}
@@ -1542,6 +1607,25 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		}
 		if _, err := i.execContextTx(ctx, tx, "INSERT OR IGNORE INTO file_tags(user_id, file_id, tag_id, is_exclusive) VALUES(?, ?, ?, ?)", userID, existingID, tagID, boolToInt(isExclusive)); err != nil {
 			return err
+		}
+	}
+
+	for _, block := range blocks {
+		if _, err := i.execContextTx(ctx, tx, `
+			INSERT INTO note_blocks(file_id, block_id, parent_block_id, level, start_line, end_line)
+			VALUES(?, ?, ?, ?, ?, ?)
+		`, existingID, block.ID, block.ParentID, block.Level, block.StartLine, block.EndLine); err != nil {
+			return err
+		}
+	}
+	for blockID, tags := range blockTags {
+		for _, tag := range tags {
+			if _, err := i.execContextTx(ctx, tx, `
+				INSERT OR IGNORE INTO note_block_tags(file_id, block_id, tag)
+				VALUES(?, ?, ?)
+			`, existingID, blockID, tag); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1636,7 +1720,6 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	if _, err := i.execContextTx(ctx, tx, "DELETE FROM fts WHERE "+ownerClause+" AND path=?", ownerArgs...); err != nil {
 		return err
 	}
-	body := StripFrontmatter(string(content))
 	headings := parseHeadingBuckets(body)
 	if _, err := i.execContextTx(ctx, tx, `
 		INSERT INTO fts(user_id, path, title, h1, h2, h3, h4, h5, h6, body)
@@ -1646,6 +1729,110 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	}
 
 	return i.commitTx(tx, "index-note", txStart)
+}
+
+func directBlockTagsByID(body string, blocks []NoteBlock) map[int][]string {
+	if len(blocks) == 0 {
+		return nil
+	}
+	lines := strings.Split(body, "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+
+	rootID := 0
+	children := make(map[int][]NoteBlock)
+	for _, block := range blocks {
+		children[block.ParentID] = append(children[block.ParentID], block)
+		if rootID == 0 && block.ParentID == 0 && block.Level == 0 {
+			rootID = block.ID
+		}
+	}
+	if rootID == 0 {
+		for _, block := range blocks {
+			if block.ParentID == 0 {
+				rootID = block.ID
+				break
+			}
+		}
+	}
+
+	tagsByBlock := make(map[int][]string)
+	for _, block := range blocks {
+		if block.ID == rootID {
+			continue
+		}
+		tags := extractDirectBlockTags(lines, block, children[block.ID])
+		if len(tags) == 0 {
+			continue
+		}
+		tagsByBlock[block.ID] = tags
+	}
+	return tagsByBlock
+}
+
+func extractDirectBlockTags(lines []string, block NoteBlock, childBlocks []NoteBlock) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	startLine := block.StartLine
+	endLine := block.EndLine
+	if startLine < 1 {
+		startLine = 1
+	}
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+	if endLine < startLine {
+		return nil
+	}
+
+	include := make([]bool, endLine-startLine+1)
+	for i := range include {
+		include[i] = true
+	}
+	for _, child := range childBlocks {
+		childStart := child.StartLine
+		childEnd := child.EndLine
+		if childStart < startLine {
+			childStart = startLine
+		}
+		if childEnd > endLine {
+			childEnd = endLine
+		}
+		if childEnd < childStart {
+			continue
+		}
+		for lineNo := childStart; lineNo <= childEnd; lineNo++ {
+			include[lineNo-startLine] = false
+		}
+	}
+
+	unique := map[string]struct{}{}
+	for lineNo := startLine; lineNo <= endLine; lineNo++ {
+		if !include[lineNo-startLine] {
+			continue
+		}
+		line := lines[lineNo-1]
+		for _, match := range tagRe.FindAllStringSubmatch(line, -1) {
+			for _, expanded := range expandTagPrefixes(match[1]) {
+				name, _ := normalizeTagName(expanded)
+				if name == "" {
+					continue
+				}
+				unique[name] = struct{}{}
+			}
+		}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(unique))
+	for tag := range unique {
+		out = append(out, tag)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
@@ -1688,6 +1875,69 @@ func (i *Index) IndexNoteIfChanged(ctx context.Context, notePath string, content
 		return err
 	}
 	return i.IndexNote(ctx, notePath, content, mtime, size)
+}
+
+func (i *Index) FindNoteBlocksByTag(ctx context.Context, tag string) ([]NoteBlockTagMatch, error) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return nil, nil
+	}
+
+	clauses := []string{"note_block_tags.tag = ?"}
+	args := []interface{}{tag}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+
+	query := fmt.Sprintf(`
+		SELECT files.id, files.path, files.title, note_block_tags.block_id, %s
+		FROM note_block_tags
+		JOIN files ON files.id = note_block_tags.file_id
+		%s
+		WHERE %s
+		ORDER BY files.updated_at DESC, files.priority ASC, note_block_tags.block_id ASC
+	`, ownerNameExpr(), ownerJoins("files"), strings.Join(clauses, " AND "))
+
+	rows, err := i.queryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]NoteBlockTagMatch, 0, 32)
+	for rows.Next() {
+		var match NoteBlockTagMatch
+		var relPath string
+		var ownerName string
+		if err := rows.Scan(&match.FileID, &relPath, &match.Title, &match.BlockID, &ownerName); err != nil {
+			return nil, err
+		}
+		match.Path = joinOwnerPath(ownerName, relPath)
+		out = append(out, match)
+	}
+	return out, rows.Err()
+}
+
+func (i *Index) NoteBlocksByFileID(ctx context.Context, fileID int) ([]NoteBlockSpan, error) {
+	rows, err := i.queryContext(ctx, `
+		SELECT block_id, parent_block_id, level, start_line, end_line
+		FROM note_blocks
+		WHERE file_id = ?
+		ORDER BY start_line ASC, end_line ASC, block_id ASC
+	`, fileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]NoteBlockSpan, 0, 32)
+	for rows.Next() {
+		var span NoteBlockSpan
+		if err := rows.Scan(&span.BlockID, &span.ParentBlockID, &span.Level, &span.StartLine, &span.EndLine); err != nil {
+			return nil, err
+		}
+		out = append(out, span)
+	}
+	return out, rows.Err()
 }
 
 func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, error) {
@@ -5018,6 +5268,12 @@ func (i *Index) removeMissingRecords(ctx context.Context, records map[string]fil
 
 	for _, row := range missingRows {
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM file_tags WHERE file_id=?", row.id); err != nil {
+			return 0, err
+		}
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM note_block_tags WHERE file_id=?", row.id); err != nil {
+			return 0, err
+		}
+		if _, err := i.execContextTx(ctx, tx, "DELETE FROM note_blocks WHERE file_id=?", row.id); err != nil {
 			return 0, err
 		}
 		if _, err := i.execContextTx(ctx, tx, "DELETE FROM links WHERE from_file_id=?", row.id); err != nil {

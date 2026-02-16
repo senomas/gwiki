@@ -11426,6 +11426,371 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 	s.handleViewNote(w, r, resolved)
 }
 
+func (s *Server) handleDevNotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+
+	routeRef := strings.TrimPrefix(r.URL.Path, "/dev/notes/")
+	routeRef = strings.TrimPrefix(strings.TrimSpace(routeRef), "/")
+	if routeRef == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if unescaped, err := url.PathUnescape(routeRef); err == nil {
+		routeRef = unescaped
+	}
+
+	parsed, ok := parseNoteRefForUser(routeRef, currentUserName(r.Context()))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	resolved, err := s.resolveNotePath(r.Context(), parsed)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+
+	exists, err := s.idx.NoteExists(r.Context(), resolved)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	if !exists {
+		http.NotFound(w, r)
+		return
+	}
+
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, resolved)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		s.internalServerError(w, r, err)
+		return
+	}
+
+	data := ViewData{
+		Title:           "Debug Blocks",
+		ContentTemplate: "dev_note_blocks",
+		DevNotePath:     resolved,
+		DevNoteBlocks:   index.ParseNoteBlocks(normalizeLineEndings(string(content))),
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleDevTag(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+
+	routeTag := strings.TrimPrefix(r.URL.Path, "/dev/tag/")
+	routeTag = strings.TrimPrefix(strings.TrimSpace(routeTag), "/")
+	if routeTag == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if unescaped, err := url.PathUnescape(routeTag); err == nil {
+		routeTag = unescaped
+	}
+
+	tag := normalizeDevTagQuery(routeTag)
+	if tag == "" {
+		http.Error(w, "invalid tag", http.StatusBadRequest)
+		return
+	}
+
+	matches, err := s.idx.FindNoteBlocksByTag(r.Context(), tag)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	notes, err := s.buildDevTagNotes(r.Context(), matches)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+
+	data := ViewData{
+		Title:           "Debug Tag Blocks",
+		ContentTemplate: "dev_tag_blocks",
+		DevTagQuery:     tag,
+		DevTagNotes:     notes,
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func normalizeDevTagQuery(raw string) string {
+	tag := strings.TrimSpace(raw)
+	tag = strings.TrimPrefix(tag, "#")
+	tag = strings.TrimSpace(tag)
+	tag = strings.TrimSuffix(tag, "!")
+	tag = strings.TrimSpace(tag)
+	return tag
+}
+
+func (s *Server) buildDevTagNotes(ctx context.Context, matches []index.NoteBlockTagMatch) ([]DevTagNote, error) {
+	type noteMatch struct {
+		FileID    int
+		NotePath  string
+		NoteTitle string
+		BlockIDs  []int
+		seen      map[int]struct{}
+	}
+
+	if len(matches) == 0 {
+		return nil, nil
+	}
+
+	order := make([]int, 0, len(matches))
+	notesByFileID := make(map[int]*noteMatch, len(matches))
+	for _, match := range matches {
+		item, ok := notesByFileID[match.FileID]
+		if !ok {
+			item = &noteMatch{
+				FileID:    match.FileID,
+				NotePath:  match.Path,
+				NoteTitle: strings.TrimSpace(match.Title),
+				BlockIDs:  make([]int, 0, 4),
+				seen:      make(map[int]struct{}),
+			}
+			notesByFileID[match.FileID] = item
+			order = append(order, match.FileID)
+		}
+		if _, ok := item.seen[match.BlockID]; ok {
+			continue
+		}
+		item.seen[match.BlockID] = struct{}{}
+		item.BlockIDs = append(item.BlockIDs, match.BlockID)
+	}
+
+	out := make([]DevTagNote, 0, len(order))
+	for _, fileID := range order {
+		item := notesByFileID[fileID]
+		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, item.NotePath)
+		if err != nil {
+			return nil, err
+		}
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		normalized := normalizeLineEndings(string(content))
+		body := index.StripFrontmatter(normalized)
+		lines := strings.Split(body, "\n")
+		noteMeta := index.FrontmatterAttributes(normalized)
+		meta := index.ParseContent(normalized)
+
+		spans, err := s.idx.NoteBlocksByFileID(ctx, fileID)
+		if err != nil {
+			return nil, err
+		}
+		selectedLines := buildDevTagSelectedLines(len(lines), spans, item.BlockIDs)
+		if len(selectedLines) == 0 {
+			continue
+		}
+		selectedMarkdownLines := make([]string, 0, len(selectedLines))
+		for _, lineNo := range selectedLines {
+			if lineNo < 1 || lineNo > len(lines) {
+				continue
+			}
+			selectedMarkdownLines = append(selectedMarkdownLines, lines[lineNo-1])
+		}
+		title := strings.TrimSpace(meta.Title)
+		if title == "" {
+			title = item.NoteTitle
+		}
+		if title == "" {
+			title = path.Base(item.NotePath)
+		}
+		effectiveVisibility := ""
+		if visibility, visErr := s.idx.NoteVisibilityByPath(ctx, item.NotePath); visErr == nil {
+			effectiveVisibility = visibility
+		} else if !errors.Is(visErr, sql.ErrNoRows) {
+			slog.Warn("dev tag note visibility lookup failed", "path", item.NotePath, "err", visErr)
+		}
+		folderLabel := s.noteFolderLabel(ctx, item.NotePath, noteMeta.Folder)
+		noteURL := noteHref(item.NotePath, currentUserName(ctx))
+		selectedMarkdown := strings.Join(selectedMarkdownLines, "\n")
+		renderCtx := ctx
+		if ownerName, _, err := s.ownerFromNotePath(item.NotePath); err == nil {
+			renderCtx = withWikiLinkOwner(renderCtx, ownerName)
+		}
+		selectedHTML, err := s.renderMarkdown(renderCtx, []byte(selectedMarkdown))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, DevTagNote{
+			NotePath:              item.NotePath,
+			NoteTitle:             title,
+			NoteURL:               noteURL,
+			NoteMeta:              noteMeta,
+			NoteVisibilityDisplay: noteVisibilityDisplay(noteMeta.Visibility, effectiveVisibility),
+			FolderLabel:           folderLabel,
+			SelectedLines:         selectedLines,
+			SelectedMarkdown:      selectedMarkdown,
+			SelectedHTML:          template.HTML(selectedHTML),
+		})
+	}
+	return out, nil
+}
+
+func buildDevTagSelectedLines(totalLines int, spans []index.NoteBlockSpan, taggedBlockIDs []int) []int {
+	if totalLines <= 0 || len(spans) == 0 || len(taggedBlockIDs) == 0 {
+		return nil
+	}
+
+	byID := make(map[int]index.NoteBlockSpan, len(spans))
+	for _, span := range spans {
+		if span.BlockID <= 0 {
+			continue
+		}
+		if span.StartLine < 1 {
+			span.StartLine = 1
+		}
+		if span.EndLine > totalLines {
+			span.EndLine = totalLines
+		}
+		if span.EndLine < span.StartLine {
+			continue
+		}
+		byID[span.BlockID] = span
+	}
+
+	childrenByParent := make(map[int][]index.NoteBlockSpan, len(byID))
+	for _, span := range spans {
+		block, ok := byID[span.BlockID]
+		if !ok {
+			continue
+		}
+		childrenByParent[block.ParentBlockID] = append(childrenByParent[block.ParentBlockID], block)
+	}
+
+	selected := make(map[int]struct{}, 128)
+	addRange := func(startLine, endLine int) {
+		if startLine < 1 {
+			startLine = 1
+		}
+		if endLine > totalLines {
+			endLine = totalLines
+		}
+		if endLine < startLine {
+			return
+		}
+		for lineNo := startLine; lineNo <= endLine; lineNo++ {
+			selected[lineNo] = struct{}{}
+		}
+	}
+
+	excludeChildLinesCache := make(map[int][]int, len(byID))
+	getExcludeChildLines := func(blockID int) []int {
+		if lines, ok := excludeChildLinesCache[blockID]; ok {
+			return lines
+		}
+		block, ok := byID[blockID]
+		if !ok {
+			return nil
+		}
+		include := make([]bool, block.EndLine-block.StartLine+1)
+		for i := range include {
+			include[i] = true
+		}
+		for _, child := range childrenByParent[blockID] {
+			childStart := child.StartLine
+			childEnd := child.EndLine
+			if childStart < block.StartLine {
+				childStart = block.StartLine
+			}
+			if childEnd > block.EndLine {
+				childEnd = block.EndLine
+			}
+			if childEnd < childStart {
+				continue
+			}
+			for lineNo := childStart; lineNo <= childEnd; lineNo++ {
+				include[lineNo-block.StartLine] = false
+			}
+		}
+		out := make([]int, 0, len(include))
+		for i, ok := range include {
+			if !ok {
+				continue
+			}
+			out = append(out, block.StartLine+i)
+		}
+		excludeChildLinesCache[blockID] = out
+		return out
+	}
+
+	seenTagged := make(map[int]struct{}, len(taggedBlockIDs))
+	for _, blockID := range taggedBlockIDs {
+		if _, ok := seenTagged[blockID]; ok {
+			continue
+		}
+		seenTagged[blockID] = struct{}{}
+		current, ok := byID[blockID]
+		if !ok {
+			continue
+		}
+
+		addRange(current.StartLine, current.EndLine)
+
+		visitedAncestors := make(map[int]struct{}, 8)
+		parentID := current.ParentBlockID
+		for parentID != 0 {
+			if _, seen := visitedAncestors[parentID]; seen {
+				break
+			}
+			visitedAncestors[parentID] = struct{}{}
+			ancestor, ok := byID[parentID]
+			if !ok {
+				break
+			}
+			for _, lineNo := range getExcludeChildLines(ancestor.BlockID) {
+				if lineNo < current.StartLine {
+					selected[lineNo] = struct{}{}
+				}
+			}
+			parentID = ancestor.ParentBlockID
+		}
+	}
+
+	if len(selected) == 0 {
+		return nil
+	}
+
+	out := make([]int, 0, len(selected))
+	for lineNo := range selected {
+		if lineNo < 1 || lineNo > totalLines {
+			continue
+		}
+		out = append(out, lineNo)
+	}
+	sort.Ints(out)
+	return out
+}
+
 func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath string) {
 	data, status, err := s.buildNoteViewData(r, notePath)
 	if err != nil {

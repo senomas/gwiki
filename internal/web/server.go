@@ -257,6 +257,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/notes/page", s.handleHomeNotesPage)
 	s.mux.HandleFunc("/notes/section", s.handleHomeNotesSection)
 	s.mux.HandleFunc("/notes/", s.handleNotes)
+	s.mux.HandleFunc("/dev/notes/", s.handleDevNotes)
+	s.mux.HandleFunc("/dev/tag/", s.handleDevTag)
 	s.mux.HandleFunc("/daily/", s.handleDaily)
 	s.mux.HandleFunc("/journal/year/", s.handleJournalYear)
 	s.mux.HandleFunc("/journal/month/", s.handleJournalMonth)

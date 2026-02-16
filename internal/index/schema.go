@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 36
+const schemaVersion = 37
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -91,6 +91,27 @@ CREATE TABLE IF NOT EXISTS file_tags (
 	is_exclusive INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY(file_id, tag_id)
 );
+
+CREATE TABLE IF NOT EXISTS note_blocks (
+	file_id INTEGER NOT NULL,
+	block_id INTEGER NOT NULL,
+	parent_block_id INTEGER NOT NULL,
+	level INTEGER NOT NULL,
+	start_line INTEGER NOT NULL,
+	end_line INTEGER NOT NULL,
+	PRIMARY KEY(file_id, block_id)
+);
+
+CREATE INDEX IF NOT EXISTS note_blocks_by_parent ON note_blocks(file_id, parent_block_id);
+
+CREATE TABLE IF NOT EXISTS note_block_tags (
+	file_id INTEGER NOT NULL,
+	block_id INTEGER NOT NULL,
+	tag TEXT NOT NULL,
+	PRIMARY KEY(file_id, block_id, tag)
+);
+
+CREATE INDEX IF NOT EXISTS note_block_tags_by_file_tag ON note_block_tags(file_id, tag);
 
 CREATE TABLE IF NOT EXISTS links (
 	id INTEGER PRIMARY KEY,

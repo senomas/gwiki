@@ -326,3 +326,165 @@ func TestFilterCompletedTasksSnippetCompatibility(t *testing.T) {
 		t.Fatalf("expected tasks compatibility len %d, got %d", len(structured.OpenTasks), len(tasks))
 	}
 }
+
+func TestParseNoteBlocksAddsSyntheticRoot(t *testing.T) {
+	input := strings.Join([]string{
+		"alpha",
+		"beta",
+	}, "\n")
+
+	blocks := ParseNoteBlocks(input)
+	if len(blocks) < 2 {
+		t.Fatalf("expected at least root + child blocks, got %d (%+v)", len(blocks), blocks)
+	}
+
+	root := blocks[0]
+	if root.ParentID != 0 || root.Level != 0 {
+		t.Fatalf("unexpected synthetic root hierarchy: %+v", root)
+	}
+	if root.StartLine != 1 || root.EndLine != 2 {
+		t.Fatalf("unexpected synthetic root line span: %+v", root)
+	}
+	if root.Markdown != input {
+		t.Fatalf("unexpected synthetic root markdown: %q", root.Markdown)
+	}
+}
+
+func TestParseNoteBlocksListHierarchyMatchesRequestedShape(t *testing.T) {
+	input := strings.Join([]string{
+		"- xxx",
+		"  uuu",
+		"",
+		"    aaa",
+		"    bbb",
+		"",
+		"- zzz",
+		"  www",
+	}, "\n")
+
+	blocks := ParseNoteBlocks(input)
+	if len(blocks) != 4 {
+		t.Fatalf("expected 4 blocks (root + item1 + nested + item2), got %d (%+v)", len(blocks), blocks)
+	}
+
+	root := blocks[0]
+	firstItem := blocks[1]
+	nested := blocks[2]
+	secondItem := blocks[3]
+
+	if root.ParentID != 0 || root.Level != 0 || root.StartLine != 1 || root.EndLine != 8 {
+		t.Fatalf("unexpected root block: %+v", root)
+	}
+	if firstItem.ParentID != root.ID || firstItem.Level != 1 {
+		t.Fatalf("unexpected first item hierarchy: %+v", firstItem)
+	}
+	if secondItem.ParentID != root.ID || secondItem.Level != 1 {
+		t.Fatalf("unexpected second item hierarchy: %+v", secondItem)
+	}
+	if firstItem.StartLine != 1 || firstItem.EndLine != 5 {
+		t.Fatalf("unexpected first item span: %+v", firstItem)
+	}
+	if secondItem.StartLine != 7 || secondItem.EndLine != 8 {
+		t.Fatalf("unexpected second item span: %+v", secondItem)
+	}
+
+	if nested.ParentID != firstItem.ID || nested.Level != 2 {
+		t.Fatalf("unexpected nested block hierarchy: %+v", nested)
+	}
+	if nested.StartLine != 4 || nested.EndLine != 5 {
+		t.Fatalf("unexpected nested block span: %+v", nested)
+	}
+	if !strings.Contains(nested.Markdown, "aaa") || !strings.Contains(nested.Markdown, "bbb") {
+		t.Fatalf("unexpected nested markdown: %q", nested.Markdown)
+	}
+}
+
+func TestParseNoteBlocksHeaderAndSeparatorHierarchy(t *testing.T) {
+	input := strings.Join([]string{
+		"# Root",
+		"root text",
+		"---",
+		"## Child",
+		"child text",
+	}, "\n")
+
+	blocks := ParseNoteBlocks(input)
+	if len(blocks) != 6 {
+		t.Fatalf("expected 6 blocks, got %d (%+v)", len(blocks), blocks)
+	}
+
+	root := blocks[0]
+	h1 := blocks[1]
+	rootText := blocks[2]
+	separator := blocks[3]
+	h2 := blocks[4]
+	h2Text := blocks[5]
+
+	if h1.ParentID != root.ID || h1.Level != 1 {
+		t.Fatalf("unexpected h1 hierarchy: %+v", h1)
+	}
+	if h1.StartLine != 1 || h1.EndLine != 5 {
+		t.Fatalf("unexpected h1 span: %+v", h1)
+	}
+	if rootText.ParentID != h1.ID || rootText.Level != 2 {
+		t.Fatalf("unexpected root text hierarchy: %+v", rootText)
+	}
+	if separator.ParentID != h1.ID || separator.Level != 2 || strings.TrimSpace(separator.Markdown) != "---" {
+		t.Fatalf("unexpected separator block: %+v", separator)
+	}
+	if h2.ParentID != h1.ID || h2.Level != 2 {
+		t.Fatalf("unexpected h2 hierarchy: %+v", h2)
+	}
+	if h2.StartLine != 4 || h2.EndLine != 5 {
+		t.Fatalf("unexpected h2 span: %+v", h2)
+	}
+	if h2Text.ParentID != h2.ID || h2Text.Level != 3 {
+		t.Fatalf("unexpected h2 text hierarchy: %+v", h2Text)
+	}
+}
+
+func TestParseNoteBlocksSkipsEmptyOnlyBlocks(t *testing.T) {
+	input := strings.Join([]string{
+		"# Root",
+		"",
+		"## Child",
+		"",
+		"child body",
+		"",
+	}, "\n")
+
+	blocks := ParseNoteBlocks(input)
+	if len(blocks) == 0 {
+		t.Fatalf("expected non-empty blocks")
+	}
+	for _, block := range blocks {
+		if strings.TrimSpace(block.Markdown) == "" {
+			t.Fatalf("unexpected empty-only block: %+v", block)
+		}
+	}
+}
+
+func TestParseNoteBlocksTrimsPrefixSuffixEmptyLines(t *testing.T) {
+	input := strings.Join([]string{
+		"",
+		"",
+		"# Root",
+		"",
+		"text",
+		"",
+		"",
+	}, "\n")
+
+	blocks := ParseNoteBlocks(input)
+	if len(blocks) < 2 {
+		t.Fatalf("expected root and child blocks, got %d (%+v)", len(blocks), blocks)
+	}
+
+	root := blocks[0]
+	if root.StartLine != 3 || root.EndLine != 5 {
+		t.Fatalf("unexpected trimmed root span: %+v", root)
+	}
+	if strings.HasPrefix(root.Markdown, "\n") || strings.HasSuffix(root.Markdown, "\n") {
+		t.Fatalf("expected trimmed root markdown without prefix/suffix empty lines: %q", root.Markdown)
+	}
+}
