@@ -129,6 +129,33 @@ func TestIndexNoteStoresBlocksAndDirectTags(t *testing.T) {
 	if len(tagOwners["tag2"]) != 1 || tagOwners["tag2"][0] != dataBlockID {
 		t.Fatalf("expected #tag2 only on data block %d, got %+v", dataBlockID, tagOwners["tag2"])
 	}
+
+	tag1Blocks, err := idx.NoteBlockIDsByFileIDAndTags(ctx, fileID, []string{"tag1"})
+	if err != nil {
+		t.Fatalf("query note block ids for tag1: %v", err)
+	}
+	if len(tag1Blocks) != 1 || tag1Blocks[0] != subDataBlockID {
+		t.Fatalf("expected tag1 block ids [%d], got %+v", subDataBlockID, tag1Blocks)
+	}
+
+	tag2Blocks, err := idx.NoteBlockIDsByFileIDAndTags(ctx, fileID, []string{"tag2"})
+	if err != nil {
+		t.Fatalf("query note block ids for tag2: %v", err)
+	}
+	if len(tag2Blocks) != 1 || tag2Blocks[0] != dataBlockID {
+		t.Fatalf("expected tag2 block ids [%d], got %+v", dataBlockID, tag2Blocks)
+	}
+
+	unionBlocks, err := idx.NoteBlockIDsByFileIDAndTags(ctx, fileID, []string{"tag1", "tag2", "tag1"})
+	if err != nil {
+		t.Fatalf("query note block ids for union tags: %v", err)
+	}
+	if len(unionBlocks) != 2 {
+		t.Fatalf("expected 2 union block ids, got %+v", unionBlocks)
+	}
+	if unionBlocks[0] != dataBlockID || unionBlocks[1] != subDataBlockID {
+		t.Fatalf("expected sorted union block ids [%d %d], got %+v", dataBlockID, subDataBlockID, unionBlocks)
+	}
 }
 
 func TestNoteBlocksSchemaHasNoContentColumn(t *testing.T) {

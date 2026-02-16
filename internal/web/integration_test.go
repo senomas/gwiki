@@ -6,6 +6,7 @@ package web
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,18 @@ import (
 	"gwiki/internal/config"
 	"gwiki/internal/index"
 )
+
+func newLoopbackServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(handler)
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen loopback: %v", err)
+	}
+	ts.Listener = ln
+	ts.Start()
+	return ts
+}
 
 func TestIntegrationFlow(t *testing.T) {
 	repo := t.TempDir()
@@ -47,7 +60,7 @@ func TestIntegrationFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	ts := newLoopbackServer(t, srv.Handler())
 	defer ts.Close()
 
 	form := url.Values{}
@@ -166,7 +179,7 @@ This has wellness in body but no tag.
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	ts := newLoopbackServer(t, srv.Handler())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/search?q=%23wlns")
@@ -373,6 +386,209 @@ func TestDevTagPageShowsMatchAndAncestorPrefix(t *testing.T) {
 		t.Fatalf("get dev tag encoded hash status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	resp.Body.Close()
+}
+
+func TestNoteCardTagFilterRendersContextAndHidesMentionOnly(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	noteRel := "filter-card.md"
+	content := strings.Join([]string{
+		"# demo",
+		"",
+		"- data",
+		"  xx",
+		"  - other",
+		"    should-hide",
+		"  - sub-data",
+		"    this is yyy #tag1",
+		"",
+		"  #tag2",
+	}, "\n")
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/notes/@" + notePath + "/card?t=tag1")
+	if err != nil {
+		t.Fatalf("get card hashtag: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get card hashtag status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+
+	if !strings.Contains(html, "Metadata") {
+		t.Fatalf("expected note card metadata section, got %s", html)
+	}
+	if !strings.Contains(html, "this is yyy #tag1") {
+		t.Fatalf("expected matching tag context in card body, got %s", html)
+	}
+	if strings.Contains(html, "should-hide") || strings.Contains(html, "#tag2") {
+		t.Fatalf("expected non-matching/suffix lines excluded from filtered card body, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/notes/@" + notePath + "/card?t=%40dev")
+	if err != nil {
+		t.Fatalf("get card mention-only: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get card mention-only status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+
+	if !strings.Contains(html, "Metadata") {
+		t.Fatalf("expected note card metadata section for mention-only filter, got %s", html)
+	}
+	if strings.Contains(html, "this is yyy #tag1") || strings.Contains(html, "should-hide") {
+		t.Fatalf("expected mention-only filter to hide note body content, got %s", html)
+	}
+}
+
+func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	files := map[string]string{
+		"hybrid.md": strings.Join([]string{
+			"# hybrid note",
+			"",
+			"prefix-before",
+			"",
+			"- [ ] task root #tag1 #inbox",
+			"  detail line",
+		}, "\n"),
+		"mention.md": strings.Join([]string{
+			"# mention note",
+			"",
+			"- [ ] ping @dev #inbox",
+		}, "\n"),
+	}
+	for relPath, content := range files {
+		full := filepath.Join(notesDir, relPath)
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", relPath, err)
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			t.Fatalf("stat %s: %v", relPath, err)
+		}
+		notePath := filepath.ToSlash(filepath.Join(owner, relPath))
+		if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+			t.Fatalf("index %s: %v", relPath, err)
+		}
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/todo?t=tag1")
+	if err != nil {
+		t.Fatalf("get todo hashtag: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get todo hashtag status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+	if strings.Contains(html, "prefix-before") {
+		t.Fatalf("expected sibling context to be excluded in todo body, got %s", html)
+	}
+	if !strings.Contains(html, "task root #tag1 #inbox") {
+		t.Fatalf("expected todo task snippet retained in hybrid mode, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/todo?t=%40dev")
+	if err != nil {
+		t.Fatalf("get todo mention-only: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get todo mention-only status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+	if !strings.Contains(html, "mention note") {
+		t.Fatalf("expected mention note card title, got %s", html)
+	}
+	if strings.Contains(html, "ping @dev") || strings.Contains(html, "task root #tag1 #inbox") {
+		t.Fatalf("expected mention-only todo filter to hide note body content, got %s", html)
+	}
 }
 
 func TestQuickLauncherHashQueryReturnsTagsOnly(t *testing.T) {

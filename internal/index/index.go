@@ -1940,6 +1940,55 @@ func (i *Index) NoteBlocksByFileID(ctx context.Context, fileID int) ([]NoteBlock
 	return out, rows.Err()
 }
 
+func (i *Index) NoteBlockIDsByFileIDAndTags(ctx context.Context, fileID int, tags []string) ([]int, error) {
+	if fileID <= 0 || len(tags) == 0 {
+		return nil, nil
+	}
+	unique := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		unique = append(unique, tag)
+	}
+	if len(unique) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(unique))
+	placeholders = strings.TrimSuffix(placeholders, ",")
+	args := make([]interface{}, 0, len(unique)+1)
+	args = append(args, fileID)
+	for _, tag := range unique {
+		args = append(args, tag)
+	}
+	rows, err := i.queryContext(ctx, `
+		SELECT DISTINCT block_id
+		FROM note_block_tags
+		WHERE file_id = ? AND tag IN (`+placeholders+`)
+		ORDER BY block_id ASC
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]int, 0, len(unique))
+	for rows.Next() {
+		var blockID int
+		if err := rows.Scan(&blockID); err != nil {
+			return nil, err
+		}
+		out = append(out, blockID)
+	}
+	return out, rows.Err()
+}
+
 func (i *Index) RecentNotes(ctx context.Context, limit int) ([]NoteSummary, error) {
 	query := fmt.Sprintf("SELECT files.path, files.title, files.mtime_unix, %s FROM files %s", ownerNameExpr(), ownerJoins("files"))
 	args := []interface{}{}

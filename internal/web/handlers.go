@@ -1713,6 +1713,32 @@ func splitMentionTags(tags []string) ([]string, []string) {
 	return mentions, rest
 }
 
+func listTagFilterState(rawTags string) (bool, []string) {
+	return listTagFilterStateFromTags(parseTagsParam(rawTags))
+}
+
+func listTagFilterStateFromTags(activeTags []string) (bool, []string) {
+	if len(activeTags) == 0 {
+		return false, nil
+	}
+	_, _, _, noteTags := splitSpecialTags(activeTags)
+	_, noteTags = splitMentionTags(noteTags)
+	seen := make(map[string]struct{}, len(noteTags))
+	out := make([]string, 0, len(noteTags))
+	for _, tag := range noteTags {
+		tag = strings.TrimSpace(strings.TrimPrefix(tag, "#"))
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	return true, out
+}
+
 const taskIDPrefix = "task-"
 
 func taskCheckboxID(fileID, lineNo int, hash string) string {
@@ -8220,6 +8246,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	activeDate := ""
 	baseURL := baseURLForLinks(r, "/")
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	activeTagFilters, hashtagFilters := listTagFilterStateFromTags(activeTags)
 	dueDate := ""
 	if activeDue {
 		dueDate = time.Now().Format("2006-01-02")
@@ -8233,6 +8260,8 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		noteTags,
 		mentionTagsFilter,
 		currentUser,
+		activeTagFilters,
+		hashtagFilters,
 		activeDue,
 		dueDate,
 		activeFolder,
@@ -8349,6 +8378,7 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	_, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	activeTagFilters, hashtagFilters := listTagFilterStateFromTags(activeTags)
 	dueDate := ""
 	if activeDue {
 		dueDate = time.Now().Format("2006-01-02")
@@ -8362,6 +8392,8 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 		noteTags,
 		mentionTagsFilter,
 		currentUser,
+		activeTagFilters,
+		hashtagFilters,
 		activeDue,
 		dueDate,
 		activeFolder,
@@ -8413,6 +8445,8 @@ func (s *Server) loadTodoNotesPage(
 	noteTags []string,
 	mentionTagsFilter []string,
 	currentUser string,
+	activeTagFilters bool,
+	hashtagFilters []string,
 	activeDue bool,
 	dueDate string,
 	activeFolder string,
@@ -8481,14 +8515,42 @@ func (s *Server) loadTodoNotesPage(
 			}
 			continue
 		}
-		noteMeta := index.FrontmatterAttributes(string(contentBytes))
-		body := index.StripFrontmatter(normalizeLineEndings(string(contentBytes)))
+		normalizedContent := normalizeLineEndings(string(contentBytes))
+		noteMeta := index.FrontmatterAttributes(normalizedContent)
+		body := index.StripFrontmatter(normalizedContent)
 		lines := strings.Split(body, "\n")
 		snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
-		htmlStr, err := s.renderNoteContentHTML(r, ctx, path, noteMeta.ID, snippet, checkboxTasks)
-		if err != nil {
-			slog.Warn("render todo note snippet", "path", path, "err", err)
-			continue
+
+		renderSource := snippet
+		renderTasks := checkboxTasks
+		if activeTagFilters {
+			if len(hashtagFilters) == 0 {
+				renderSource = ""
+				renderTasks = nil
+			} else {
+				contextMarkdown, err := s.tagFilteredContextMarkdown(ctx, path, normalizedContent, hashtagFilters)
+				if err != nil {
+					slog.Warn("todo filtered context", "path", path, "err", err)
+					continue
+				}
+				contextMarkdown = strings.TrimRight(contextMarkdown, "\n")
+				if contextMarkdown != "" {
+					if strings.TrimSpace(renderSource) == "" {
+						renderSource = contextMarkdown
+					} else {
+						renderSource = contextMarkdown + "\n\n" + strings.TrimLeft(renderSource, "\n")
+					}
+				}
+			}
+		}
+
+		htmlStr := ""
+		if strings.TrimSpace(renderSource) != "" {
+			htmlStr, err = s.renderNoteContentHTML(r, ctx, path, noteMeta.ID, renderSource, renderTasks)
+			if err != nil {
+				slog.Warn("render todo note snippet", "path", path, "err", err)
+				continue
+			}
 		}
 		folderLabel := s.noteFolderLabel(ctx, path, noteMeta.Folder)
 		todoNotes = append(todoNotes, NoteCard{
@@ -9779,8 +9841,11 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		dueDate := ""
 		noteTags := []string{}
 		mentionTagsActive := []string{}
+		activeTagFilters := false
+		hashtagFilters := []string{}
 		if parsed, err := url.Parse(currentURL); err == nil {
 			activeTags = parseTagsParam(parsed.Query().Get("t"))
+			activeTagFilters, hashtagFilters = listTagFilterStateFromTags(activeTags)
 			activeFolder, activeRoot = parseFolderParam(parsed.Query().Get("f"))
 			_, activeDue, activeJournal, noteTags = splitSpecialTags(activeTags)
 			if activeDue {
@@ -9821,6 +9886,28 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 			} else {
 				renderSource = ""
 				tasksForNote = nil
+			}
+			if activeTagFilters {
+				if len(hashtagFilters) == 0 {
+					renderSource = ""
+					tasksForNote = nil
+				} else {
+					contextMarkdown, ctxErr := s.tagFilteredContextMarkdown(renderCtx, notePath, normalizeLineEndings(updatedContent), hashtagFilters)
+					if ctxErr != nil {
+						slog.Warn("toggle task todo filtered context", "path", notePath, "err", ctxErr)
+						renderSource = ""
+						tasksForNote = nil
+					} else {
+						contextMarkdown = strings.TrimRight(contextMarkdown, "\n")
+						if contextMarkdown != "" {
+							if strings.TrimSpace(renderSource) == "" {
+								renderSource = contextMarkdown
+							} else {
+								renderSource = contextMarkdown + "\n\n" + strings.TrimLeft(renderSource, "\n")
+							}
+						}
+					}
+				}
 			}
 		}
 	} else if isIndex {
@@ -11791,6 +11878,47 @@ func buildDevTagSelectedLines(totalLines int, spans []index.NoteBlockSpan, tagge
 	return out
 }
 
+func (s *Server) tagFilteredContextMarkdown(ctx context.Context, notePath string, normalizedContent string, hashtags []string) (string, error) {
+	if len(hashtags) == 0 {
+		return "", nil
+	}
+	body := index.StripFrontmatter(normalizedContent)
+	lines := strings.Split(body, "\n")
+	if len(lines) == 0 {
+		return "", nil
+	}
+	fileID, err := s.idx.FileIDByPath(ctx, notePath)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	blockIDs, err := s.idx.NoteBlockIDsByFileIDAndTags(ctx, fileID, hashtags)
+	if err != nil {
+		return "", err
+	}
+	if len(blockIDs) == 0 {
+		return "", nil
+	}
+	spans, err := s.idx.NoteBlocksByFileID(ctx, fileID)
+	if err != nil {
+		return "", err
+	}
+	selected := buildDevTagSelectedLines(len(lines), spans, blockIDs)
+	if len(selected) == 0 {
+		return "", nil
+	}
+	out := make([]string, 0, len(selected))
+	for _, lineNo := range selected {
+		if lineNo < 1 || lineNo > len(lines) {
+			continue
+		}
+		out = append(out, lines[lineNo-1])
+	}
+	return strings.Join(out, "\n"), nil
+}
+
 func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath string) {
 	data, status, err := s.buildNoteViewData(r, notePath)
 	if err != nil {
@@ -12334,7 +12462,20 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 	renderTasks := meta.Tasks
 	completedCount := 0
 	hiddenBlocks := make([]HiddenRenderBlock, 0)
-	if hideCompleted {
+	activeTagFilters, hashtagFilters := listTagFilterState(r.URL.Query().Get("t"))
+	if activeTagFilters {
+		if len(hashtagFilters) == 0 {
+			renderContent = []byte("")
+			renderTasks = nil
+		} else {
+			contextMarkdown, err := s.tagFilteredContextMarkdown(r.Context(), notePath, string(normalizedContent), hashtagFilters)
+			if err != nil {
+				return ViewData{}, http.StatusInternalServerError, err
+			}
+			renderContent = []byte(contextMarkdown)
+			renderTasks = nil
+		}
+	} else if hideCompleted {
 		snippet := index.FilterCompletedTasksWithHidden(string(normalizedContent))
 		renderContent = []byte(snippet.Visible)
 		completedCount = snippet.CompletedCount
@@ -12344,9 +12485,12 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 			return ViewData{}, http.StatusInternalServerError, err
 		}
 	}
-	htmlStr, err := s.renderNoteContentHTML(r, renderCtx, notePath, noteMeta.ID, string(renderContent), renderTasks)
-	if err != nil {
-		return ViewData{}, http.StatusInternalServerError, err
+	htmlStr := ""
+	if strings.TrimSpace(string(renderContent)) != "" {
+		htmlStr, err = s.renderNoteContentHTML(r, renderCtx, notePath, noteMeta.ID, string(renderContent), renderTasks)
+		if err != nil {
+			return ViewData{}, http.StatusInternalServerError, err
+		}
 	}
 	if info != nil {
 		labelTime := info.ModTime()

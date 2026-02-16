@@ -3,10 +3,11 @@
 -include .env.local
 export
 
-.PHONY: docker-build test test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build test test-base-image test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
 
-TEST_DOCKER_BUILD_ARGS = --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION)
 TEST_LOG ?= test.log
+TEST_BASE_IMAGE ?= gwiki-test-base:$(GO_VERSION)
+TEST_WIKI_LOG_LEVEL ?= error
 
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
@@ -22,14 +23,28 @@ docker-build:
 test:
 	@rm -f "$(TEST_LOG)"
 	@echo "# make test $$(date -Is)" | tee -a "$(TEST_LOG)"
+	@bash -o pipefail -c '$(MAKE) --no-print-directory test-base-image 2>&1 | tee -a "$(TEST_LOG)"'
 	@bash -o pipefail -c '$(MAKE) --no-print-directory test-unit 2>&1 | tee -a "$(TEST_LOG)"'
 	@bash -o pipefail -c '$(MAKE) --no-print-directory test-http 2>&1 | tee -a "$(TEST_LOG)"'
 
+test-base-image:
+	docker build --target test-base --build-arg GO_VERSION=$(GO_VERSION) -t $(TEST_BASE_IMAGE) .
+
 test-unit:
-	docker build --target test $(TEST_DOCKER_BUILD_ARGS) .
+	docker run --rm -t \
+		-e WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) \
+		-v "$$(pwd)":/src \
+		-w /src \
+		$(TEST_BASE_IMAGE) \
+		sh -lc '/usr/local/go/bin/go mod download && CGO_ENABLED=1 /usr/local/go/bin/go test -tags "sqlite_fts5" ./...'
 
 test-http:
-	docker build --target test-http $(TEST_DOCKER_BUILD_ARGS) .
+	docker run --rm -t \
+		-e WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) \
+		-v "$$(pwd)":/src \
+		-w /src \
+		$(TEST_BASE_IMAGE) \
+		sh -lc '/usr/local/go/bin/go mod download && CGO_ENABLED=1 /usr/local/go/bin/go test -count=1 -tags "sqlite_fts5 http_test" ./internal/web'
 
 http-test: test-http
 

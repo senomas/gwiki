@@ -3,14 +3,17 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 type Templates struct {
@@ -148,8 +151,23 @@ func (t *Templates) RenderTemplateWithCache(w http.ResponseWriter, name string, 
 }
 
 func renderTemplateInternalError(w http.ResponseWriter, templateName string, err error) {
+	if isClientDisconnectError(err) {
+		slog.Debug("template render client disconnected", "template", templateName, "err", err)
+		return
+	}
 	slog.Error("template render failed", "template", templateName, "err", err)
 	http.Error(w, "Something went wrong. Please try again.", http.StatusInternalServerError)
+}
+
+func isClientDisconnectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset by peer")
 }
 
 func setNoCacheHeaders(w http.ResponseWriter) {

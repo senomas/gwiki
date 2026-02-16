@@ -34,6 +34,10 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY templates ./templates
 
+FROM golang:${GO_VERSION} AS test-base
+WORKDIR /src
+RUN apk add --no-cache gcc musl-dev git
+
 FROM build-base AS test
 RUN CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
 
