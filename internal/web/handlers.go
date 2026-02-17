@@ -1476,7 +1476,14 @@ func (s *Server) localizeAttachmentLinks(ctx context.Context, owner, noteID, con
 	}
 	refOwners := map[string]string{}
 	if noteID != "" {
-		refOwners[noteID] = owner
+		resolvedOwner := owner
+		if currentOwner, _, err := s.ownerFromNoteID(ctx, noteID); err == nil {
+			currentOwner = strings.TrimSpace(currentOwner)
+			if currentOwner != "" {
+				resolvedOwner = currentOwner
+			}
+		}
+		refOwners[noteID] = resolvedOwner
 	}
 	copies := map[string]copyInfo{}
 	for _, ref := range refs {

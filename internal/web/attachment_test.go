@@ -763,6 +763,149 @@ func TestSaveNoteCrossOwnerOverwritesExistingAttachments(t *testing.T) {
 	}
 }
 
+func TestSaveNoteCrossOwnerResolvesSourceAttachmentWhenTargetMissing(t *testing.T) {
+	repo := t.TempDir()
+	dataDir := filepath.Join(repo, ".wiki")
+	sourceOwner := "seno"
+	targetOwner := "healing"
+	sourceNotesDir := filepath.Join(repo, sourceOwner, "notes")
+	targetNotesDir := filepath.Join(repo, targetOwner, "notes")
+	if err := os.MkdirAll(sourceNotesDir, 0o755); err != nil {
+		t.Fatalf("mkdir source notes: %v", err)
+	}
+	if err := os.MkdirAll(targetNotesDir, 0o755); err != nil {
+		t.Fatalf("mkdir target notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
+
+	noteID := "cbb4d133-0e35-4e5a-a44d-f5f94ae7417d"
+	noteRel := "move-source-only.md"
+	sourceNotePath := filepath.Join(sourceNotesDir, noteRel)
+	sourceNoteContent := strings.Join([]string{
+		"---",
+		"id: " + noteID,
+		"title: Move Source Only",
+		"visibility: public",
+		"---",
+		"",
+		"# Move Source Only",
+		"",
+		"![](/attachments/" + noteID + "/from-source.jpg)",
+		"",
+	}, "\n")
+	if err := os.WriteFile(sourceNotePath, []byte(sourceNoteContent), 0o644); err != nil {
+		t.Fatalf("write source note: %v", err)
+	}
+
+	sourceAttachDir := filepath.Join(sourceNotesDir, "attachments", noteID)
+	if err := os.MkdirAll(sourceAttachDir, 0o755); err != nil {
+		t.Fatalf("mkdir source attachments: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceAttachDir, "from-source.jpg"), []byte("source-only"), 0o644); err != nil {
+		t.Fatalf("write source attachment: %v", err)
+	}
+
+	accessFile := filepath.Join(targetNotesDir, ".access.txt")
+	if err := os.WriteFile(accessFile, []byte(sourceOwner+":rw\n"), 0o644); err != nil {
+		t.Fatalf("write access file: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	info, err := os.Stat(sourceNotePath)
+	if err != nil {
+		t.Fatalf("stat source note: %v", err)
+	}
+	sourceIndexPath := filepath.ToSlash(filepath.Join(sourceOwner, noteRel))
+	if err := idx.IndexNote(ctx, sourceIndexPath, []byte(sourceNoteContent), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index source note: %v", err)
+	}
+
+	access, err := auth.LoadAccessFromRepo(repo)
+	if err != nil {
+		t.Fatalf("load access: %v", err)
+	}
+	accessRules := make(map[string][]index.AccessPathRule, len(access))
+	for ownerName, rules := range access {
+		converted := make([]index.AccessPathRule, 0, len(rules))
+		for _, rule := range rules {
+			members := make([]index.AccessMember, 0, len(rule.Members))
+			for _, member := range rule.Members {
+				members = append(members, index.AccessMember{
+					User:   member.User,
+					Access: member.Access,
+				})
+			}
+			converted = append(converted, index.AccessPathRule{
+				Path:       rule.Path,
+				Visibility: rule.Visibility,
+				Members:    members,
+			})
+		}
+		accessRules[ownerName] = converted
+	}
+	if _, err := idx.SyncPathAccessWithStats(ctx, accessRules); err != nil {
+		t.Fatalf("sync access: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	noteCtx := WithUser(context.Background(), User{Name: sourceOwner, Authenticated: true})
+	result, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
+		NotePath:    sourceIndexPath,
+		TargetOwner: targetOwner,
+		Content: strings.Join([]string{
+			"# Move Source Only",
+			"",
+			"![](/attachments/" + noteID + "/from-source.jpg)",
+			"",
+		}, "\n"),
+	})
+	if apiErr != nil {
+		t.Fatalf("save note returned api error: status=%d message=%s", apiErr.status, apiErr.message)
+	}
+
+	expectedTargetPath := filepath.ToSlash(filepath.Join(targetOwner, noteRel))
+	if result.TargetPath != expectedTargetPath {
+		t.Fatalf("unexpected target path: got %s want %s", result.TargetPath, expectedTargetPath)
+	}
+
+	targetNotePath := filepath.Join(targetNotesDir, noteRel)
+	if _, err := os.Stat(targetNotePath); err != nil {
+		t.Fatalf("expected target note exists, err=%v", err)
+	}
+	if _, err := os.Stat(sourceNotePath); !os.IsNotExist(err) {
+		t.Fatalf("expected source note removed, err=%v", err)
+	}
+	if _, err := os.Stat(sourceAttachDir); !os.IsNotExist(err) {
+		t.Fatalf("expected source attachment dir removed, err=%v", err)
+	}
+	targetAttachPath := filepath.Join(targetNotesDir, "attachments", noteID, "from-source.jpg")
+	data, err := os.ReadFile(targetAttachPath)
+	if err != nil {
+		t.Fatalf("read moved attachment: %v", err)
+	}
+	if string(data) != "source-only" {
+		t.Fatalf("expected moved source attachment content, got %q", string(data))
+	}
+}
+
 func TestAttachmentAndAssetAccessControl(t *testing.T) {
 	repo := t.TempDir()
 	owner := "alice"
