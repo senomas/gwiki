@@ -647,6 +647,9 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	if !strings.Contains(html, "task root #tag1 #inbox") {
 		t.Fatalf("expected todo task snippet retained in hybrid mode, got %s", html)
 	}
+	if strings.Count(html, "task root #tag1 #inbox") != 1 {
+		t.Fatalf("expected tagged todo line rendered once in hybrid mode, got %s", html)
+	}
 	if strings.Contains(html, "done task #tag1") {
 		t.Fatalf("expected completed tagged tasks hidden in todo tag-filter context, got %s", html)
 	}

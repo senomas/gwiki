@@ -8528,12 +8528,16 @@ func (s *Server) loadTodoNotesPage(
 				renderSource = ""
 				renderTasks = nil
 			} else {
-				contextMarkdown, err := s.tagFilteredContextMarkdown(ctx, path, normalizedContent, hashtagFilters)
+				contextMarkdown, selectedLines, err := s.tagFilteredContextSelection(ctx, path, normalizedContent, hashtagFilters)
 				if err != nil {
 					slog.Warn("todo filtered context", "path", path, "err", err)
 					continue
 				}
 				contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
+				snippetTasks := filterTaskItemsOutsideSelectedLines(noteTasks, selectedLines)
+				snippet, checkboxTasks = buildTodoDebugSnippet(lines, snippetTasks)
+				renderSource = snippet
+				renderTasks = checkboxTasks
 				if contextMarkdown != "" {
 					if strings.TrimSpace(renderSource) == "" {
 						renderSource = contextMarkdown
@@ -8656,6 +8660,29 @@ func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []in
 		taskIndex++
 	}
 	return out.String(), checkboxTasks
+}
+
+func filterTaskItemsOutsideSelectedLines(tasks []index.TaskItem, selectedLines []int) []index.TaskItem {
+	if len(tasks) == 0 || len(selectedLines) == 0 {
+		return tasks
+	}
+	selected := make(map[int]struct{}, len(selectedLines))
+	for _, lineNo := range selectedLines {
+		if lineNo > 0 {
+			selected[lineNo] = struct{}{}
+		}
+	}
+	if len(selected) == 0 {
+		return tasks
+	}
+	filtered := make([]index.TaskItem, 0, len(tasks))
+	for _, task := range tasks {
+		if _, ok := selected[task.LineNo]; ok {
+			continue
+		}
+		filtered = append(filtered, task)
+	}
+	return filtered
 }
 
 func todoFiltersFromURL(raw string) (noteTags []string, activeDue bool, dueDate string, activeFolder string, activeRoot bool, activeJournal bool) {
@@ -9878,8 +9905,8 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 			sort.Slice(noteTasks, func(i, j int) bool {
 				return noteTasks[i].LineNo < noteTasks[j].LineNo
 			})
+			lines := strings.Split(fullBody, "\n")
 			if len(noteTasks) > 0 {
-				lines := strings.Split(fullBody, "\n")
 				snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
 				renderSource = snippet
 				tasksForNote = checkboxTasks
@@ -9892,13 +9919,17 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 					renderSource = ""
 					tasksForNote = nil
 				} else {
-					contextMarkdown, ctxErr := s.tagFilteredContextMarkdown(renderCtx, notePath, normalizeLineEndings(updatedContent), hashtagFilters)
+					contextMarkdown, selectedLines, ctxErr := s.tagFilteredContextSelection(renderCtx, notePath, normalizeLineEndings(updatedContent), hashtagFilters)
 					if ctxErr != nil {
 						slog.Warn("toggle task todo filtered context", "path", notePath, "err", ctxErr)
 						renderSource = ""
 						tasksForNote = nil
 					} else {
 						contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
+						snippetTasks := filterTaskItemsOutsideSelectedLines(noteTasks, selectedLines)
+						snippet, checkboxTasks := buildTodoDebugSnippet(lines, snippetTasks)
+						renderSource = snippet
+						tasksForNote = checkboxTasks
 						if contextMarkdown != "" {
 							if strings.TrimSpace(renderSource) == "" {
 								renderSource = contextMarkdown
@@ -11878,36 +11909,36 @@ func buildDevTagSelectedLines(totalLines int, spans []index.NoteBlockSpan, tagge
 	return out
 }
 
-func (s *Server) tagFilteredContextMarkdown(ctx context.Context, notePath string, normalizedContent string, hashtags []string) (string, error) {
+func (s *Server) tagFilteredContextSelection(ctx context.Context, notePath string, normalizedContent string, hashtags []string) (string, []int, error) {
 	if len(hashtags) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	body := index.StripFrontmatter(normalizedContent)
 	lines := strings.Split(body, "\n")
 	if len(lines) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	fileID, err := s.idx.FileIDByPath(ctx, notePath)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
+			return "", nil, nil
 		}
-		return "", err
+		return "", nil, err
 	}
 	blockIDs, err := s.idx.NoteBlockIDsByFileIDAndTags(ctx, fileID, hashtags)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if len(blockIDs) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	spans, err := s.idx.NoteBlocksByFileID(ctx, fileID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	selected := buildDevTagSelectedLines(len(lines), spans, blockIDs)
 	if len(selected) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	out := make([]string, 0, len(selected))
 	for _, lineNo := range selected {
@@ -11916,7 +11947,15 @@ func (s *Server) tagFilteredContextMarkdown(ctx context.Context, notePath string
 		}
 		out = append(out, lines[lineNo-1])
 	}
-	return strings.Join(out, "\n"), nil
+	return strings.Join(out, "\n"), selected, nil
+}
+
+func (s *Server) tagFilteredContextMarkdown(ctx context.Context, notePath string, normalizedContent string, hashtags []string) (string, error) {
+	markdown, _, err := s.tagFilteredContextSelection(ctx, notePath, normalizedContent, hashtags)
+	if err != nil {
+		return "", err
+	}
+	return markdown, nil
 }
 
 func (s *Server) handleViewNote(w http.ResponseWriter, r *http.Request, notePath string) {
