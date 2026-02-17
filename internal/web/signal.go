@@ -625,6 +625,9 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 			}
 		}
 		if len(lines) > 0 {
+			if text != "" {
+				lines = append(lines, "", fmt.Sprintf("- [ ] %s%s", text, suffixTags))
+			}
 			if noteID != "" {
 				for _, attachment := range msg.Attachments {
 					attachmentName, ok, err := p.ensureSignalMessageAttachment(ctx, noteID, attachment)

@@ -269,3 +269,34 @@ func TestBuildSignalNoteLines_DataMessageAttachmentsWithText(t *testing.T) {
 		t.Fatalf("unexpected image line: %q", lines[1])
 	}
 }
+
+func TestBuildSignalNoteLines_LinkPreviewIncludesOriginalMessage(t *testing.T) {
+	poller := signalPoller{}
+	lines, err := poller.buildSignalNoteLines(context.Background(), signalMessage{
+		Text: "https://vt.tiktok.com/ZSmkQSUcW/\n\nDamar Valley Glamping Wonosobo",
+		Previews: []signalPreview{{
+			URL:         "https://vt.tiktok.com/ZSmkQSUcW",
+			Title:       "TikTok",
+			Description: "Preview description",
+		}},
+	}, "")
+	if err != nil {
+		t.Fatalf("build lines: %v", err)
+	}
+	if len(lines) == 0 {
+		t.Fatalf("expected non-empty lines")
+	}
+	if lines[0] != "- [ ] [TikTok](https://vt.tiktok.com/ZSmkQSUcW) #inbox #signal" {
+		t.Fatalf("unexpected preview line: %q", lines[0])
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Preview description") {
+		t.Fatalf("expected preview description in output: %#v", lines)
+	}
+	if !strings.Contains(joined, "- [ ] https://vt.tiktok.com/ZSmkQSUcW/") {
+		t.Fatalf("expected original message URL in output, got: %#v", lines)
+	}
+	if !strings.Contains(joined, "Damar Valley Glamping Wonosobo #inbox #signal") {
+		t.Fatalf("expected original message line in output, got: %#v", lines)
+	}
+}
