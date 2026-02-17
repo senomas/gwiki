@@ -41,3 +41,21 @@ func TestApplyRenderReplacementsDue(t *testing.T) {
 		t.Fatalf("expected due tokens to be replaced, got %q", out)
 	}
 }
+
+func TestBuildTodoTagFilteredRenderTasks_ContextBeforeSnippet(t *testing.T) {
+	tasks := []index.TaskItem{
+		{LineNo: 2, Hash: strings.Repeat("a", 64)},
+		{LineNo: 5, Hash: strings.Repeat("b", 64)},
+		{LineNo: 9, Hash: strings.Repeat("c", 64)},
+	}
+	renderTasks := buildTodoTagFilteredRenderTasks(tasks, []int{5})
+	if len(renderTasks) != 3 {
+		t.Fatalf("expected 3 render tasks, got %d", len(renderTasks))
+	}
+	if renderTasks[0].LineNo != 5 {
+		t.Fatalf("expected context task first, got line %d", renderTasks[0].LineNo)
+	}
+	if renderTasks[1].LineNo != 2 || renderTasks[2].LineNo != 9 {
+		t.Fatalf("expected snippet tasks after context in source order, got %+v", renderTasks)
+	}
+}

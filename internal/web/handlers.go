@@ -8535,9 +8535,9 @@ func (s *Server) loadTodoNotesPage(
 				}
 				contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
 				snippetTasks := filterTaskItemsOutsideSelectedLines(noteTasks, selectedLines)
-				snippet, checkboxTasks = buildTodoDebugSnippet(lines, snippetTasks)
+				snippet, _ = buildTodoDebugSnippet(lines, snippetTasks)
 				renderSource = snippet
-				renderTasks = checkboxTasks
+				renderTasks = buildTodoTagFilteredRenderTasks(noteTasks, selectedLines)
 				if contextMarkdown != "" {
 					if strings.TrimSpace(renderSource) == "" {
 						renderSource = contextMarkdown
@@ -8683,6 +8683,46 @@ func filterTaskItemsOutsideSelectedLines(tasks []index.TaskItem, selectedLines [
 		filtered = append(filtered, task)
 	}
 	return filtered
+}
+
+func buildTodoTagFilteredRenderTasks(noteTasks []index.TaskItem, selectedLines []int) []index.Task {
+	if len(noteTasks) == 0 {
+		return nil
+	}
+	selected := make(map[int]struct{}, len(selectedLines))
+	for _, lineNo := range selectedLines {
+		if lineNo > 0 {
+			selected[lineNo] = struct{}{}
+		}
+	}
+	contextTasks := make([]index.Task, 0, len(noteTasks))
+	snippetTasks := make([]index.Task, 0, len(noteTasks))
+	for _, task := range noteTasks {
+		if task.LineNo <= 0 {
+			continue
+		}
+		hash := strings.TrimSpace(task.Hash)
+		if hash == "" {
+			continue
+		}
+		mapped := index.Task{
+			LineNo: task.LineNo,
+			Hash:   hash,
+			Done:   false,
+		}
+		if _, ok := selected[task.LineNo]; ok {
+			contextTasks = append(contextTasks, mapped)
+			continue
+		}
+		snippetTasks = append(snippetTasks, mapped)
+	}
+	if len(contextTasks) == 0 {
+		return snippetTasks
+	}
+	out := make([]index.Task, 0, len(contextTasks)+len(snippetTasks))
+	out = append(out, contextTasks...)
+	out = append(out, snippetTasks...)
+	return out
 }
 
 func todoFiltersFromURL(raw string) (noteTags []string, activeDue bool, dueDate string, activeFolder string, activeRoot bool, activeJournal bool) {
@@ -9927,9 +9967,9 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 					} else {
 						contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
 						snippetTasks := filterTaskItemsOutsideSelectedLines(noteTasks, selectedLines)
-						snippet, checkboxTasks := buildTodoDebugSnippet(lines, snippetTasks)
+						snippet, _ := buildTodoDebugSnippet(lines, snippetTasks)
 						renderSource = snippet
-						tasksForNote = checkboxTasks
+						tasksForNote = buildTodoTagFilteredRenderTasks(noteTasks, selectedLines)
 						if contextMarkdown != "" {
 							if strings.TrimSpace(renderSource) == "" {
 								renderSource = contextMarkdown

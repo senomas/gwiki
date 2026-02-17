@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -649,6 +650,17 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	}
 	if strings.Count(html, "task root #tag1 #inbox") != 1 {
 		t.Fatalf("expected tagged todo line rendered once in hybrid mode, got %s", html)
+	}
+	if !strings.Contains(html, `hx-post="/tasks/toggle"`) {
+		t.Fatalf("expected todo checkbox to be clickable, got %s", html)
+	}
+	taskIDLine := regexp.MustCompile(`task-\d+-(\d+)-[0-9a-f]{64}`)
+	match := taskIDLine.FindStringSubmatch(html)
+	if len(match) < 2 {
+		t.Fatalf("expected task id with source line mapping, got %s", html)
+	}
+	if match[1] != "5" {
+		t.Fatalf("expected task id to keep source line 5, got %s in %s", match[1], html)
 	}
 	if strings.Contains(html, "done task #tag1") {
 		t.Fatalf("expected completed tagged tasks hidden in todo tag-filter context, got %s", html)
