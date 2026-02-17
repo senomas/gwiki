@@ -490,6 +490,82 @@ func TestNoteCardTagFilterRendersContextAndHidesMentionOnly(t *testing.T) {
 	}
 }
 
+func TestNoteCardTagFilterMovesCompletedToHiding(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	noteRel := "filter-card-completed.md"
+	content := strings.Join([]string{
+		"# demo",
+		"",
+		"- [x] done tagged #tag1",
+		"- [ ] open tagged #tag1",
+	}, "\n")
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/notes/@" + notePath + "/card?t=tag1")
+	if err != nil {
+		t.Fatalf("get card hashtag: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get card hashtag status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+
+	if !strings.Contains(html, "open tagged #tag1") {
+		t.Fatalf("expected open tagged task visible in filtered card body, got %s", html)
+	}
+	if !strings.Contains(html, "Hiding (1 completed task)") {
+		t.Fatalf("expected completed tagged task moved to hiding section, got %s", html)
+	}
+	if !strings.Contains(html, "done tagged #tag1") {
+		t.Fatalf("expected completed tagged task rendered in hiding section, got %s", html)
+	}
+}
+
 func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"
@@ -522,6 +598,7 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 			"",
 			"- [ ] task root #tag1 #inbox",
 			"  detail line",
+			"- [x] done task #tag1",
 		}, "\n"),
 		"mention.md": strings.Join([]string{
 			"# mention note",
@@ -569,6 +646,9 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	}
 	if !strings.Contains(html, "task root #tag1 #inbox") {
 		t.Fatalf("expected todo task snippet retained in hybrid mode, got %s", html)
+	}
+	if strings.Contains(html, "done task #tag1") {
+		t.Fatalf("expected completed tagged tasks hidden in todo tag-filter context, got %s", html)
 	}
 
 	resp, err = http.Get(ts.URL + "/todo?t=%40dev")

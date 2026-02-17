@@ -8533,7 +8533,7 @@ func (s *Server) loadTodoNotesPage(
 					slog.Warn("todo filtered context", "path", path, "err", err)
 					continue
 				}
-				contextMarkdown = strings.TrimRight(contextMarkdown, "\n")
+				contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
 				if contextMarkdown != "" {
 					if strings.TrimSpace(renderSource) == "" {
 						renderSource = contextMarkdown
@@ -9898,7 +9898,7 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 						renderSource = ""
 						tasksForNote = nil
 					} else {
-						contextMarkdown = strings.TrimRight(contextMarkdown, "\n")
+						contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
 						if contextMarkdown != "" {
 							if strings.TrimSpace(renderSource) == "" {
 								renderSource = contextMarkdown
@@ -12472,8 +12472,19 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 			if err != nil {
 				return ViewData{}, http.StatusInternalServerError, err
 			}
-			renderContent = []byte(contextMarkdown)
-			renderTasks = nil
+			if hideCompleted {
+				snippet := index.FilterCompletedTasksWithHidden(contextMarkdown)
+				renderContent = []byte(snippet.Visible)
+				completedCount = snippet.CompletedCount
+				renderTasks = snippet.OpenTasks
+				hiddenBlocks, err = s.renderHiddenBlocks(r, renderCtx, notePath, noteMeta.ID, snippet.Hidden)
+				if err != nil {
+					return ViewData{}, http.StatusInternalServerError, err
+				}
+			} else {
+				renderContent = []byte(contextMarkdown)
+				renderTasks = nil
+			}
 		}
 	} else if hideCompleted {
 		snippet := index.FilterCompletedTasksWithHidden(string(normalizedContent))
