@@ -11475,9 +11475,24 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("notes handler resolved", "path", routeRef, "resolved", resolved)
 		return resolved, true
 	}
+	resolveOwnerScopedFromRoute := func(routeRef string) (string, bool) {
+		parsed, ok := parseUserScopedNoteRef(routeRef)
+		if !ok {
+			http.NotFound(w, r)
+			return "", false
+		}
+		resolved, err := s.resolveNotePath(r.Context(), parsed)
+		if err != nil {
+			slog.Warn("notes handler resolve failed", "path", routeRef, "err", err)
+			s.internalServerError(w, r, err)
+			return "", false
+		}
+		slog.Debug("notes handler owner-scoped resolved", "path", routeRef, "resolved", resolved)
+		return resolved, true
+	}
 	if strings.HasSuffix(pathPart, "/edit") {
 		base := strings.TrimSuffix(pathPart, "/edit")
-		resolved, ok := resolveFromRoute(base)
+		resolved, ok := resolveOwnerScopedFromRoute(base)
 		if !ok {
 			return
 		}
@@ -11513,7 +11528,7 @@ func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(pathPart, "/delete") {
 		base := strings.TrimSuffix(pathPart, "/delete")
-		resolved, ok := resolveFromRoute(base)
+		resolved, ok := resolveOwnerScopedFromRoute(base)
 		if !ok {
 			return
 		}
@@ -13785,7 +13800,7 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 				DurationSeconds: 3,
 				CreatedAt:       time.Now(),
 			})
-			w.Header().Set("HX-Trigger", "toast:refresh")
+			w.Header().Set("X-Redirect-Location", targetURL)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

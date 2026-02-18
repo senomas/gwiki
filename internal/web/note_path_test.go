@@ -32,11 +32,17 @@ func TestNoteHref(t *testing.T) {
 	if got := noteHrefWithSuffix("seno/notes/a.md", "edit"); got != "/notes/@seno/notes/a.md/edit" {
 		t.Fatalf("noteHrefWithSuffix()=%q", got)
 	}
-	if got := noteHrefWithSuffix("seno/notes/a.md", "edit", "seno"); got != "/notes/notes/a.md/edit" {
+	if got := noteHrefWithSuffix("seno/notes/a.md", "edit", "seno"); got != "/notes/@seno/notes/a.md/edit" {
 		t.Fatalf("noteHrefWithSuffix() current user=%q", got)
 	}
 	if got := noteHrefWithSuffix("seno/notes/a.md", "/edit"); got != "/notes/@seno/notes/a.md/edit" {
 		t.Fatalf("noteHrefWithSuffix() with slash=%q", got)
+	}
+	if got := noteHrefWithSuffix("seno/notes/a.md", "delete", "seno"); got != "/notes/@seno/notes/a.md/delete" {
+		t.Fatalf("noteHrefWithSuffix() delete current user=%q", got)
+	}
+	if got := noteHrefWithSuffix("seno/notes/a.md", "save", "seno"); got != "/notes/notes/a.md/save" {
+		t.Fatalf("noteHrefWithSuffix() save current user=%q", got)
 	}
 }
 

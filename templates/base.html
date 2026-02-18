@@ -1090,7 +1090,7 @@
 
       var currentUserName = "{{.CurrentUser.Name}}".trim().toLowerCase();
 
-      function toNoteRoute(path) {
+      function toNoteRoute(path, requireOwnerScope) {
         var value = (path || "").trim();
         if (!value) {
           return value;
@@ -1108,7 +1108,7 @@
         if (slashIndex >= 0) {
           var owner = value.slice(0, slashIndex).trim();
           var rel = value.slice(slashIndex + 1);
-          if (owner && rel && currentUserName && owner.toLowerCase() === currentUserName) {
+          if (owner && rel && !requireOwnerScope && currentUserName && owner.toLowerCase() === currentUserName) {
             return rel;
           }
           return "@" + owner + "/" + rel;
@@ -1116,8 +1116,8 @@
         return value;
       }
 
-      function buildNoteURL(path) {
-        return encodeURI("/notes/" + toNoteRoute(path));
+      function buildNoteURL(path, requireOwnerScope) {
+        return encodeURI("/notes/" + toNoteRoute(path, requireOwnerScope === true));
       }
       window.buildNoteURL = buildNoteURL;
 
@@ -1350,8 +1350,8 @@
           return;
         }
         noteOpen.setAttribute("href", buildNoteURL(path));
-        noteEdit.setAttribute("href", buildNoteURL(path) + "/edit");
-        noteDelete.setAttribute("action", buildNoteURL(path) + "/delete");
+        noteEdit.setAttribute("href", buildNoteURL(path, true) + "/edit");
+        noteDelete.setAttribute("action", buildNoteURL(path, true) + "/delete");
         submenu.classList.add("is-open");
         submenu.setAttribute("aria-hidden", "false");
         activateItem(submenuPanel, 0);
@@ -1852,10 +1852,10 @@
       }
 
       function openModal(notePath, noteID, noteURL, showOpen) {
-        var editTarget = noteID || notePath;
+        var editTarget = notePath || noteID;
         openLink.setAttribute("href", noteURL || buildNoteURL(notePath));
-        editLink.setAttribute("href", buildNoteURL(editTarget) + "/edit");
-        deleteForm.setAttribute("action", buildNoteURL(editTarget) + "/delete");
+        editLink.setAttribute("href", buildNoteURL(editTarget, true) + "/edit");
+        deleteForm.setAttribute("action", buildNoteURL(editTarget, true) + "/delete");
         if (showOpen) {
           openLink.classList.remove("hidden");
           defaultAction = openLink;

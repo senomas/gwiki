@@ -57,6 +57,11 @@ func noteHref(notePath string, currentUser ...string) string {
 }
 
 func noteHrefWithSuffix(notePath string, suffix string, currentUser ...string) string {
+	trimmedSuffix := strings.TrimSpace(suffix)
+	trimmedSuffix = strings.TrimPrefix(trimmedSuffix, "/")
+	if trimmedSuffix == "edit" || trimmedSuffix == "delete" {
+		return "/notes/" + notePathWithUserPrefix(notePath) + "/" + trimmedSuffix
+	}
 	base := noteHref(notePath, currentUser...)
 	if suffix == "" {
 		return base
@@ -127,7 +132,7 @@ func wikiLinkRefForTarget(sourceOwner, targetPath string) (string, string, error
 	if sourceOwner != "" && strings.EqualFold(targetOwner, sourceOwner) {
 		return normalized, rel, nil
 	}
-	return normalized, "@"+targetOwner+"/"+rel, nil
+	return normalized, "@" + targetOwner + "/" + rel, nil
 }
 
 func isUUIDLike(value string) bool {
