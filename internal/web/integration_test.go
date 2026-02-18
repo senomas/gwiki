@@ -283,6 +283,91 @@ This has wellness in body but no tag.
 	}
 }
 
+func TestQuickLauncherSlashQueryUsesPathTitleNotesOnly(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	files := map[string]string{
+		"routes/demo-path.md": `# Demo Route
+
+This matches by title/path.
+`,
+		"body-only.md": `# Body Note
+
+Contains demo in body only.
+`,
+	}
+	for relPath, content := range files {
+		full := filepath.Join(notesDir, relPath)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", relPath, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", relPath, err)
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			t.Fatalf("stat %s: %v", relPath, err)
+		}
+		notePath := filepath.ToSlash(filepath.Join(owner, relPath))
+		if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+			t.Fatalf("index %s: %v", relPath, err)
+		}
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/quick/launcher?q=%2Fdemo&uri=%2F")
+	if err != nil {
+		t.Fatalf("quick launcher: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+
+	if !strings.Contains(html, `data-note-path="local/routes/demo-path.md"`) {
+		t.Fatalf("expected slash query to return title/path note, got %s", html)
+	}
+	if strings.Contains(html, `data-note-path="local/body-only.md"`) {
+		t.Fatalf("expected slash query to exclude body-only note, got %s", html)
+	}
+	if strings.Contains(html, `data-tag=`) {
+		t.Fatalf("expected slash query to hide tags, got %s", html)
+	}
+	if strings.Contains(html, `>Folder</span>`) {
+		t.Fatalf("expected slash query to hide folders, got %s", html)
+	}
+	if strings.Contains(html, `href="/notes/new"`) || strings.Contains(html, `href="/todo"`) {
+		t.Fatalf("expected slash query to hide actions, got %s", html)
+	}
+}
+
 func TestDevNotesPageShowsParsedBlocks(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

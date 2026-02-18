@@ -3270,6 +3270,51 @@ func (i *Index) SearchWithShortTokens(ctx context.Context, query string, shortTo
 	return results, rows.Err()
 }
 
+func (i *Index) SearchPathTitleWithShortTokens(ctx context.Context, query string, shortTokens []string, limit int) ([]SearchResult, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	slog.Debug("fts search path title", "query", query, "limit", limit)
+	clauses := []string{"fts MATCH ?"}
+	args := []interface{}{query}
+	for _, token := range shortTokens {
+		if token == "" {
+			continue
+		}
+		clauses = append(clauses, "(files.path LIKE ? OR files.title LIKE ?)")
+		like := "%" + token + "%"
+		args = append(args, like, like)
+	}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	queryStr := fmt.Sprintf(`
+		SELECT files.path, files.title, snippet(fts, 9, '', '', '...', 10), %s
+		FROM fts
+		%s
+		WHERE %s
+		ORDER BY %s ASC, files.updated_at DESC
+		LIMIT ?`, ownerNameExpr(), ftsJoinClause(), strings.Join(clauses, " AND "), ftsRankSQL)
+	args = append(args, limit)
+	rows, err := i.queryContext(ctx, queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SearchResult
+	for rows.Next() {
+		var r SearchResult
+		var ownerName string
+		var relPath string
+		if err := rows.Scan(&relPath, &r.Title, &r.Snippet, &ownerName); err != nil {
+			return nil, err
+		}
+		r.Path = joinOwnerPath(ownerName, relPath)
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly bool, journalOnly bool, ownerName string) ([]TagSummary, error) {
 	if limit <= 0 {
 		limit = 100

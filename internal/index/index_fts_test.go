@@ -218,3 +218,51 @@ Entry for jan 18 in the body.
 		t.Fatalf("expected jan 19 to return no matches, got %+v", results)
 	}
 }
+
+func TestFTSSearchPathTitleWithShortTokens(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	files := map[string]string{
+		"topic-aa.md": `# Find Topic
+
+Body has no short token.
+`,
+		"body-only.md": `# Find Body
+
+Body mentions aa but title/path do not.
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(notesDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	idx, err := Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx := context.Background()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	results, err := idx.SearchPathTitleWithShortTokens(ctx, "(path:find* OR title:find*)", []string{"aa"}, 10)
+	if err != nil {
+		t.Fatalf("search path/title short tokens: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != "local/topic-aa.md" {
+		t.Fatalf("expected only path/title match, got %+v", results)
+	}
+}

@@ -7004,14 +7004,47 @@ func ftsPrefixQuery(raw string) string {
 	return strings.Join(tokens, " AND ")
 }
 
+func ftsPrefixQueryForFields(tokens []string, fields ...string) string {
+	if len(tokens) == 0 || len(fields) == 0 {
+		return ""
+	}
+	clauses := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if token == "" {
+			continue
+		}
+		fieldClauses := make([]string, 0, len(fields))
+		for _, field := range fields {
+			field = strings.TrimSpace(field)
+			if field == "" {
+				continue
+			}
+			fieldClauses = append(fieldClauses, fmt.Sprintf("%s:%s*", field, token))
+		}
+		if len(fieldClauses) == 0 {
+			continue
+		}
+		clauses = append(clauses, "("+strings.Join(fieldClauses, " OR ")+")")
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return strings.Join(clauses, " AND ")
+}
+
 func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL *url.URL) ([]QuickLauncherEntry, error) {
 	query = strings.TrimSpace(query)
 	tagOnlyQuery := strings.HasPrefix(query, "#")
+	slashOnlyQuery := strings.HasPrefix(query, "/")
+	searchQuery := query
+	if slashOnlyQuery {
+		searchQuery = strings.TrimSpace(strings.TrimPrefix(query, "/"))
+	}
 	tagQuery := query
 	if tagOnlyQuery {
 		tagQuery = strings.TrimSpace(strings.TrimPrefix(query, "#"))
 	}
-	longTokens, shortTokens := splitSearchTokens(query)
+	longTokens, shortTokens := splitSearchTokens(searchQuery)
 	if tagOnlyQuery {
 		longTokens = nil
 		shortTokens = nil
@@ -7093,6 +7126,36 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 	if query == "" {
 		return actions, nil
 	}
+	if slashOnlyQuery {
+		entries := make([]QuickLauncherEntry, 0, 12)
+		if len(longTokens) == 0 {
+			return entries, nil
+		}
+		ftsQuery := ftsPrefixQueryForFields(longTokens, "path", "title")
+		if ftsQuery == "" {
+			return entries, nil
+		}
+		notes, err := s.idx.SearchPathTitleWithShortTokens(r.Context(), ftsQuery, shortTokens, 12)
+		if err != nil {
+			return nil, err
+		}
+		for _, note := range notes {
+			label := note.Title
+			if label == "" {
+				label = note.Path
+			}
+			entries = append(entries, QuickLauncherEntry{
+				Kind:      "note",
+				Label:     label,
+				Hint:      note.Path,
+				Icon:      "N",
+				Href:      noteHref(note.Path, currentUserName(r.Context())),
+				NotePath:  note.Path,
+				NoteTitle: note.Title,
+			})
+		}
+		return entries, nil
+	}
 
 	capHint := 20
 	if !tagOnlyQuery {
@@ -7160,9 +7223,9 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 	}
 
 	if len(longTokens) > 0 {
-		ftsQuery := ftsPrefixQuery(query)
+		ftsQuery := ftsPrefixQuery(searchQuery)
 		if ftsQuery == "" {
-			ftsQuery = query
+			ftsQuery = searchQuery
 		}
 		notes, err := s.idx.SearchWithShortTokens(r.Context(), ftsQuery, shortTokens, 12)
 		if err != nil {
