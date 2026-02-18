@@ -552,38 +552,70 @@ func ensureSignalFrontmatter(content string, now time.Time, user string) (string
 
 func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessage, noteID string) ([]string, error) {
 	suffixTags := " #inbox #signal"
-	text := normalizeSignalText(msg.Text)
-	hasLinkPreview := false
-	hasImagePreview := false
-	for _, preview := range msg.Previews {
-		if strings.TrimSpace(preview.URL) != "" {
-			hasLinkPreview = true
-		}
-		if strings.TrimSpace(preview.ImageID) != "" {
-			hasImagePreview = true
+	textLines := normalizeSignalTextLines(msg.Text)
+	primary := ""
+	remainingText := []string{}
+	if len(textLines) > 0 {
+		primary = textLines[0]
+		if len(textLines) > 1 {
+			remainingText = append(remainingText, textLines[1:]...)
 		}
 	}
-	hasAttachments := len(msg.Attachments) > 0
-
-	// For captioned image messages, render as a regular inbox task then image(s).
-	if text != "" && (hasImagePreview || hasAttachments) && !hasLinkPreview {
-		lines := []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}
-		if noteID == "" {
-			return lines, nil
-		}
+	if primary == "" {
 		for _, preview := range msg.Previews {
-			if strings.TrimSpace(preview.ImageID) == "" {
-				continue
+			previewLink := signalPreviewLink(preview)
+			if previewLink != "" {
+				primary = previewLink
+				break
 			}
+		}
+	}
+	if primary == "" && len(msg.Attachments) > 0 {
+		primary = "Signal attachment"
+	}
+	if primary == "" {
+		return nil, nil
+	}
+
+	lines := []string{fmt.Sprintf("- [ ] %s%s", primary, suffixTags)}
+	continuationSeen := map[string]struct{}{}
+	appendContinuation := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		key := strings.ToLower(value)
+		if _, ok := continuationSeen[key]; ok {
+			return
+		}
+		continuationSeen[key] = struct{}{}
+		lines = append(lines, "  "+value)
+	}
+
+	for _, line := range remainingText {
+		appendContinuation(line)
+	}
+
+	for _, preview := range msg.Previews {
+		previewLink := signalPreviewLink(preview)
+		if previewLink != "" && !strings.EqualFold(previewLink, primary) {
+			appendContinuation(previewLink)
+		}
+		for _, descLine := range normalizeSignalTextLines(preview.Description) {
+			appendContinuation(descLine)
+		}
+		if preview.ImageID != "" && noteID != "" {
 			attachmentName, ok, err := p.ensureSignalPreviewImage(ctx, noteID, preview)
 			if err != nil {
 				slog.Warn("signal preview image", "err", err)
 				continue
 			}
 			if ok {
-				lines = append(lines, "  ![](/attachments/"+noteID+"/"+attachmentName+")")
+				appendContinuation("![](/attachments/" + noteID + "/" + attachmentName + ")")
 			}
 		}
+	}
+	if noteID != "" {
 		for _, attachment := range msg.Attachments {
 			attachmentName, ok, err := p.ensureSignalMessageAttachment(ctx, noteID, attachment)
 			if err != nil {
@@ -591,84 +623,37 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 				continue
 			}
 			if ok {
-				lines = append(lines, "  ![](/attachments/"+noteID+"/"+attachmentName+")")
+				appendContinuation("![](/attachments/" + noteID + "/" + attachmentName + ")")
 			}
-		}
-		return lines, nil
-	}
-
-	lines := []string{}
-	if len(msg.Previews) > 0 {
-		for idx, preview := range msg.Previews {
-			if strings.TrimSpace(preview.URL) == "" {
-				continue
-			}
-			title := preview.Title
-			if title == "" {
-				title = preview.URL
-			}
-			lines = append(lines, fmt.Sprintf("- [ ] [%s](%s)%s", title, preview.URL, suffixTags))
-			if preview.Description != "" {
-				lines = append(lines, "", "  "+preview.Description)
-			}
-			if preview.ImageID != "" && noteID != "" {
-				attachmentName, ok, err := p.ensureSignalPreviewImage(ctx, noteID, preview)
-				if err != nil {
-					slog.Warn("signal preview image", "err", err)
-				}
-				if ok {
-					lines = append(lines, "", "  ![](/attachments/"+noteID+"/"+attachmentName+")")
-				}
-			}
-			if idx < len(msg.Previews)-1 {
-				lines = append(lines, "")
-			}
-		}
-		if len(lines) > 0 {
-			if text != "" {
-				lines = append(lines, "", fmt.Sprintf("- [ ] %s%s", text, suffixTags))
-			}
-			if noteID != "" {
-				for _, attachment := range msg.Attachments {
-					attachmentName, ok, err := p.ensureSignalMessageAttachment(ctx, noteID, attachment)
-					if err != nil {
-						slog.Warn("signal attachment image", "err", err)
-						continue
-					}
-					if ok {
-						lines = append(lines, "", "  ![](/attachments/"+noteID+"/"+attachmentName+")")
-					}
-				}
-			}
-			return lines, nil
-		}
-	}
-	if text == "" {
-		return nil, nil
-	}
-	lines = []string{fmt.Sprintf("- [ ] %s%s", text, suffixTags)}
-	if noteID == "" {
-		return lines, nil
-	}
-	for _, attachment := range msg.Attachments {
-		attachmentName, ok, err := p.ensureSignalMessageAttachment(ctx, noteID, attachment)
-		if err != nil {
-			slog.Warn("signal attachment image", "err", err)
-			continue
-		}
-		if ok {
-			lines = append(lines, "  ![](/attachments/"+noteID+"/"+attachmentName+")")
 		}
 	}
 	return lines, nil
 }
 
-func normalizeSignalText(text string) string {
-	text = strings.TrimSpace(text)
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = strings.ReplaceAll(text, "\r", " ")
-	text = strings.ReplaceAll(text, "\t", " ")
-	return strings.TrimSpace(text)
+func normalizeSignalTextLines(text string) []string {
+	text = normalizeLineEndings(text)
+	parts := strings.Split(text, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		line := strings.Join(strings.Fields(strings.TrimSpace(part)), " ")
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func signalPreviewLink(preview signalPreview) string {
+	url := strings.TrimSpace(preview.URL)
+	if url == "" {
+		return ""
+	}
+	title := strings.TrimSpace(preview.Title)
+	if title == "" {
+		title = url
+	}
+	return fmt.Sprintf("[%s](%s)", title, url)
 }
 
 func (p *signalPoller) ensureSignalPreviewImage(ctx context.Context, noteID string, preview signalPreview) (string, bool, error) {

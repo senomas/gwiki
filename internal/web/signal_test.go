@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -224,6 +225,9 @@ func TestBuildSignalNoteLines_ImageWithTextTemplate(t *testing.T) {
 	if lines[1] != "  ![](/attachments/note-123/photo.jpg)" {
 		t.Fatalf("unexpected image line: %q", lines[1])
 	}
+	if countTaskLines(lines) != 1 {
+		t.Fatalf("expected exactly one task line, got %d: %#v", countTaskLines(lines), lines)
+	}
 }
 
 func TestBuildSignalNoteLines_DataMessageAttachmentsWithText(t *testing.T) {
@@ -268,6 +272,9 @@ func TestBuildSignalNoteLines_DataMessageAttachmentsWithText(t *testing.T) {
 	if lines[1] != "  ![](/attachments/note-123/"+attachmentFile+")" {
 		t.Fatalf("unexpected image line: %q", lines[1])
 	}
+	if countTaskLines(lines) != 1 {
+		t.Fatalf("expected exactly one task line, got %d: %#v", countTaskLines(lines), lines)
+	}
 }
 
 func TestBuildSignalNoteLines_LinkPreviewIncludesOriginalMessage(t *testing.T) {
@@ -286,17 +293,31 @@ func TestBuildSignalNoteLines_LinkPreviewIncludesOriginalMessage(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatalf("expected non-empty lines")
 	}
-	if lines[0] != "- [ ] [TikTok](https://vt.tiktok.com/ZSmkQSUcW) #inbox #signal" {
-		t.Fatalf("unexpected preview line: %q", lines[0])
+	if lines[0] != "- [ ] https://vt.tiktok.com/ZSmkQSUcW/ #inbox #signal" {
+		t.Fatalf("unexpected primary task line: %q", lines[0])
 	}
 	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "  Damar Valley Glamping Wonosobo") {
+		t.Fatalf("expected original message caption as continuation line, got: %#v", lines)
+	}
+	if !strings.Contains(joined, "  [TikTok](https://vt.tiktok.com/ZSmkQSUcW)") {
+		t.Fatalf("expected preview link as continuation line, got: %#v", lines)
+	}
 	if !strings.Contains(joined, "Preview description") {
 		t.Fatalf("expected preview description in output: %#v", lines)
 	}
-	if !strings.Contains(joined, "- [ ] https://vt.tiktok.com/ZSmkQSUcW/") {
-		t.Fatalf("expected original message URL in output, got: %#v", lines)
+	if countTaskLines(lines) != 1 {
+		t.Fatalf("expected exactly one task line, got %d: %#v", countTaskLines(lines), lines)
 	}
-	if !strings.Contains(joined, "Damar Valley Glamping Wonosobo #inbox #signal") {
-		t.Fatalf("expected original message line in output, got: %#v", lines)
+}
+
+func countTaskLines(lines []string) int {
+	re := regexp.MustCompile(`^\s*- \[( |x|X)\] `)
+	count := 0
+	for _, line := range lines {
+		if re.MatchString(line) {
+			count++
+		}
 	}
+	return count
 }
