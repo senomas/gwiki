@@ -130,11 +130,11 @@ func main() {
 		slog.Error("sync access", "err", err)
 		os.Exit(1)
 	}
-	if scanned, updated, cleaned, err := idx.RebuildFromFSWithStats(ctx, cfg.RepoPath); err != nil {
-		slog.Error("rebuild after sync access", "err", err)
+	if scanned, updated, cleaned, err := idx.ReconcileFilesFromDBWithStats(ctx, cfg.RepoPath); err != nil {
+		slog.Error("reconcile after sync access", "err", err)
 		os.Exit(1)
 	} else {
-		slog.Info("index rebuild after sync access", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+		slog.Info("index reconcile after sync access", "scanned", scanned, "updated", updated, "cleaned", cleaned)
 	}
 	syncGitHistoryOnStartup(ctx, cfg, idx, users)
 
@@ -321,12 +321,18 @@ func runScheduledSync(ctx context.Context, cfg config.Config, idx *index.Index) 
 			slog.Warn("sync schedule auth refresh failed", "err", err)
 			return
 		}
-		scanned, updated, cleaned, rebuildErr := idx.RebuildFromFSWithStats(ctx, cfg.RepoPath)
-		if rebuildErr != nil {
-			slog.Warn("sync schedule rebuild failed", "err", rebuildErr)
+		scanned, updated, cleaned, recheckErr := idx.RecheckFromFS(ctx, cfg.RepoPath)
+		if recheckErr != nil {
+			slog.Warn("sync schedule recheck failed", "err", recheckErr)
 			return
 		}
-		slog.Info("sync schedule rebuild", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+		slog.Info("sync schedule recheck", "scanned", scanned, "updated", updated, "cleaned", cleaned)
+		dbScanned, dbUpdated, dbCleaned, reconcileErr := idx.ReconcileFilesFromDBWithStats(ctx, cfg.RepoPath)
+		if reconcileErr != nil {
+			slog.Warn("sync schedule db reconcile failed", "err", reconcileErr)
+			return
+		}
+		slog.Info("sync schedule db reconcile", "scanned", dbScanned, "updated", dbUpdated, "cleaned", dbCleaned)
 	}
 }
 

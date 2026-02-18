@@ -9041,6 +9041,11 @@ func (s *Server) handleSyncRun(w http.ResponseWriter, r *http.Request) {
 		if recheckErr != nil {
 			err = recheckErr
 		}
+		dbScanned, dbUpdated, dbCleaned, reconcileErr := s.idx.ReconcileFilesFromDBWithStats(r.Context(), s.cfg.RepoPath)
+		output += fmt.Sprintf("\nindex: db reconcile scanned=%d updated=%d cleaned=%d", dbScanned, dbUpdated, dbCleaned)
+		if reconcileErr != nil {
+			err = reconcileErr
+		}
 		if authErr := s.refreshAuthSources(r.Context()); authErr != nil {
 			slog.Warn("sync refresh auth sources", "err", authErr)
 			output += fmt.Sprintf("\nauth: refresh failed: %v", authErr)

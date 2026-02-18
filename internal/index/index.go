@@ -1457,6 +1457,69 @@ func (i *Index) RecheckFromFS(ctx context.Context, repoPath string) (int, int, i
 	return scanned, updated, cleaned, nil
 }
 
+func (i *Index) ReconcileFilesFromDBWithStats(ctx context.Context, repoPath string) (int, int, int, error) {
+	records, err := i.loadFileRecords(ctx)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	roots, err := ownerNoteRoots(repoPath)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	rootsByOwner := make(map[string]string, len(roots))
+	for _, root := range roots {
+		if strings.TrimSpace(root.name) == "" || strings.TrimSpace(root.notesRoot) == "" {
+			continue
+		}
+		rootsByOwner[root.name] = root.notesRoot
+	}
+
+	scanned := 0
+	updated := 0
+	seen := make(map[string]bool, len(records))
+	for notePath, rec := range records {
+		scanned++
+		ownerName, relPath, splitErr := splitOwnerPath(notePath)
+		if splitErr != nil {
+			continue
+		}
+		notesRoot := rootsByOwner[ownerName]
+		if notesRoot == "" {
+			continue
+		}
+		fullPath := filepath.Join(notesRoot, filepath.FromSlash(relPath))
+		info, statErr := os.Stat(fullPath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				continue
+			}
+			return scanned, updated, 0, statErr
+		}
+		if info.IsDir() {
+			continue
+		}
+		seen[notePath] = true
+		if rec.MTimeUnix == info.ModTime().Unix() && rec.Size == info.Size() && hashMatchesBuildVersion(rec.Hash) {
+			continue
+		}
+		content, readErr := os.ReadFile(fullPath)
+		if readErr != nil {
+			return scanned, updated, 0, readErr
+		}
+		updated++
+		if err := i.IndexNoteIfChanged(ctx, notePath, content, info.ModTime(), info.Size()); err != nil {
+			return scanned, updated, 0, err
+		}
+	}
+
+	cleaned, err := i.removeMissingRecords(ctx, records, seen)
+	if err != nil {
+		return scanned, updated, 0, err
+	}
+	return scanned, updated, cleaned, nil
+}
+
 func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, mtime time.Time, size int64) error {
 	ownerName, relPath, err := splitOwnerPath(notePath)
 	if err != nil {
