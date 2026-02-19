@@ -115,6 +115,10 @@ Key pieces:
 
 The note edit launcher is a lightweight quick action menu scoped to the edit textarea. It is opened with `Ctrl+Space` while focused in the textarea and is independent of the global quick launcher.
 
+Template split:
+- `templates/edit.html`: shared edit page shell, non-textarea fields, and non-textarea scripts.
+- `templates/note-edit-basic.html`: basic textarea implementation (`note_edit_basic` + `note_edit_basic_assets`) and textarea-related scripts.
+
 Behavior:
 - Default actions (no network): Todo, Date, Time.
 - Dynamic actions (query ≥ 1): tags plus date shortcuts (Tomorrow, Next week, Next month).
@@ -125,6 +129,8 @@ Behavior:
 Key pieces:
 - `internal/web/handlers.go`: `handleQuickEditActions`, `quickEditActionsEntries`.
 - `internal/web/server.go`: `/quick/edit-actions` route.
+- `templates/edit.html`: mounts the textarea mode via `{{template "note_edit_basic" .}}` and `{{template "note_edit_basic_assets" .}}`.
+- `templates/note-edit-basic.html`: textarea UI + command expansion + edit launcher wiring.
 - `templates/note-edit-actions.html`: edit launcher UI.
 - `templates/note_edit_actions_entries.html`: dynamic entries (tags, actions, notes).
 
@@ -141,7 +147,7 @@ Config keys and defaults:
 
 Implementation notes:
 - Values are single characters and validated in `handleSettingsSave` via `validEditCommandToken`.
-- The edit page passes settings as `data-cmd-*` attributes on the textarea; JS in `templates/edit.html` builds the command strings from these values.
+- The edit page passes settings as `data-cmd-*` attributes on the textarea; JS in `templates/note-edit-basic.html` builds the command strings from these values.
 
 ## Home index sections
 
