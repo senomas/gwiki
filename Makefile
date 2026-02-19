@@ -127,7 +127,7 @@ push-image: ensure-clean
 	docker push $(IMAGE):latest
 	$(MAKE) update-env-image IMAGE_TAG=$(IMAGE_TAG)
 
-build: build-img
+build: ensure-clean build-img
 	$(MAKE) compose-restart
 	$(MAKE) docker-prune-old-gwiki-images
 
