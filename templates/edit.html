@@ -660,11 +660,33 @@
       closeLauncher();
     }
 
+    function toOwnerScopedWikiPath(path) {
+      var value = (path || "").trim();
+      if (!value) {
+        return "";
+      }
+      if (value.charAt(0) === "@") {
+        return value;
+      }
+      if (value.charAt(0) === "/") {
+        value = value.slice(1);
+      }
+      if (value.indexOf("notes/") === 0) {
+        value = value.slice("notes/".length);
+      }
+      var slashIndex = value.indexOf("/");
+      if (slashIndex <= 0 || slashIndex >= value.length - 1) {
+        return value;
+      }
+      return "@" + value;
+    }
+
     function handleNote(path) {
-      if (!path) {
+      var value = toOwnerScopedWikiPath(path);
+      if (!value) {
         return;
       }
-      insertText("[[" + path + "]] ");
+      insertText("[[" + value + "]] ");
       closeLauncher();
     }
 
