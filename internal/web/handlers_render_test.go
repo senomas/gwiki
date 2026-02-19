@@ -90,7 +90,7 @@ func TestInjectInboxLinks_UsesSourceLineRange(t *testing.T) {
 		"  detail line",
 		"",
 	}
-	out := injectInboxLinks(lines, "note-uid", "/notes/new?o=seno", []inboxLinkTask{
+	out := injectInboxLinks(lines, "note-uid", 0, "/notes/new?o=seno", []inboxLinkTask{
 		{
 			DisplayLineNo: 1,
 			SourceLineNo:  21,
@@ -101,5 +101,46 @@ func TestInjectInboxLinks_UsesSourceLineRange(t *testing.T) {
 	}
 	if !strings.Contains(out[0], "/notes/new?line=21-24&note=note-uid&o=seno&type=inbox") {
 		t.Fatalf("expected source line range in generated link, got %q", out[0])
+	}
+}
+
+func TestInjectInboxLinks_IncludesTaskID(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	lines := []string{"- [ ] item #inbox #signal"}
+	out := injectInboxLinks(lines, "note-uid", 55, "/notes/new?o=seno", []inboxLinkTask{
+		{
+			DisplayLineNo: 1,
+			SourceLineNo:  12,
+			Hash:          hash,
+		},
+	})
+	expected := "task_id=task-55-12-" + hash
+	if !strings.Contains(out[0], expected) {
+		t.Fatalf("expected task id in generated link, got %q", out[0])
+	}
+}
+
+func TestAddInboxLinkTarget_AppendsInboxActionAttrs(t *testing.T) {
+	taskID := "task-99-10-" + strings.Repeat("b", 64)
+	input := `<p><a href="/notes/new?line=10-12&amp;note=note-uid&amp;type=inbox&amp;task_id=` + taskID + `">#inbox</a></p>`
+	out := addInboxLinkTarget(input)
+	if !strings.Contains(out, `class="js-inbox-action"`) {
+		t.Fatalf("expected inbox action class, got %q", out)
+	}
+	if !strings.Contains(out, `data-inbox-task-id="`+taskID+`"`) {
+		t.Fatalf("expected inbox task id data attribute, got %q", out)
+	}
+	if !strings.Contains(out, `data-inbox-create-href="/notes/new?line=10-12&amp;note=note-uid&amp;type=inbox&amp;task_id=`+taskID+`"`) {
+		t.Fatalf("expected inbox create href data attribute, got %q", out)
+	}
+}
+
+func TestConvertInboxTaskLine_StripsInboxAndSignal(t *testing.T) {
+	got, err := convertInboxTaskLine("  - [ ] plan #inbox #signal #work")
+	if err != nil {
+		t.Fatalf("convert failed: %v", err)
+	}
+	if got != "  - plan #work" {
+		t.Fatalf("expected converted line, got %q", got)
 	}
 }

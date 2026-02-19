@@ -835,6 +835,9 @@
     .note-actions-modal .quick-launcher__item.hidden {
       display: none;
     }
+    .note-actions-modal .quick-launcher__action-form.hidden {
+      display: none;
+    }
     .toast-stack {
       position: fixed;
       top: 1.5rem;
@@ -955,6 +958,27 @@
           <span class="quick-launcher__meta">
             <span class="quick-launcher__label">Delete</span>
             <span class="quick-launcher__hint">Remove</span>
+          </span>
+        </button>
+      </form>
+    </div>
+  </div>
+  <div id="inbox-actions-modal" class="note-actions-modal ui-overlay" aria-hidden="true">
+    <div class="quick-launcher__submenu-panel" role="dialog" aria-modal="true" aria-label="Inbox actions">
+      <a id="inbox-action-create" class="quick-launcher__item" href="#" target="_blank" rel="noopener">
+        <span class="quick-launcher__icon">N</span>
+        <span class="quick-launcher__meta">
+          <span class="quick-launcher__label">Create note</span>
+          <span class="quick-launcher__hint">From block</span>
+        </span>
+      </a>
+      <form id="inbox-action-convert-form" class="quick-launcher__action-form" method="post" hx-post="/tasks/convert-inbox" hx-swap="outerHTML">
+        <input id="inbox-action-task-id" type="hidden" name="task_id" value="">
+        <button id="inbox-action-convert" class="quick-launcher__item" type="submit">
+          <span class="quick-launcher__icon">L</span>
+          <span class="quick-launcher__meta">
+            <span class="quick-launcher__label">Convert to list</span>
+            <span class="quick-launcher__hint">Strip #inbox #signal</span>
           </span>
         </button>
       </form>
@@ -2003,6 +2027,149 @@
   </script>
   <script>
     (function () {
+      var modal = document.getElementById("inbox-actions-modal");
+      var createLink = document.getElementById("inbox-action-create");
+      var convertForm = document.getElementById("inbox-action-convert-form");
+      var convertButton = document.getElementById("inbox-action-convert");
+      var taskInput = document.getElementById("inbox-action-task-id");
+      var defaultAction = null;
+      if (!modal || !createLink || !convertForm || !convertButton || !taskInput) {
+        return;
+      }
+
+      function closeModal() {
+        modal.classList.remove("is-open");
+        modal.setAttribute("aria-hidden", "true");
+        defaultAction = null;
+      }
+
+      function cssAttrEscape(value) {
+        return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      }
+
+      function setConvertTarget(notePath, taskID) {
+        if (!notePath || !taskID) {
+          convertForm.classList.add("hidden");
+          taskInput.value = "";
+          convertForm.removeAttribute("hx-target");
+          defaultAction = createLink;
+          return;
+        }
+        var selector = '.note-body[data-note-path="' + cssAttrEscape(notePath) + '"]';
+        convertForm.setAttribute("hx-target", selector);
+        taskInput.value = taskID;
+        convertForm.classList.remove("hidden");
+        defaultAction = convertButton;
+      }
+
+      function closestElement(target, selector) {
+        if (!target) {
+          return null;
+        }
+        var el = target.nodeType === 1 ? target : target.parentElement;
+        if (!el || !el.closest) {
+          return null;
+        }
+        return el.closest(selector);
+      }
+
+      function openModal(trigger) {
+        var createHref = trigger.getAttribute("data-inbox-create-href") || trigger.getAttribute("href") || "#";
+        createLink.setAttribute("href", createHref);
+        var target = trigger.getAttribute("target");
+        if (target) {
+          createLink.setAttribute("target", target);
+        } else {
+          createLink.removeAttribute("target");
+        }
+        var rel = trigger.getAttribute("rel");
+        if (rel) {
+          createLink.setAttribute("rel", rel);
+        } else {
+          createLink.removeAttribute("rel");
+        }
+
+        var noteBody = closestElement(trigger, ".note-body");
+        var notePath = noteBody ? (noteBody.getAttribute("data-note-path") || "") : "";
+        var taskID = trigger.getAttribute("data-inbox-task-id") || "";
+        setConvertTarget(notePath, taskID);
+
+        modal.classList.add("is-open");
+        modal.setAttribute("aria-hidden", "false");
+        if (defaultAction) {
+          defaultAction.focus({preventScroll: true});
+        }
+      }
+
+      document.addEventListener("click", function (event) {
+        var trigger = closestElement(event.target, ".js-inbox-action");
+        if (!trigger) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        openModal(trigger);
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") {
+          return;
+        }
+        var active = document.activeElement;
+        if (!active) {
+          return;
+        }
+        var trigger = closestElement(active, ".js-inbox-action");
+        if (!trigger) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        openModal(trigger);
+      });
+
+      createLink.addEventListener("click", function () {
+        closeModal();
+      });
+
+      convertForm.addEventListener("htmx:beforeRequest", function () {
+        closeModal();
+      });
+
+      modal.addEventListener("click", function (event) {
+        if (event.target === modal) {
+          closeModal();
+        }
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (!modal.classList.contains("is-open")) {
+          return;
+        }
+        if (event.defaultPrevented) {
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeModal();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          var active = document.activeElement;
+          if (active && modal.contains(active) && typeof active.click === "function") {
+            active.click();
+            return;
+          }
+          if (defaultAction && typeof defaultAction.click === "function") {
+            defaultAction.click();
+          }
+        }
+      });
+    })();
+  </script>
+  <script>
+    (function () {
       var launcher = document.getElementById("quick-launcher");
       function isVisibleItem(item) {
         if (!item || item.hasAttribute("disabled")) {
@@ -2554,6 +2721,11 @@
         if (noteActions) {
           noteActions.classList.remove("is-open");
           noteActions.setAttribute("aria-hidden", "true");
+        }
+        var inboxActions = document.getElementById("inbox-actions-modal");
+        if (inboxActions) {
+          inboxActions.classList.remove("is-open");
+          inboxActions.setAttribute("aria-hidden", "true");
         }
       }
       function shouldReloadOnRestore(pathname) {

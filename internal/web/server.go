@@ -285,5 +285,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/sync", s.handleSync)
 	s.mux.HandleFunc("/tasks/toggle", s.handleToggleTask)
 	s.mux.HandleFunc("/tasks/archive", s.handleArchiveTask)
+	s.mux.HandleFunc("/tasks/convert-inbox", s.handleConvertInboxTask)
 	s.mux.HandleFunc("/rebuild", s.handleRebuild)
 }

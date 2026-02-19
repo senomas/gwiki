@@ -7526,7 +7526,9 @@ func applyRenderReplacements(input string) string {
 }
 
 var inboxTagRe = regexp.MustCompile(`(?i)#inbox\b`)
-var inboxLinkRe = regexp.MustCompile(`(?i)(<a\s+[^>]*href="[^"]*type=inbox[^"]*"[^>]*)>`)
+var inboxLinkRe = regexp.MustCompile(`(?i)<a\s+[^>]*href="[^"]*type=inbox[^"]*"[^>]*>`)
+var inboxHrefAttrRe = regexp.MustCompile(`(?i)\bhref="([^"]*)"`)
+var inboxClassAttrRe = regexp.MustCompile(`(?i)\bclass="([^"]*)"`)
 
 func replaceDueTokens(input string) string {
 	return dueTokenRe.ReplaceAllStringFunc(input, func(match string) string {
@@ -7722,10 +7724,11 @@ func extractInboxFromNote(content string, startLine int, endLine int) (string, e
 type inboxLinkTask struct {
 	DisplayLineNo int
 	SourceLineNo  int
+	Hash          string
 }
 
-func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []inboxLinkTask) []string {
-	if noteID == "" || len(lines) == 0 || len(tasks) == 0 {
+func injectInboxLinks(lines []string, noteRef string, fileID int, baseURL string, tasks []inboxLinkTask) []string {
+	if noteRef == "" || len(lines) == 0 || len(tasks) == 0 {
 		return lines
 	}
 	for _, task := range tasks {
@@ -7749,9 +7752,12 @@ func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []inb
 			sourceEndLine = task.SourceLineNo
 		}
 		link := mutateURL(baseURL, func(query url.Values) {
-			query.Set("note", noteID)
+			query.Set("note", noteRef)
 			query.Set("line", fmt.Sprintf("%d-%d", task.SourceLineNo, sourceEndLine))
 			query.Set("type", "inbox")
+			if fileID > 0 && strings.TrimSpace(task.Hash) != "" {
+				query.Set("task_id", taskCheckboxID(fileID, task.SourceLineNo, task.Hash))
+			}
 		})
 		replaced := inboxTagRe.ReplaceAllStringFunc(line, func(match string) string {
 			return fmt.Sprintf("[%s](%s)", match, link)
@@ -7761,15 +7767,74 @@ func injectInboxLinks(lines []string, noteID string, baseURL string, tasks []inb
 	return lines
 }
 
-func addInboxLinkTarget(html string) string {
-	if html == "" {
-		return html
+func htmlTagHasAttr(tag string, attr string) bool {
+	attr = strings.ToLower(strings.TrimSpace(attr))
+	if attr == "" {
+		return false
 	}
-	return inboxLinkRe.ReplaceAllStringFunc(html, func(match string) string {
-		if strings.Contains(strings.ToLower(match), "target=") {
-			return match
+	return strings.Contains(strings.ToLower(tag), attr+`="`)
+}
+
+func htmlTagAppendAttr(tag string, attr string, value string) string {
+	if strings.TrimSpace(tag) == "" || strings.TrimSpace(attr) == "" {
+		return tag
+	}
+	escaped := html.EscapeString(value)
+	if strings.HasSuffix(tag, ">") {
+		return strings.TrimSuffix(tag, ">") + fmt.Sprintf(` %s="%s">`, attr, escaped)
+	}
+	return tag + fmt.Sprintf(` %s="%s"`, attr, escaped)
+}
+
+func htmlTagEnsureClass(tag string, className string) string {
+	className = strings.TrimSpace(className)
+	if className == "" || strings.TrimSpace(tag) == "" {
+		return tag
+	}
+	idx := inboxClassAttrRe.FindStringSubmatchIndex(tag)
+	if len(idx) >= 4 {
+		raw := tag[idx[2]:idx[3]]
+		classes := strings.Fields(raw)
+		for _, classToken := range classes {
+			if classToken == className {
+				return tag
+			}
 		}
-		return strings.TrimSuffix(match, ">") + ` target="_blank" rel="noopener">`
+		classes = append(classes, className)
+		return tag[:idx[2]] + strings.Join(classes, " ") + tag[idx[3]:]
+	}
+	return htmlTagAppendAttr(tag, "class", className)
+}
+
+func addInboxLinkTarget(input string) string {
+	if input == "" {
+		return input
+	}
+	return inboxLinkRe.ReplaceAllStringFunc(input, func(match string) string {
+		decorated := htmlTagEnsureClass(match, "js-inbox-action")
+		hrefMatch := inboxHrefAttrRe.FindStringSubmatch(decorated)
+		href := ""
+		if len(hrefMatch) >= 2 {
+			href = html.UnescapeString(hrefMatch[1])
+		}
+		if href != "" && !htmlTagHasAttr(decorated, "data-inbox-create-href") {
+			decorated = htmlTagAppendAttr(decorated, "data-inbox-create-href", href)
+		}
+		if href != "" {
+			if parsed, err := url.Parse(href); err == nil {
+				taskID := strings.TrimSpace(parsed.Query().Get("task_id"))
+				if taskID != "" && !htmlTagHasAttr(decorated, "data-inbox-task-id") {
+					decorated = htmlTagAppendAttr(decorated, "data-inbox-task-id", taskID)
+				}
+			}
+		}
+		if !htmlTagHasAttr(decorated, "target") {
+			decorated = htmlTagAppendAttr(decorated, "target", "_blank")
+		}
+		if !htmlTagHasAttr(decorated, "rel") {
+			decorated = htmlTagAppendAttr(decorated, "rel", "noopener")
+		}
+		return decorated
 	})
 }
 
@@ -7787,6 +7852,7 @@ func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []inboxLinkTas
 			out = append(out, inboxLinkTask{
 				DisplayLineNo: task.LineNo,
 				SourceLineNo:  task.LineNo,
+				Hash:          strings.TrimSpace(task.Hash),
 			})
 		}
 		return out
@@ -7808,6 +7874,7 @@ func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []inboxLinkTas
 			out = append(out, inboxLinkTask{
 				DisplayLineNo: task.LineNo,
 				SourceLineNo:  task.LineNo,
+				Hash:          strings.TrimSpace(task.Hash),
 			})
 		}
 		return out
@@ -7823,6 +7890,7 @@ func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []inboxLinkTas
 			remapped = append(remapped, inboxLinkTask{
 				DisplayLineNo: task.LineNo,
 				SourceLineNo:  task.LineNo,
+				Hash:          "",
 			})
 			continue
 		}
@@ -7832,6 +7900,7 @@ func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []inboxLinkTas
 			remapped = append(remapped, inboxLinkTask{
 				DisplayLineNo: task.LineNo,
 				SourceLineNo:  task.LineNo,
+				Hash:          hash,
 			})
 			continue
 		}
@@ -7839,6 +7908,7 @@ func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []inboxLinkTas
 		remapped = append(remapped, inboxLinkTask{
 			DisplayLineNo: lineNos[next],
 			SourceLineNo:  task.LineNo,
+			Hash:          hash,
 		})
 	}
 	return remapped
@@ -7847,8 +7917,19 @@ func remapTasksToBodyLineNumbers(body string, tasks []index.Task) []inboxLinkTas
 func (s *Server) renderNoteContentHTML(r *http.Request, renderCtx context.Context, notePath string, noteID string, source string, tasks []index.Task) (string, error) {
 	body := index.StripFrontmatter(normalizeLineEndings(source))
 	lines := strings.Split(body, "\n")
+	fileID, fileIDErr := s.idx.FileIDByPath(r.Context(), notePath)
+	if fileIDErr != nil && !errors.Is(fileIDErr, sql.ErrNoRows) {
+		return "", fmt.Errorf("lookup file id for %s: %w", notePath, fileIDErr)
+	}
+	if errors.Is(fileIDErr, sql.ErrNoRows) {
+		fileID = 0
+	}
 	inboxTasks := remapTasksToBodyLineNumbers(body, tasks)
-	lines = injectInboxLinks(lines, noteID, baseURLForLinks(r, "/notes/new"), inboxTasks)
+	noteRef := strings.TrimSpace(noteID)
+	if noteRef == "" {
+		noteRef = strings.TrimSpace(notePath)
+	}
+	lines = injectInboxLinks(lines, noteRef, fileID, baseURLForLinks(r, "/notes/new"), inboxTasks)
 	if ownerName, _, err := s.ownerFromNotePath(notePath); err == nil {
 		renderCtx = withWikiLinkOwner(renderCtx, ownerName)
 	}
@@ -7857,11 +7938,7 @@ func (s *Server) renderNoteContentHTML(r *http.Request, renderCtx context.Contex
 		return "", err
 	}
 	rendered = addInboxLinkTarget(rendered)
-	fileID, err := s.idx.FileIDByPath(r.Context(), notePath)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("lookup file id for %s: %w", notePath, err)
-	}
-	if err == nil && IsAuthenticated(r.Context()) {
+	if fileIDErr == nil && IsAuthenticated(r.Context()) {
 		rendered = decorateTaskCheckboxes(rendered, fileID, tasks)
 	}
 	return rendered, nil
@@ -9379,6 +9456,51 @@ func extractTaskBlock(lines []string, lineNo int) (int, int, []string, error) {
 	return start, end, blockLines, nil
 }
 
+func isInboxSignalTagToken(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	token = strings.TrimLeft(token, "([{<")
+	token = strings.TrimRight(token, ".,!?;:)]}>")
+	token = strings.ToLower(token)
+	return token == "#inbox" || token == "#signal"
+}
+
+func stripInboxSignalTags(text string) string {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+	filtered := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if isInboxSignalTagToken(field) {
+			continue
+		}
+		filtered = append(filtered, field)
+	}
+	return strings.Join(filtered, " ")
+}
+
+func convertInboxTaskLine(line string) (string, error) {
+	match := taskToggleLineRe.FindStringSubmatch(line)
+	if len(match) == 0 {
+		return "", fmt.Errorf("invalid task line")
+	}
+	if strings.EqualFold(strings.TrimSpace(match[2]), "x") {
+		return "", fmt.Errorf("task is completed")
+	}
+	indent := strings.TrimSuffix(match[1], "- [")
+	body := strings.TrimPrefix(match[3], "] ")
+	body = taskDoneTokenRe.ReplaceAllString(body, "")
+	body = stripInboxSignalTags(body)
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return indent + "-", nil
+	}
+	return indent + "- " + body, nil
+}
+
 func appendArchiveTaskBlock(existingContent string, blockLines []string) string {
 	existingContent = normalizeLineEndings(existingContent)
 	block := strings.TrimRight(strings.Join(blockLines, "\n"), "\n")
@@ -10598,6 +10720,130 @@ func removeAuthUser(path string, username string) (bool, error) {
 	return true, nil
 }
 
+func (s *Server) renderTaskMutationNoteBody(w http.ResponseWriter, r *http.Request, notePath string, updatedContent string) error {
+	fullBody := index.StripFrontmatter(normalizeLineEndings(updatedContent))
+	meta := index.FrontmatterAttributes(updatedContent)
+	renderCtx := r.Context()
+	renderSource := fullBody
+	var tasksForNote []index.Task
+	currentURL := r.Header.Get("HX-Current-URL")
+	isIndex := false
+	if currentURL != "" {
+		if parsed, err := url.Parse(currentURL); err == nil && parsed.Path == "/" {
+			isIndex = true
+		}
+	}
+	if strings.Contains(currentURL, "/todo") {
+		activeTags := []string{}
+		activeFolder, activeRoot := "", false
+		activeJournal := false
+		activeDue := false
+		dueDate := ""
+		noteTags := []string{}
+		mentionTagsActive := []string{}
+		activeTagFilters := false
+		hashtagFilters := []string{}
+		if parsed, err := url.Parse(currentURL); err == nil {
+			activeTags = parseTagsParam(parsed.Query().Get("t"))
+			activeTagFilters, hashtagFilters = listTagFilterStateFromTags(activeTags)
+			activeFolder, activeRoot = parseFolderParam(parsed.Query().Get("f"))
+			_, activeDue, activeJournal, noteTags = splitSpecialTags(activeTags)
+			if activeDue {
+				dueDate = time.Now().Format("2006-01-02")
+			}
+			mentionTagsActive, noteTags = splitMentionTags(noteTags)
+		}
+		currentUser := currentUserName(r.Context())
+		mentionTagsFilter := append([]string{}, mentionTagsActive...)
+		if currentUser != "" {
+			currentMention := "@" + currentUser
+			found := false
+			for _, tag := range mentionTagsFilter {
+				if tag == currentMention {
+					found = true
+					break
+				}
+			}
+			if !found {
+				mentionTagsFilter = append(mentionTagsFilter, currentMention)
+			}
+		}
+		tasks, err := s.idx.OpenTasksWithMentions(renderCtx, noteTags, mentionTagsFilter, currentUser, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
+		if err == nil {
+			tasksByNote := make(map[string][]index.TaskItem)
+			for _, task := range tasks {
+				tasksByNote[task.Path] = append(tasksByNote[task.Path], task)
+			}
+			noteTasks := tasksByNote[notePath]
+			sort.Slice(noteTasks, func(i, j int) bool {
+				return noteTasks[i].LineNo < noteTasks[j].LineNo
+			})
+			lines := strings.Split(fullBody, "\n")
+			if len(noteTasks) > 0 {
+				snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
+				renderSource = snippet
+				tasksForNote = checkboxTasks
+			} else {
+				renderSource = ""
+				tasksForNote = nil
+			}
+			if activeTagFilters {
+				if len(hashtagFilters) == 0 {
+					renderSource = ""
+					tasksForNote = nil
+				} else {
+					contextMarkdown, selectedLines, ctxErr := s.tagFilteredContextSelection(renderCtx, notePath, normalizeLineEndings(updatedContent), hashtagFilters)
+					if ctxErr != nil {
+						slog.Warn("toggle task todo filtered context", "path", notePath, "err", ctxErr)
+						renderSource = ""
+						tasksForNote = nil
+					} else {
+						contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
+						snippetTasks := filterTaskItemsOutsideSelectedLines(noteTasks, selectedLines)
+						snippet, _ := buildTodoDebugSnippet(lines, snippetTasks)
+						renderSource = snippet
+						tasksForNote = buildTodoTagFilteredRenderTasks(noteTasks, selectedLines)
+						if contextMarkdown != "" {
+							if strings.TrimSpace(renderSource) == "" {
+								renderSource = contextMarkdown
+							} else {
+								renderSource = contextMarkdown + "\n\n" + strings.TrimLeft(renderSource, "\n")
+							}
+						}
+					}
+				}
+			}
+		}
+	} else if isIndex {
+		snippet := index.FilterCompletedTasksWithHidden(updatedContent)
+		renderSource = snippet.Visible
+		tasksForNote = snippet.OpenTasks
+	} else {
+		metaTasks := index.ParseContent(updatedContent).Tasks
+		tasksForNote = make([]index.Task, 0, len(metaTasks))
+		for _, t := range metaTasks {
+			tasksForNote = append(tasksForNote, index.Task{
+				LineNo: t.LineNo,
+				Hash:   t.Hash,
+				Done:   t.Done,
+			})
+		}
+	}
+	renderedBody, err := s.renderNoteContentHTML(r, renderCtx, notePath, meta.ID, renderSource, tasksForNote)
+	if err != nil {
+		return err
+	}
+	noteBody := fmt.Sprintf(
+		`<div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="%s" data-note-path="%s">%s</div>`,
+		html.EscapeString(meta.ID),
+		html.EscapeString(notePath),
+		renderedBody,
+	)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(noteBody))
+	return nil
+}
+
 func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -10736,6 +10982,94 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, targetURL, http.StatusSeeOther)
 }
 
+func (s *Server) handleConvertInboxTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	taskID := strings.TrimSpace(r.Form.Get("task_id"))
+	fileID, lineNo, hash, err := parseTaskID(taskID)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	notePath, err := s.idx.PathByFileID(r.Context(), fileID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	if !s.requireWriteAccessForPath(w, r, notePath) {
+		return
+	}
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	contentBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	content := normalizeLineEndings(string(contentBytes))
+	body := index.StripFrontmatter(content)
+	lines := strings.Split(body, "\n")
+	if lineNo < 1 || lineNo > len(lines) {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	line := lines[lineNo-1]
+	if index.TaskLineHash(line) != hash {
+		http.Error(w, "task changed, refresh the page", http.StatusConflict)
+		return
+	}
+	convertedLine, err := convertInboxTaskLine(line)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	lines[lineNo-1] = convertedLine
+	updatedBody := strings.Join(lines, "\n")
+	updatedContent := updatedBody
+	if fm := index.FrontmatterBlock(content); fm != "" {
+		updatedContent = fm + "\n" + updatedBody
+	}
+	updatedContent = normalizeLineEndings(updatedContent)
+	updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, time.Now(), s.cfg.UpdatedHistoryMax, "", historyUser(r.Context()))
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	unlock := s.locker.Lock(notePath)
+	if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
+		unlock()
+		s.internalServerError(w, r, err)
+		return
+	}
+	unlock()
+	if info, statErr := os.Stat(fullPath); statErr == nil {
+		_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
+	}
+	if ownerName, _, splitErr := s.ownerFromNotePath(notePath); splitErr == nil {
+		s.commitOwnerRepoAsync(ownerName, "convert inbox task "+notePath)
+	}
+	if err := s.renderTaskMutationNoteBody(w, r, notePath, updatedContent); err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+}
+
 func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -10837,127 +11171,10 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 			s.commitOwnerRepoAsync(ownerName, "checked todo "+notePath)
 		}
 	}
-	fullBody := index.StripFrontmatter(normalizeLineEndings(updatedContent))
-	meta := index.FrontmatterAttributes(updatedContent)
-	renderCtx := r.Context()
-	renderSource := fullBody
-	var tasksForNote []index.Task
-	currentURL := r.Header.Get("HX-Current-URL")
-	isIndex := false
-	if currentURL != "" {
-		if parsed, err := url.Parse(currentURL); err == nil && parsed.Path == "/" {
-			isIndex = true
-		}
-	}
-	if strings.Contains(currentURL, "/todo") {
-		activeTags := []string{}
-		activeFolder, activeRoot := "", false
-		activeJournal := false
-		activeDue := false
-		dueDate := ""
-		noteTags := []string{}
-		mentionTagsActive := []string{}
-		activeTagFilters := false
-		hashtagFilters := []string{}
-		if parsed, err := url.Parse(currentURL); err == nil {
-			activeTags = parseTagsParam(parsed.Query().Get("t"))
-			activeTagFilters, hashtagFilters = listTagFilterStateFromTags(activeTags)
-			activeFolder, activeRoot = parseFolderParam(parsed.Query().Get("f"))
-			_, activeDue, activeJournal, noteTags = splitSpecialTags(activeTags)
-			if activeDue {
-				dueDate = time.Now().Format("2006-01-02")
-			}
-			mentionTagsActive, noteTags = splitMentionTags(noteTags)
-		}
-		currentUser := currentUserName(r.Context())
-		mentionTagsFilter := append([]string{}, mentionTagsActive...)
-		if currentUser != "" {
-			currentMention := "@" + currentUser
-			found := false
-			for _, tag := range mentionTagsFilter {
-				if tag == currentMention {
-					found = true
-					break
-				}
-			}
-			if !found {
-				mentionTagsFilter = append(mentionTagsFilter, currentMention)
-			}
-		}
-		tasks, err := s.idx.OpenTasksWithMentions(renderCtx, noteTags, mentionTagsFilter, currentUser, 300, activeDue, dueDate, activeFolder, activeRoot, activeJournal)
-		if err == nil {
-			tasksByNote := make(map[string][]index.TaskItem)
-			for _, task := range tasks {
-				tasksByNote[task.Path] = append(tasksByNote[task.Path], task)
-			}
-			noteTasks := tasksByNote[notePath]
-			sort.Slice(noteTasks, func(i, j int) bool {
-				return noteTasks[i].LineNo < noteTasks[j].LineNo
-			})
-			lines := strings.Split(fullBody, "\n")
-			if len(noteTasks) > 0 {
-				snippet, checkboxTasks := buildTodoDebugSnippet(lines, noteTasks)
-				renderSource = snippet
-				tasksForNote = checkboxTasks
-			} else {
-				renderSource = ""
-				tasksForNote = nil
-			}
-			if activeTagFilters {
-				if len(hashtagFilters) == 0 {
-					renderSource = ""
-					tasksForNote = nil
-				} else {
-					contextMarkdown, selectedLines, ctxErr := s.tagFilteredContextSelection(renderCtx, notePath, normalizeLineEndings(updatedContent), hashtagFilters)
-					if ctxErr != nil {
-						slog.Warn("toggle task todo filtered context", "path", notePath, "err", ctxErr)
-						renderSource = ""
-						tasksForNote = nil
-					} else {
-						contextMarkdown = strings.TrimRight(index.FilterCompletedTasksWithHidden(contextMarkdown).Visible, "\n")
-						snippetTasks := filterTaskItemsOutsideSelectedLines(noteTasks, selectedLines)
-						snippet, _ := buildTodoDebugSnippet(lines, snippetTasks)
-						renderSource = snippet
-						tasksForNote = buildTodoTagFilteredRenderTasks(noteTasks, selectedLines)
-						if contextMarkdown != "" {
-							if strings.TrimSpace(renderSource) == "" {
-								renderSource = contextMarkdown
-							} else {
-								renderSource = contextMarkdown + "\n\n" + strings.TrimLeft(renderSource, "\n")
-							}
-						}
-					}
-				}
-			}
-		}
-	} else if isIndex {
-		snippet := index.FilterCompletedTasksWithHidden(updatedContent)
-		renderSource = snippet.Visible
-		tasksForNote = snippet.OpenTasks
-	} else {
-		metaTasks := index.ParseContent(updatedContent).Tasks
-		tasksForNote = make([]index.Task, 0, len(metaTasks))
-		for _, t := range metaTasks {
-			tasksForNote = append(tasksForNote, index.Task{
-				LineNo: t.LineNo,
-				Hash:   t.Hash,
-				Done:   t.Done,
-			})
-		}
-	}
-	renderedBody, err := s.renderNoteContentHTML(r, renderCtx, notePath, meta.ID, renderSource, tasksForNote)
-	if err != nil {
+	if err := s.renderTaskMutationNoteBody(w, r, notePath, updatedContent); err != nil {
 		s.internalServerError(w, r, err)
 		return
 	}
-	noteBody := fmt.Sprintf(
-		`<div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="%s" data-note-path="%s">%s</div>`,
-		html.EscapeString(meta.ID),
-		html.EscapeString(notePath),
-		renderedBody,
-	)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(noteBody))
 }
 
 func (s *Server) handleToastList(w http.ResponseWriter, r *http.Request) {

@@ -815,14 +815,23 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	if strings.Contains(html, "prefix-before") {
 		t.Fatalf("expected sibling context to be excluded in todo body, got %s", html)
 	}
-	if !strings.Contains(html, "task root #tag1 #inbox") {
+	if !strings.Contains(html, "task root #tag1") {
 		t.Fatalf("expected todo task snippet retained in hybrid mode, got %s", html)
 	}
-	if strings.Count(html, "task root #tag1 #inbox") != 1 {
+	if strings.Count(html, "task root #tag1") != 1 {
 		t.Fatalf("expected tagged todo line rendered once in hybrid mode, got %s", html)
+	}
+	if !strings.Contains(html, `data-inbox-create-href="`) {
+		t.Fatalf("expected todo task inbox tag rendered as action link, got %s", html)
 	}
 	if !strings.Contains(html, `hx-post="/tasks/toggle"`) {
 		t.Fatalf("expected todo checkbox to be clickable, got %s", html)
+	}
+	if !strings.Contains(html, `js-inbox-action`) {
+		t.Fatalf("expected inbox link to expose inbox action class, got %s", html)
+	}
+	if !strings.Contains(html, `data-inbox-task-id="task-`) {
+		t.Fatalf("expected inbox link to carry task id metadata, got %s", html)
 	}
 	taskIDLine := regexp.MustCompile(`task-\d+-(\d+)-[0-9a-f]{64}`)
 	match := taskIDLine.FindStringSubmatch(html)
@@ -851,8 +860,105 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	if !strings.Contains(html, "mention note") {
 		t.Fatalf("expected mention note card title, got %s", html)
 	}
-	if strings.Contains(html, "ping @dev") || strings.Contains(html, "task root #tag1 #inbox") {
+	if strings.Contains(html, "ping @dev") || strings.Contains(html, "task root #tag1") {
 		t.Fatalf("expected mention-only todo filter to hide note body content, got %s", html)
+	}
+}
+
+func TestConvertInboxTaskToPlainListItem(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	content := strings.Join([]string{
+		"# Inbox",
+		"",
+		"- [ ] triage this #inbox #signal #dev",
+		"  context line",
+	}, "\n")
+	relPath := "inbox.md"
+	notePath := filepath.ToSlash(filepath.Join(owner, relPath))
+	fullPath := filepath.Join(notesDir, relPath)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+	fileID, err := idx.FileIDByPath(ctx, notePath)
+	if err != nil {
+		t.Fatalf("file id: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	hash := index.TaskLineHash("- [ ] triage this #inbox #signal #dev")
+	form := url.Values{}
+	form.Set("task_id", taskCheckboxID(fileID, 3, hash))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/tasks/convert-inbox", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post convert inbox: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("convert status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	rendered := string(body)
+	if !strings.Contains(rendered, "triage this #dev") {
+		t.Fatalf("expected converted task text in rendered note body, got %s", rendered)
+	}
+	if strings.Contains(rendered, "#inbox") || strings.Contains(rendered, "#signal") {
+		t.Fatalf("expected inbox and signal tags stripped from rendered note body, got %s", rendered)
+	}
+
+	updatedBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Fatalf("read updated note: %v", err)
+	}
+	updated := string(updatedBytes)
+	if !strings.Contains(updated, "- triage this #dev") {
+		t.Fatalf("expected converted markdown list item in source note, got %s", updated)
+	}
+	if strings.Contains(updated, "- [ ] triage this #inbox #signal #dev") {
+		t.Fatalf("expected checkbox form removed from source note, got %s", updated)
 	}
 }
 
