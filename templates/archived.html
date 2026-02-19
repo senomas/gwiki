@@ -1,0 +1,38 @@
+{{define "archived"}}
+<section class="space-y-6">
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-100">Archived</h1>
+    <p class="text-sm text-slate-400">Archived task snapshots grouped by original note path.</p>
+  </header>
+  <div class="space-y-3">
+    {{if not .ArchivedNotes}}
+      <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+        No archived notes.
+      </div>
+    {{else}}
+      {{range .ArchivedNotes}}
+        <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+          <a class="text-lg font-semibold text-sky-300 hover:text-sky-200" href="{{.URL}}">{{.Title}}</a>
+          <div class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">{{.Path}}</div>
+          <div class="mt-2 text-xs text-slate-400">Updated {{.UpdatedAt.Format "02 Jan 2006 15:04:05"}}</div>
+        </article>
+      {{end}}
+    {{end}}
+  </div>
+</section>
+{{end}}
+
+{{define "archived_detail"}}
+<section class="space-y-6">
+  <header class="space-y-1">
+    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">Archived Note</div>
+    <h1 class="text-2xl font-semibold text-slate-100">{{.NoteTitle}}</h1>
+    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">{{.NotePath}}</div>
+  </header>
+  <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+    <div class="note-body text-sm leading-relaxed text-slate-200">
+      {{.RenderedHTML}}
+    </div>
+  </article>
+</section>
+{{end}}

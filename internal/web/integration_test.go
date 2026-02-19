@@ -856,6 +856,191 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	}
 }
 
+func TestCompletedPageArchiveTaskFlow(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	content := strings.Join([]string{
+		"# Work",
+		"",
+		"- [ ] open task #tag1",
+		"- [x] done task one #tag1",
+		"  details done",
+		"- [x] done task two #tag2",
+	}, "\n")
+	noteRel := "tasks.md"
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	fullNotePath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullNotePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullNotePath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	completedTasks, err := idx.CompletedTasksWithMentions(ctx, nil, nil, owner, 20, false, "", "", false, false)
+	if err != nil {
+		t.Fatalf("completed tasks: %v", err)
+	}
+	var target index.TaskItem
+	found := false
+	for _, item := range completedTasks {
+		if strings.Contains(item.Text, "done task one") {
+			target = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected completed task 'done task one', got %+v", completedTasks)
+	}
+	targetTaskID := taskCheckboxID(target.FileID, target.LineNo, target.Hash)
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/completed")
+	if err != nil {
+		t.Fatalf("get completed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("completed status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "done task one #tag1") {
+		t.Fatalf("expected completed task in page, got %s", html)
+	}
+	if strings.Contains(html, "open task #tag1") {
+		t.Fatalf("expected open task hidden from completed page, got %s", html)
+	}
+	if !strings.Contains(html, `hx-post="/tasks/archive"`) {
+		t.Fatalf("expected archive action in completed page, got %s", html)
+	}
+
+	form := url.Values{}
+	form.Set("task_id", targetTaskID)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/tasks/archive", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("new archive request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post archive task: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("archive status %d", resp.StatusCode)
+	}
+	if strings.TrimSpace(resp.Header.Get("HX-Refresh")) != "true" {
+		t.Fatalf("expected HX-Refresh header, got %q", resp.Header.Get("HX-Refresh"))
+	}
+
+	updatedSource, err := os.ReadFile(fullNotePath)
+	if err != nil {
+		t.Fatalf("read updated source note: %v", err)
+	}
+	updatedText := string(updatedSource)
+	if strings.Contains(updatedText, "done task one #tag1") {
+		t.Fatalf("expected archived task removed from source note: %s", updatedText)
+	}
+	if !strings.Contains(updatedText, "done task two #tag2") {
+		t.Fatalf("expected other completed task to remain: %s", updatedText)
+	}
+
+	archivePath := filepath.Join(repo, owner, "archive", noteRel)
+	archiveContent, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read archive file: %v", err)
+	}
+	archiveText := string(archiveContent)
+	if !strings.Contains(archiveText, "done task one #tag1") {
+		t.Fatalf("expected archived task in archive file: %s", archiveText)
+	}
+	if !strings.Contains(archiveText, "details done") {
+		t.Fatalf("expected archived task block continuation preserved: %s", archiveText)
+	}
+
+	inIndex, err := idx.NoteExists(ctx, filepath.ToSlash(filepath.Join(owner, "archive", noteRel)))
+	if err != nil {
+		t.Fatalf("archive note exists check: %v", err)
+	}
+	if inIndex {
+		t.Fatalf("expected archive file not indexed")
+	}
+
+	resp, err = http.Get(ts.URL + "/archived")
+	if err != nil {
+		t.Fatalf("get archived list: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archived list status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "local/tasks.md") {
+		t.Fatalf("expected archived list to include path, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/archived/@local/tasks.md")
+	if err != nil {
+		t.Fatalf("get archived detail: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archived detail status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "done task one #tag1") {
+		t.Fatalf("expected archived detail content, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/completed")
+	if err != nil {
+		t.Fatalf("get completed after archive: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+	if strings.Contains(html, "done task one #tag1") {
+		t.Fatalf("expected archived task removed from completed page: %s", html)
+	}
+}
+
 func TestQuickLauncherHashQueryReturnsTagsOnly(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

@@ -273,6 +273,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/tasks", s.handleTasks)
 	s.mux.HandleFunc("/todo/page", s.handleTodoPage)
 	s.mux.HandleFunc("/todo", s.handleTodo)
+	s.mux.HandleFunc("/completed/page", s.handleCompletedPage)
+	s.mux.HandleFunc("/completed", s.handleCompleted)
+	s.mux.HandleFunc("/archived/", s.handleArchived)
+	s.mux.HandleFunc("/archived", s.handleArchived)
 	s.mux.HandleFunc("/broken", s.handleBroken)
 	s.mux.HandleFunc("/quick/notes", s.handleQuickNotes)
 	s.mux.HandleFunc("/quick/launcher", s.handleQuickLauncher)
@@ -280,5 +284,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/notes", s.handleAPINotes)
 	s.mux.HandleFunc("/sync", s.handleSync)
 	s.mux.HandleFunc("/tasks/toggle", s.handleToggleTask)
+	s.mux.HandleFunc("/tasks/archive", s.handleArchiveTask)
 	s.mux.HandleFunc("/rebuild", s.handleRebuild)
 }

@@ -60,9 +60,12 @@ func TestIndexAndTodoRequireAuth(t *testing.T) {
 	paths := []string{
 		"/",
 		"/todo",
+		"/completed",
+		"/archived",
 		"/notes/page",
 		"/notes/section?name=planned",
 		"/todo/page",
+		"/completed/page",
 	}
 	for _, p := range paths {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
@@ -77,4 +80,3 @@ func TestIndexAndTodoRequireAuth(t *testing.T) {
 		}
 	}
 }
-

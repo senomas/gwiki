@@ -1,0 +1,48 @@
+{{define "completed"}}
+<section class="space-y-6">
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-100">Completed</h1>
+    <p class="text-sm text-slate-400">Checked tasks grouped by note.</p>
+  </header>
+  <div class="space-y-4" data-note-list>
+    {{if not .CompletedNotes}}
+      <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+        No completed tasks.
+      </div>
+    {{else}}
+      {{template "completed_notes_chunk" .}}
+    {{end}}
+  </div>
+</section>
+{{end}}
+
+{{define "completed_notes_chunk"}}
+{{range .CompletedNotes}}
+  {{template "completed_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .CompletedHasMore}}
+  {{template "completed_next_loader" .}}
+{{end}}
+{{end}}
+
+{{define "completed_note_item"}}
+  {{ $note := .Note }}
+  {{ $root := .Root }}
+  <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+    {{ $noteURL := noteHref $note.Path $root.CurrentUser.Name }}
+    {{ if $root.RawQuery }}{{ $noteURL = printf "%s?%s" $noteURL $root.RawQuery }}{{ end }}
+    {{template "note_detail" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "RenderedHTML" $note.RenderedHTML "FolderLabel" $note.FolderLabel "CurrentUser" $root.CurrentUser)}}
+  </article>
+{{end}}
+
+{{define "completed_next_loader"}}
+<div
+  class="home-section-loader"
+  hx-get="/completed/page?offset={{.CompletedNextOffset}}{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+>
+  {{template "todo_note_item_skeleton" .}}
+</div>
+{{end}}

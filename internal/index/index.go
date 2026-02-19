@@ -2456,11 +2456,23 @@ func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly
 }
 
 func (i *Index) OpenTasksWithMentions(ctx context.Context, tags []string, mentionTags []string, ownerName string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool, journalOnly bool) ([]TaskItem, error) {
+	return i.tasksWithMentions(ctx, tags, mentionTags, ownerName, limit, dueOnly, dueDate, folder, rootOnly, journalOnly, false)
+}
+
+func (i *Index) CompletedTasksWithMentions(ctx context.Context, tags []string, mentionTags []string, ownerName string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool, journalOnly bool) ([]TaskItem, error) {
+	return i.tasksWithMentions(ctx, tags, mentionTags, ownerName, limit, dueOnly, dueDate, folder, rootOnly, journalOnly, true)
+}
+
+func (i *Index) tasksWithMentions(ctx context.Context, tags []string, mentionTags []string, ownerName string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool, journalOnly bool, checked bool) ([]TaskItem, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 	if dueOnly && dueDate == "" {
 		return nil, fmt.Errorf("due date required for due-only tasks")
+	}
+	checkedValue := 0
+	if checked {
+		checkedValue = 1
 	}
 
 	ownerID := 0
@@ -2521,9 +2533,9 @@ func (i *Index) OpenTasksWithMentions(ctx context.Context, tags []string, mentio
 			FROM tasks
 			JOIN files ON files.id = tasks.file_id
 			%s
-			WHERE tasks.checked = 0
+			WHERE tasks.checked = ?
 		`, ownerNameExpr(), ownerJoins("files"))
-		args := []interface{}{}
+		args := []interface{}{checkedValue}
 		query += " AND " + exclusiveClause
 		args = append(args, exclusiveArgs...)
 		if len(accessClauses) > 0 {
@@ -2566,7 +2578,7 @@ func (i *Index) OpenTasksWithMentions(ctx context.Context, tags []string, mentio
 			JOIN task_tags ON tasks.id = task_tags.task_id
 			JOIN tags ON tags.id = task_tags.tag_id
 			%s
-			WHERE tasks.checked = 0 AND tags.name IN (`+placeholders+`)
+			WHERE tasks.checked = ? AND tags.name IN (`+placeholders+`)
 		`, ownerNameExpr(), ownerJoins("files"))
 		exclusiveClause, exclusiveArgs := exclusiveTagFilterClause(tags, "files")
 		base += " AND " + exclusiveClause
@@ -2595,7 +2607,8 @@ func (i *Index) OpenTasksWithMentions(ctx context.Context, tags []string, mentio
 			return "(tasks.due_date IS NULL), tasks.due_date ASC, tasks.updated_at DESC"
 		}() + `
 			LIMIT ?`
-		args := make([]interface{}, 0, len(tags)+len(exclusiveArgs)+len(accessArgs)+len(ownerArgs)+len(mentionArgs)+len(folderArgs)+3)
+		args := make([]interface{}, 0, len(tags)+len(exclusiveArgs)+len(accessArgs)+len(ownerArgs)+len(mentionArgs)+len(folderArgs)+4)
+		args = append(args, checkedValue)
 		for _, tag := range tags {
 			args = append(args, tag)
 		}

@@ -41,6 +41,7 @@ Non-goals (v1)
    - Never expose raw internal/template/runtime error details to end users; log full details server-side and return a generic user-facing error message.
 7. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
+   - After implementing a complete feature and `make test` passes, commit the change before reporting completion.
    - After finishing work and committing, check `git status -sb` to confirm a clean tree.
    - Always propose a commit message when the user asks to commit; derive it from the current git diff.
 8. **Response structure**

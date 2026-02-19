@@ -83,6 +83,10 @@ type ViewData struct {
 	TodoHasMore            bool
 	TodoNextOffset         int
 	TodoOffset             int
+	CompletedNotes         []NoteCard
+	CompletedHasMore       bool
+	CompletedNextOffset    int
+	CompletedOffset        int
 	TodoCount              int
 	DueCount               int
 	TagLinks               []TagLink
@@ -102,6 +106,8 @@ type ViewData struct {
 	FolderQuery            string
 	FilterQuery            string
 	TodoURL                string
+	CompletedURL           string
+	ArchivedURL            string
 	InboxURL               string
 	InboxCount             int
 	RawQuery               string
@@ -150,6 +156,7 @@ type ViewData struct {
 	QuickEntries           []QuickLauncherEntry
 	GitRemoteCreds         []GitRemoteCred
 	Users                  []UserLink
+	ArchivedNotes          []ArchivedNote
 }
 
 type AttachmentGroup struct {
@@ -295,6 +302,13 @@ type NoteCard struct {
 	Meta         index.FrontmatterAttrs
 	FolderLabel  string
 	SectionRank  int
+}
+
+type ArchivedNote struct {
+	Path      string
+	Title     string
+	URL       string
+	UpdatedAt time.Time
 }
 
 type HiddenRenderBlock struct {

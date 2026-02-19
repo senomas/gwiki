@@ -58,6 +58,7 @@ var (
 	journalDateH1    = regexp.MustCompile(`^#\s*(\d{4}-\d{2}-\d{2})\s*$`)
 	wikiLinkRe       = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	taskCheckboxRe   = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
+	taskIDAttrRe     = regexp.MustCompile(`data-task-id="([^"]+)"`)
 	taskToggleLineRe = regexp.MustCompile(`^(\s*- \[)( |x|X)(\] .+)$`)
 	taskDoneTokenRe  = regexp.MustCompile(`\s+done:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`)
 )
@@ -1809,6 +1810,36 @@ func decorateTaskCheckboxes(htmlStr string, fileID int, tasks []index.Task) stri
 	})
 }
 
+func decorateCompletedTaskArchiveButtons(htmlStr string) string {
+	if strings.TrimSpace(htmlStr) == "" {
+		return htmlStr
+	}
+	return taskCheckboxRe.ReplaceAllStringFunc(htmlStr, func(tag string) string {
+		tagLower := strings.ToLower(tag)
+		checked := strings.Contains(tagLower, "checked")
+		if !strings.Contains(tagLower, "disabled") {
+			tag = strings.TrimSuffix(tag, ">") + " disabled>"
+			tagLower = strings.ToLower(tag)
+		}
+		if !checked {
+			return tag
+		}
+		match := taskIDAttrRe.FindStringSubmatch(tag)
+		if len(match) < 2 {
+			return tag
+		}
+		taskID := html.EscapeString(strings.TrimSpace(match[1]))
+		if taskID == "" {
+			return tag
+		}
+		button := fmt.Sprintf(
+			`<button type="button" class="ml-2 inline-flex items-center rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em] text-amber-200 hover:bg-amber-500/20" hx-post="/tasks/archive" hx-swap="none" hx-confirm="Archive this completed task?" hx-vals='{"task_id":"%s"}'>Archive</button>`,
+			taskID,
+		)
+		return tag + button
+	})
+}
+
 func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]struct{}, baseURL string) []TagLink {
 	activeSet := map[string]struct{}{}
 	for _, tag := range active {
@@ -1910,6 +1941,20 @@ func buildTodoLink(raw string) string {
 		return "/todo"
 	}
 	return "/todo?" + u.RawQuery
+}
+
+func buildCompletedLink(raw string) string {
+	if raw == "" {
+		return "/completed"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return "/completed"
+	}
+	if u.RawQuery == "" {
+		return "/completed"
+	}
+	return "/completed?" + u.RawQuery
 }
 
 func noteCardETag(meta index.FrontmatterAttrs, hash string, etagTime int64, userKey string) string {
@@ -2456,6 +2501,8 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	data.FolderQuery = buildFolderQuery(activeFolder, activeRoot)
 	data.FilterQuery = filterQuery
 	data.TodoURL = buildTodoLink(currentURLString(r))
+	data.CompletedURL = buildCompletedLink(currentURLString(r))
+	data.ArchivedURL = "/archived"
 	data.InboxURL = toggleTagURL(currentURLString(r), "inbox")
 	if len(tagLinks) > 0 {
 		for _, tag := range tagLinks {
@@ -7109,6 +7156,8 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "New note", Hint: "Create", Icon: "+", Href: "/notes/new"})
 		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Home", Hint: "Index", Icon: "H", Href: "/"})
 		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Todo", Hint: "Tasks", Icon: "T", Href: "/todo"})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Completed", Hint: "Tasks", Icon: "C", Href: "/completed"})
+		addAction(&actions, QuickLauncherEntry{Kind: "action", Label: "Archived", Hint: "Archive", Icon: "A", Href: "/archived"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Search", Hint: "Find", Icon: "F", Href: "/search"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Sync", Hint: "Git", Icon: "G", Href: "/sync"})
 		addAction(&contextActions, QuickLauncherEntry{Kind: "action", Label: "Settings", Hint: "Config", Icon: "S", Href: "/settings"})
@@ -8495,6 +8544,204 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 	s.views.RenderTemplate(w, "todo_notes_chunk", data)
 }
 
+func (s *Server) handleCompleted(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
+		etag := pageETag("completed", currentURLString(r), maxTime, currentUserName(r.Context()))
+		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+			w.Header().Set("ETag", etag)
+			setPrivateCacheHeaders(w)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
+	}
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	activeDate := ""
+	baseURL := baseURLForLinks(r, "/completed")
+	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	dueDate := ""
+	if activeDue {
+		dueDate = time.Now().Format("2006-01-02")
+	}
+	mentionTagsActive, noteTags := splitMentionTags(noteTags)
+	currentUser := currentUserName(r.Context())
+	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
+	completedNotes, nextOffset, hasMore, err := s.loadCompletedNotesPage(
+		r,
+		r.Context(),
+		noteTags,
+		mentionTagsFilter,
+		currentUser,
+		activeDue,
+		dueDate,
+		activeFolder,
+		activeRoot,
+		activeJournal,
+		0,
+		todoNotesPageSize,
+	)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	urlTags := append([]string{}, noteTags...)
+	urlTags = append(urlTags, mentionTagsActive...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal, "")
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	allowed := map[string]struct{}{}
+	todoCount, dueCount, err := s.loadSpecialTagCounts(r, noteTags, mentionTagsFilter, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, currentUser)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	if len(activeTags) > 0 || activeDate != "" {
+		filteredTags, err := s.loadFilteredTags(r, noteTags, activeTodo, activeDue, activeDate, activeFolder, activeRoot, activeJournal, "")
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		for _, tag := range filteredTags {
+			allowed[tag.Name] = struct{}{}
+		}
+		_ = dueCount
+	}
+	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
+	journalCount, err := s.idx.CountJournalNotes(r.Context(), activeFolder, activeRoot, "")
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	tagLinks = appendJournalTagLink(tagLinks, activeJournal, journalCount, baseURL, noteTags)
+	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := queryWithout(baseURL, "d")
+	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
+	folders, hasRoot, err := s.idx.ListFolders(r.Context(), "")
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
+	journalSidebar, err := s.buildJournalSidebar(r.Context(), time.Now(), "")
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	data := ViewData{
+		Title:               "Completed",
+		ContentTemplate:     "completed",
+		CompletedNotes:      completedNotes,
+		CompletedHasMore:    hasMore,
+		CompletedNextOffset: nextOffset,
+		CompletedOffset:     0,
+		Tags:                tags,
+		TagLinks:            tagLinks,
+		TodoCount:           todoCount,
+		DueCount:            dueCount,
+		ActiveTags:          urlTags,
+		TagQuery:            tagQuery,
+		FolderTree:          folderTree,
+		ActiveFolder:        activeFolder,
+		FolderQuery:         buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:         filterQuery,
+		HomeURL:             baseURL,
+		ActiveDate:          activeDate,
+		DateQuery:           buildDateQuery(activeDate),
+		SearchQuery:         activeSearch,
+		SearchQueryParam:    buildSearchQuery(activeSearch),
+		ReturnURL:           sanitizeReturnURL(r, r.URL.RequestURI()),
+		UpdateDays:          updateDays,
+		CalendarMonth:       calendar,
+		JournalSidebar:      journalSidebar,
+		RawQuery:            queryWithout(currentURLString(r), "offset"),
+	}
+	applyCalendarLinks(&data, baseURL)
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleCompletedPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	_, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	dueDate := ""
+	if activeDue {
+		dueDate = time.Now().Format("2006-01-02")
+	}
+	mentionTagsActive, noteTags := splitMentionTags(noteTags)
+	currentUser := currentUserName(r.Context())
+	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
+	completedNotes, nextOffset, hasMore, err := s.loadCompletedNotesPage(
+		r,
+		r.Context(),
+		noteTags,
+		mentionTagsFilter,
+		currentUser,
+		activeDue,
+		dueDate,
+		activeFolder,
+		activeRoot,
+		activeJournal,
+		offset,
+		todoNotesPageSize,
+	)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	urlTags := append([]string{}, noteTags...)
+	urlTags = append(urlTags, mentionTagsActive...)
+	if activeJournal {
+		urlTags = append(urlTags, journalTagName)
+	}
+	data := ViewData{
+		CompletedNotes:      completedNotes,
+		CompletedHasMore:    hasMore,
+		CompletedNextOffset: nextOffset,
+		CompletedOffset:     offset,
+		TagQuery:            buildTagsQuery(urlTags),
+		FolderQuery:         buildFolderQuery(activeFolder, activeRoot),
+		SearchQueryParam:    buildSearchQuery(activeSearch),
+		RawQuery:            queryWithout(currentURLString(r), "offset"),
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderTemplate(w, "completed_notes_chunk", data)
+}
+
 func buildTodoMentionTagsFilter(mentionTagsActive []string, currentUser string) []string {
 	mentionTagsFilter := append([]string{}, mentionTagsActive...)
 	if currentUser == "" {
@@ -8659,6 +8906,129 @@ func (s *Server) loadTodoNotesPage(
 	nextOffset := end
 	hasMore := nextOffset < len(todoNotes)
 	return todoNotes[offset:end], nextOffset, hasMore, nil
+}
+
+func (s *Server) loadCompletedNotesPage(
+	r *http.Request,
+	ctx context.Context,
+	noteTags []string,
+	mentionTagsFilter []string,
+	currentUser string,
+	activeDue bool,
+	dueDate string,
+	activeFolder string,
+	activeRoot bool,
+	activeJournal bool,
+	offset int,
+	limit int,
+) ([]NoteCard, int, bool, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = todoNotesPageSize
+	}
+	tasks, err := s.idx.CompletedTasksWithMentions(
+		ctx,
+		noteTags,
+		mentionTagsFilter,
+		currentUser,
+		homeSectionsMaxNotes,
+		activeDue,
+		dueDate,
+		activeFolder,
+		activeRoot,
+		activeJournal,
+	)
+	if err != nil {
+		return nil, offset, false, err
+	}
+	tasksByNote := make(map[string][]index.TaskItem)
+	noteTitles := make(map[string]string)
+	noteUpdated := make(map[string]time.Time)
+	noteEarliestDue := make(map[string]time.Time)
+	for _, task := range tasks {
+		dueTime, err := time.Parse("2006-01-02", task.DueDate)
+		if err != nil {
+			dueTime = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+		}
+		tasksByNote[task.Path] = append(tasksByNote[task.Path], task)
+		if _, ok := noteTitles[task.Path]; !ok {
+			noteTitles[task.Path] = task.Title
+			noteUpdated[task.Path] = task.UpdatedAt
+			noteEarliestDue[task.Path] = dueTime
+			continue
+		}
+		if task.UpdatedAt.After(noteUpdated[task.Path]) {
+			noteUpdated[task.Path] = task.UpdatedAt
+		}
+		if dueTime.Before(noteEarliestDue[task.Path]) {
+			noteEarliestDue[task.Path] = dueTime
+		}
+	}
+	completedNotes := make([]NoteCard, 0, len(tasksByNote))
+	for path, noteTasks := range tasksByNote {
+		sort.Slice(noteTasks, func(i, j int) bool {
+			return noteTasks[i].LineNo < noteTasks[j].LineNo
+		})
+		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, path)
+		if err != nil {
+			continue
+		}
+		contentBytes, err := os.ReadFile(fullPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				_ = s.idx.RemoveNoteByPath(ctx, path)
+			}
+			continue
+		}
+		normalizedContent := normalizeLineEndings(string(contentBytes))
+		noteMeta := index.FrontmatterAttributes(normalizedContent)
+		body := index.StripFrontmatter(normalizedContent)
+		lines := strings.Split(body, "\n")
+		renderSource, renderTasks := buildTodoDebugSnippet(lines, noteTasks)
+		htmlStr := ""
+		if strings.TrimSpace(renderSource) != "" {
+			htmlStr, err = s.renderNoteContentHTML(r, ctx, path, noteMeta.ID, renderSource, renderTasks)
+			if err != nil {
+				slog.Warn("render completed note snippet", "path", path, "err", err)
+				continue
+			}
+			htmlStr = decorateCompletedTaskArchiveButtons(htmlStr)
+		}
+		folderLabel := s.noteFolderLabel(ctx, path, noteMeta.Folder)
+		completedNotes = append(completedNotes, NoteCard{
+			Path:         path,
+			Title:        noteTitles[path],
+			FileName:     filepath.Base(path),
+			RenderedHTML: template.HTML(htmlStr),
+			Meta:         noteMeta,
+			FolderLabel:  folderLabel,
+		})
+	}
+	sort.Slice(completedNotes, func(i, j int) bool {
+		leftDue := noteEarliestDue[completedNotes[i].Path]
+		rightDue := noteEarliestDue[completedNotes[j].Path]
+		if !leftDue.Equal(rightDue) {
+			return leftDue.Before(rightDue)
+		}
+		leftUpdated := noteUpdated[completedNotes[i].Path]
+		rightUpdated := noteUpdated[completedNotes[j].Path]
+		if leftUpdated.Equal(rightUpdated) {
+			return completedNotes[i].Title < completedNotes[j].Title
+		}
+		return leftUpdated.Before(rightUpdated)
+	})
+	if offset >= len(completedNotes) {
+		return []NoteCard{}, offset, false, nil
+	}
+	end := offset + limit
+	if end > len(completedNotes) {
+		end = len(completedNotes)
+	}
+	nextOffset := end
+	hasMore := nextOffset < len(completedNotes)
+	return completedNotes[offset:end], nextOffset, hasMore, nil
 }
 
 func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []index.Task) {
@@ -8832,6 +9202,267 @@ func stripIndent(line string, indent int) string {
 		return ""
 	}
 	return line[indent:]
+}
+
+func archiveFilePath(repoPath, notePath string) (string, error) {
+	owner, relPath, err := fs.SplitOwnerNotePath(notePath)
+	if err != nil {
+		return "", err
+	}
+	relPath, err = fs.NormalizeNotePath(relPath)
+	if err != nil {
+		return "", err
+	}
+	archiveRoot := filepath.Join(repoPath, owner, "archive")
+	fullPath := filepath.Join(archiveRoot, filepath.FromSlash(relPath))
+	checked, err := filepath.Rel(archiveRoot, fullPath)
+	if err != nil || strings.HasPrefix(checked, "..") {
+		return "", fs.ErrUnsafePath
+	}
+	return fullPath, nil
+}
+
+func collapseRepeatedEmptyLines(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	lastEmpty := false
+	for _, line := range lines {
+		isEmpty := strings.TrimSpace(line) == ""
+		if isEmpty && lastEmpty {
+			continue
+		}
+		out = append(out, line)
+		lastEmpty = isEmpty
+	}
+	for len(out) > 0 && strings.TrimSpace(out[0]) == "" {
+		out = out[1:]
+	}
+	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+func extractTaskBlock(lines []string, lineNo int) (int, int, []string, error) {
+	if lineNo < 1 || lineNo > len(lines) {
+		return 0, 0, nil, fmt.Errorf("invalid task line")
+	}
+	start := lineNo - 1
+	baseLine := lines[start]
+	if len(taskToggleLineRe.FindStringSubmatch(baseLine)) == 0 {
+		return 0, 0, nil, fmt.Errorf("invalid task line")
+	}
+	baseIndent := countLeadingSpaces(baseLine)
+	end := start
+	for i := start + 1; i < len(lines); i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			end = i
+			continue
+		}
+		if countLeadingSpaces(line) <= baseIndent {
+			break
+		}
+		end = i
+	}
+	for end > start && strings.TrimSpace(lines[end]) == "" {
+		end--
+	}
+	blockLines := append([]string{}, lines[start:end+1]...)
+	return start, end, blockLines, nil
+}
+
+func appendArchiveTaskBlock(existingContent string, blockLines []string) string {
+	existingContent = normalizeLineEndings(existingContent)
+	block := strings.TrimRight(strings.Join(blockLines, "\n"), "\n")
+	if strings.TrimSpace(block) == "" {
+		return existingContent
+	}
+	if strings.TrimSpace(existingContent) == "" {
+		return block + "\n"
+	}
+	return strings.TrimRight(existingContent, "\n") + "\n\n" + block + "\n"
+}
+
+func archivedNoteHref(notePath string) string {
+	return "/archived/" + notePathWithUserPrefix(notePath)
+}
+
+func (s *Server) listArchivedNotesForUser(ctx context.Context) ([]ArchivedNote, error) {
+	ownerOptions, defaultOwner, err := s.ownerOptionsForUser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	owners := make([]string, 0, len(ownerOptions)+1)
+	seen := make(map[string]struct{}, len(ownerOptions)+1)
+	if strings.TrimSpace(defaultOwner) != "" {
+		owners = append(owners, defaultOwner)
+		seen[defaultOwner] = struct{}{}
+	}
+	for _, option := range ownerOptions {
+		owner := strings.TrimSpace(option.Name)
+		if owner == "" {
+			continue
+		}
+		if _, ok := seen[owner]; ok {
+			continue
+		}
+		seen[owner] = struct{}{}
+		owners = append(owners, owner)
+	}
+	if len(owners) == 0 {
+		entries, err := os.ReadDir(s.cfg.RepoPath)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			owner := strings.TrimSpace(entry.Name())
+			if owner == "" || strings.HasPrefix(owner, ".") {
+				continue
+			}
+			if _, ok := seen[owner]; ok {
+				continue
+			}
+			seen[owner] = struct{}{}
+			owners = append(owners, owner)
+		}
+	}
+	out := make([]ArchivedNote, 0)
+	for _, owner := range owners {
+		archiveRoot := filepath.Join(s.cfg.RepoPath, owner, "archive")
+		info, err := os.Stat(archiveRoot)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		if !info.IsDir() {
+			continue
+		}
+		if err := filepath.WalkDir(archiveRoot, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+				return nil
+			}
+			relPath, err := filepath.Rel(archiveRoot, path)
+			if err != nil {
+				return err
+			}
+			relPath = filepath.ToSlash(relPath)
+			notePath := filepath.ToSlash(filepath.Join(owner, relPath))
+			fileInfo, err := d.Info()
+			if err != nil {
+				return err
+			}
+			title := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+			if strings.TrimSpace(title) == "" {
+				title = relPath
+			}
+			out = append(out, ArchivedNote{
+				Path:      notePath,
+				Title:     title,
+				URL:       archivedNoteHref(notePath),
+				UpdatedAt: fileInfo.ModTime().Local(),
+			})
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out, nil
+}
+
+func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	routeRef := strings.TrimPrefix(r.URL.Path, "/archived")
+	routeRef = strings.TrimPrefix(strings.TrimSpace(routeRef), "/")
+	if routeRef == "" {
+		notes, err := s.listArchivedNotesForUser(r.Context())
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data := ViewData{
+			Title:           "Archived",
+			ContentTemplate: "archived",
+			ArchivedNotes:   notes,
+		}
+		s.attachViewData(r, &data)
+		s.views.RenderPage(w, data)
+		return
+	}
+	if unescaped, err := url.PathUnescape(routeRef); err == nil {
+		routeRef = unescaped
+	}
+	parsedPath, ok := parseUserScopedNoteRef(routeRef)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ownerName, _, err := fs.SplitOwnerNotePath(parsedPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireWriteAccess(w, r, ownerName) {
+		return
+	}
+	fullPath, err := archiveFilePath(s.cfg.RepoPath, parsedPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+		s.internalServerError(w, r, err)
+		return
+	}
+	rendered, err := s.renderMarkdown(r.Context(), []byte(normalizeLineEndings(string(content))))
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	_, relPath, _ := fs.SplitOwnerNotePath(parsedPath)
+	title := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+	if strings.TrimSpace(title) == "" {
+		title = relPath
+	}
+	data := ViewData{
+		Title:           "Archived - " + title,
+		ContentTemplate: "archived_detail",
+		NoteTitle:       title,
+		NotePath:        parsedPath,
+		RenderedHTML:    template.HTML(rendered),
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
 }
 
 func (s *Server) handleBroken(w http.ResponseWriter, r *http.Request) {
@@ -9860,6 +10491,144 @@ func removeAuthUser(path string, username string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	taskID := strings.TrimSpace(r.Form.Get("task_id"))
+	fileID, lineNo, hash, err := parseTaskID(taskID)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	notePath, err := s.idx.PathByFileID(r.Context(), fileID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	if !s.requireWriteAccessForPath(w, r, notePath) {
+		return
+	}
+
+	fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	contentBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	content := normalizeLineEndings(string(contentBytes))
+	body := index.StripFrontmatter(content)
+	lines := strings.Split(body, "\n")
+	if lineNo < 1 || lineNo > len(lines) {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	sourceLine := lines[lineNo-1]
+	if index.TaskLineHash(sourceLine) != hash {
+		http.Error(w, "task changed, refresh the page", http.StatusConflict)
+		return
+	}
+	match := taskToggleLineRe.FindStringSubmatch(sourceLine)
+	if len(match) == 0 || strings.ToLower(strings.TrimSpace(match[2])) != "x" {
+		http.Error(w, "task is not completed", http.StatusBadRequest)
+		return
+	}
+	startIdx, endIdx, blockLines, err := extractTaskBlock(lines, lineNo)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	archivePath, err := archiveFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	existingArchive := ""
+	if archiveBytes, readErr := os.ReadFile(archivePath); readErr == nil {
+		existingArchive = string(archiveBytes)
+	} else if readErr != nil && !os.IsNotExist(readErr) {
+		s.internalServerError(w, r, readErr)
+		return
+	}
+	nextArchive := appendArchiveTaskBlock(existingArchive, blockLines)
+	if err := fs.WriteFileAtomic(archivePath, []byte(nextArchive), 0o644); err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+
+	remainingLines := append([]string{}, lines[:startIdx]...)
+	remainingLines = append(remainingLines, lines[endIdx+1:]...)
+	remainingLines = collapseRepeatedEmptyLines(remainingLines)
+	updatedBody := strings.Join(remainingLines, "\n")
+	updatedContent := updatedBody
+	if fm := index.FrontmatterBlock(content); fm != "" {
+		if strings.TrimSpace(updatedBody) == "" {
+			updatedContent = fm + "\n"
+		} else {
+			updatedContent = fm + "\n" + updatedBody
+		}
+	}
+	updatedContent = normalizeLineEndings(updatedContent)
+	updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, time.Now(), s.cfg.UpdatedHistoryMax, "", historyUser(r.Context()))
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+
+	unlock := s.locker.Lock(notePath)
+	if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
+		unlock()
+		s.internalServerError(w, r, err)
+		return
+	}
+	unlock()
+	if info, statErr := os.Stat(fullPath); statErr == nil {
+		_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
+	}
+	if ownerName, _, splitErr := s.ownerFromNotePath(notePath); splitErr == nil {
+		s.commitOwnerRepoAsync(ownerName, "archive task "+notePath)
+	}
+
+	s.addToast(r, Toast{
+		ID:              uuid.NewString(),
+		Message:         "Task archived.",
+		Kind:            "success",
+		DurationSeconds: 2,
+		CreatedAt:       time.Now(),
+	})
+	if isHTMX(r) {
+		w.Header().Set("HX-Refresh", "true")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	targetURL := sanitizeReturnURL(r, r.Form.Get("return_url"))
+	if targetURL == "" {
+		targetURL = "/completed"
+	}
+	http.Redirect(w, r, targetURL, http.StatusSeeOther)
 }
 
 func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
