@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -552,13 +553,32 @@ func ensureSignalFrontmatter(content string, now time.Time, user string) (string
 
 func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessage, noteID string) ([]string, error) {
 	suffixTags := " #inbox #signal"
+	previewURLs := make(map[string]struct{}, len(msg.Previews))
+	for _, preview := range msg.Previews {
+		if normalizedURL := normalizeSignalComparableURL(preview.URL); normalizedURL != "" {
+			previewURLs[normalizedURL] = struct{}{}
+		}
+	}
 	textLines := normalizeSignalTextLines(msg.Text)
+	cleanTextLines := make([]string, 0, len(textLines))
+	for _, line := range textLines {
+		line = stripManagedSignalTags(line)
+		if line == "" {
+			continue
+		}
+		if normalizedURL := normalizeSignalComparableURL(line); normalizedURL != "" {
+			if _, exists := previewURLs[normalizedURL]; exists {
+				continue
+			}
+		}
+		cleanTextLines = append(cleanTextLines, line)
+	}
 	primary := ""
 	remainingText := []string{}
-	if len(textLines) > 0 {
-		primary = textLines[0]
-		if len(textLines) > 1 {
-			remainingText = append(remainingText, textLines[1:]...)
+	if len(cleanTextLines) > 0 {
+		primary = cleanTextLines[0]
+		if len(cleanTextLines) > 1 {
+			remainingText = append(remainingText, cleanTextLines[1:]...)
 		}
 	}
 	if primary == "" {
@@ -602,7 +622,7 @@ func (p *signalPoller) buildSignalNoteLines(ctx context.Context, msg signalMessa
 			appendContinuation(previewLink)
 		}
 		for _, descLine := range normalizeSignalTextLines(preview.Description) {
-			appendContinuation(descLine)
+			appendContinuation(stripManagedSignalTags(descLine))
 		}
 		if preview.ImageID != "" && noteID != "" {
 			attachmentName, ok, err := p.ensureSignalPreviewImage(ctx, noteID, preview)
@@ -654,6 +674,64 @@ func signalPreviewLink(preview signalPreview) string {
 		title = url
 	}
 	return fmt.Sprintf("[%s](%s)", title, url)
+}
+
+func stripManagedSignalTags(line string) string {
+	tokens := strings.Fields(strings.TrimSpace(line))
+	if len(tokens) == 0 {
+		return ""
+	}
+	filtered := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if isManagedSignalTagToken(token) {
+			continue
+		}
+		filtered = append(filtered, token)
+	}
+	return strings.TrimSpace(strings.Join(filtered, " "))
+}
+
+func isManagedSignalTagToken(token string) bool {
+	cleaned := strings.TrimSpace(token)
+	if cleaned == "" {
+		return false
+	}
+	cleaned = strings.Trim(cleaned, ".,;:!?()[]{}\"'")
+	switch strings.ToLower(cleaned) {
+	case "#inbox", "#signal":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeSignalComparableURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	raw = strings.Trim(raw, "<>")
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Host))
+	if host == "" {
+		return ""
+	}
+	parsed.Scheme = scheme
+	parsed.Host = host
+	parsed.Fragment = ""
+	if parsed.Path == "/" {
+		parsed.Path = ""
+	} else {
+		parsed.Path = strings.TrimRight(parsed.Path, "/")
+	}
+	return parsed.String()
 }
 
 func (p *signalPoller) ensureSignalPreviewImage(ctx context.Context, noteID string, preview signalPreview) (string, bool, error) {

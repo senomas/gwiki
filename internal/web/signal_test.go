@@ -293,12 +293,12 @@ func TestBuildSignalNoteLines_LinkPreviewIncludesOriginalMessage(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatalf("expected non-empty lines")
 	}
-	if lines[0] != "- [ ] https://vt.tiktok.com/ZSmkQSUcW/ #inbox #signal" {
+	if lines[0] != "- [ ] Damar Valley Glamping Wonosobo #inbox #signal" {
 		t.Fatalf("unexpected primary task line: %q", lines[0])
 	}
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "  Damar Valley Glamping Wonosobo") {
-		t.Fatalf("expected original message caption as continuation line, got: %#v", lines)
+	if strings.Contains(joined, "  https://vt.tiktok.com/ZSmkQSUcW/") {
+		t.Fatalf("expected preview-duplicate raw url stripped from message lines, got: %#v", lines)
 	}
 	if !strings.Contains(joined, "  [TikTok](https://vt.tiktok.com/ZSmkQSUcW)") {
 		t.Fatalf("expected preview link as continuation line, got: %#v", lines)
@@ -308,6 +308,22 @@ func TestBuildSignalNoteLines_LinkPreviewIncludesOriginalMessage(t *testing.T) {
 	}
 	if countTaskLines(lines) != 1 {
 		t.Fatalf("expected exactly one task line, got %d: %#v", countTaskLines(lines), lines)
+	}
+}
+
+func TestBuildSignalNoteLines_DeduplicatesManagedTags(t *testing.T) {
+	poller := signalPoller{}
+	lines, err := poller.buildSignalNoteLines(context.Background(), signalMessage{
+		Text: "my caption #inbox #signal #inbox\n#signal",
+	}, "")
+	if err != nil {
+		t.Fatalf("build lines: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("expected one line, got %d: %#v", len(lines), lines)
+	}
+	if lines[0] != "- [ ] my caption #inbox #signal" {
+		t.Fatalf("unexpected line: %q", lines[0])
 	}
 }
 
