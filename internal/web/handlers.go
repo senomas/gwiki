@@ -1869,6 +1869,42 @@ func buildTagLinks(active []string, tags []index.TagSummary, allowed map[string]
 	return links
 }
 
+func addTagURL(raw string, tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return raw
+	}
+	return mutateURL(raw, func(query url.Values) {
+		active := parseTagsParam(query.Get("t"))
+		for _, item := range active {
+			if item == tag {
+				query.Set("t", strings.Join(active, ","))
+				return
+			}
+		}
+		active = append(active, tag)
+		query.Set("t", strings.Join(active, ","))
+	})
+}
+
+func buildHiddenExclusiveTagLinks(raw string, tags []string) []TagLink {
+	if len(tags) == 0 {
+		return nil
+	}
+	links := make([]TagLink, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		links = append(links, TagLink{
+			Name: tag,
+			URL:  addTagURL(raw, tag),
+		})
+	}
+	return links
+}
+
 func appendJournalTagLink(links []TagLink, activeJournal bool, journalCount int, baseURL string, noteTags []string) []TagLink {
 	targetTags := append([]string{}, noteTags...)
 	if !activeJournal {
@@ -6100,6 +6136,22 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	if activeJournal {
 		urlTags = append(urlTags, journalTagName)
 	}
+	hiddenExclusive := index.HiddenExclusiveSummary{}
+	if len(noteTags) > 0 {
+		var hiddenErr error
+		hiddenExclusive, hiddenErr = s.idx.HiddenExclusiveForNoteList(r.Context(), index.NoteListFilter{
+			Tags:        noteTags,
+			Query:       activeSearch,
+			Folder:      activeFolder,
+			Root:        activeRoot,
+			JournalOnly: activeJournal,
+			OwnerName:   ownerName,
+		})
+		if hiddenErr != nil {
+			s.internalServerError(w, r, hiddenErr)
+			return
+		}
+	}
 	tags, err := s.idx.ListTags(r.Context(), 100, activeFolder, activeRoot, activeJournal, ownerName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -6215,6 +6267,11 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		UpdateDays:        updateDays,
 		CalendarMonth:     calendar,
 		JournalSidebar:    journalSidebar,
+	}
+	if hiddenExclusive.Count > 0 && len(hiddenExclusive.Tags) > 0 {
+		data.HiddenExclusiveCount = hiddenExclusive.Count
+		data.HiddenExclusiveTags = buildHiddenExclusiveTagLinks(currentURLString(r), hiddenExclusive.Tags)
+		data.ShowHiddenExclusive = len(data.HiddenExclusiveTags) > 0
 	}
 	applyCalendarLinks(&data, baseURL)
 	s.attachViewData(r, &data)
@@ -8373,6 +8430,25 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	mentionTagsActive, noteTags := splitMentionTags(noteTags)
 	currentUser := currentUserName(r.Context())
 	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
+	hiddenExclusive := index.HiddenExclusiveSummary{}
+	if len(noteTags) > 0 {
+		var hiddenErr error
+		hiddenExclusive, hiddenErr = s.idx.HiddenExclusiveForTasks(r.Context(), index.HiddenTaskFilter{
+			Tags:        noteTags,
+			MentionTags: mentionTagsFilter,
+			Folder:      activeFolder,
+			Root:        activeRoot,
+			JournalOnly: activeJournal,
+			DueOnly:     activeDue,
+			DueDate:     dueDate,
+			OwnerName:   currentUser,
+			Checked:     false,
+		})
+		if hiddenErr != nil {
+			s.internalServerError(w, r, hiddenErr)
+			return
+		}
+	}
 	todoNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
 		r,
 		r.Context(),
@@ -8473,6 +8549,11 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		CalendarMonth:    calendar,
 		JournalSidebar:   journalSidebar,
 		RawQuery:         queryWithout(currentURLString(r), "offset"),
+	}
+	if hiddenExclusive.Count > 0 && len(hiddenExclusive.Tags) > 0 {
+		data.HiddenExclusiveCount = hiddenExclusive.Count
+		data.HiddenExclusiveTags = buildHiddenExclusiveTagLinks(currentURLString(r), hiddenExclusive.Tags)
+		data.ShowHiddenExclusive = len(data.HiddenExclusiveTags) > 0
 	}
 	applyCalendarLinks(&data, baseURL)
 	s.attachViewData(r, &data)
@@ -8576,6 +8657,25 @@ func (s *Server) handleCompleted(w http.ResponseWriter, r *http.Request) {
 	mentionTagsActive, noteTags := splitMentionTags(noteTags)
 	currentUser := currentUserName(r.Context())
 	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
+	hiddenExclusive := index.HiddenExclusiveSummary{}
+	if len(noteTags) > 0 {
+		var hiddenErr error
+		hiddenExclusive, hiddenErr = s.idx.HiddenExclusiveForTasks(r.Context(), index.HiddenTaskFilter{
+			Tags:        noteTags,
+			MentionTags: mentionTagsFilter,
+			Folder:      activeFolder,
+			Root:        activeRoot,
+			JournalOnly: activeJournal,
+			DueOnly:     activeDue,
+			DueDate:     dueDate,
+			OwnerName:   currentUser,
+			Checked:     true,
+		})
+		if hiddenErr != nil {
+			s.internalServerError(w, r, hiddenErr)
+			return
+		}
+	}
 	completedNotes, nextOffset, hasMore, err := s.loadCompletedNotesPage(
 		r,
 		r.Context(),
@@ -8674,6 +8774,11 @@ func (s *Server) handleCompleted(w http.ResponseWriter, r *http.Request) {
 		CalendarMonth:       calendar,
 		JournalSidebar:      journalSidebar,
 		RawQuery:            queryWithout(currentURLString(r), "offset"),
+	}
+	if hiddenExclusive.Count > 0 && len(hiddenExclusive.Tags) > 0 {
+		data.HiddenExclusiveCount = hiddenExclusive.Count
+		data.HiddenExclusiveTags = buildHiddenExclusiveTagLinks(currentURLString(r), hiddenExclusive.Tags)
+		data.ShowHiddenExclusive = len(data.HiddenExclusiveTags) > 0
 	}
 	applyCalendarLinks(&data, baseURL)
 	s.attachViewData(r, &data)

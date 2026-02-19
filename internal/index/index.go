@@ -108,6 +108,23 @@ type TaskCountFilter struct {
 	OwnerName   string
 }
 
+type HiddenTaskFilter struct {
+	Tags        []string
+	MentionTags []string
+	Folder      string
+	Root        bool
+	JournalOnly bool
+	DueOnly     bool
+	DueDate     string
+	OwnerName   string
+	Checked     bool
+}
+
+type HiddenExclusiveSummary struct {
+	Count int
+	Tags  []string
+}
+
 type NoteHistorySummary struct {
 	Path  string
 	Title string
@@ -239,6 +256,105 @@ func exclusiveTagFilterClause(tags []string, table string) (string, []interface{
 		args = append(args, tag)
 	}
 	return clause, args
+}
+
+func normalizeFilterTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
+}
+
+func hiddenExclusiveMismatchClause(tags []string, fileExpr string) (string, []interface{}) {
+	if strings.TrimSpace(fileExpr) == "" {
+		fileExpr = "files.id"
+	}
+	if len(tags) == 0 {
+		return fmt.Sprintf(`EXISTS (
+			SELECT 1
+			FROM file_tags fet
+			WHERE fet.file_id = %s AND fet.is_exclusive = 1
+		)`, fileExpr), nil
+	}
+	placeholders := strings.Repeat("?,", len(tags))
+	placeholders = strings.TrimRight(placeholders, ",")
+	clause := fmt.Sprintf(`EXISTS (
+		SELECT 1
+		FROM file_tags fet
+		JOIN tags t_ex ON t_ex.id = fet.tag_id
+		WHERE fet.file_id = %s AND fet.is_exclusive = 1 AND t_ex.name NOT IN (%s)
+	)`, fileExpr, placeholders)
+	args := make([]interface{}, 0, len(tags))
+	for _, tag := range tags {
+		args = append(args, tag)
+	}
+	return clause, args
+}
+
+func (i *Index) hiddenExclusiveSummaryFromCandidate(ctx context.Context, candidateSQL string, candidateArgs []interface{}, tags []string) (HiddenExclusiveSummary, error) {
+	summary := HiddenExclusiveSummary{}
+	tags = normalizeFilterTags(tags)
+	if strings.TrimSpace(candidateSQL) == "" || len(tags) == 0 {
+		return summary, nil
+	}
+
+	mismatchClause, mismatchArgs := hiddenExclusiveMismatchClause(tags, "cf.id")
+	countQuery := "WITH candidate_files AS (" + candidateSQL + ") SELECT COUNT(DISTINCT cf.id) FROM candidate_files cf WHERE " + mismatchClause
+	countArgs := append([]interface{}{}, candidateArgs...)
+	countArgs = append(countArgs, mismatchArgs...)
+	if err := i.queryRowContext(ctx, countQuery, countArgs...).Scan(&summary.Count); err != nil {
+		return HiddenExclusiveSummary{}, err
+	}
+	if summary.Count <= 0 {
+		return summary, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(tags))
+	placeholders = strings.TrimRight(placeholders, ",")
+	tagsQuery := "WITH candidate_files AS (" + candidateSQL + ") " +
+		"SELECT DISTINCT t_ex.name " +
+		"FROM candidate_files cf " +
+		"JOIN file_tags fet ON fet.file_id = cf.id " +
+		"JOIN tags t_ex ON t_ex.id = fet.tag_id " +
+		"WHERE fet.is_exclusive = 1 AND t_ex.name NOT IN (" + placeholders + ") " +
+		"ORDER BY t_ex.name"
+	tagArgs := append([]interface{}{}, candidateArgs...)
+	for _, tag := range tags {
+		tagArgs = append(tagArgs, tag)
+	}
+	rows, err := i.queryContext(ctx, tagsQuery, tagArgs...)
+	if err != nil {
+		return HiddenExclusiveSummary{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return HiddenExclusiveSummary{}, err
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		summary.Tags = append(summary.Tags, name)
+	}
+	if err := rows.Err(); err != nil {
+		return HiddenExclusiveSummary{}, err
+	}
+	return summary, nil
 }
 
 func applyVisibilityFilter(ctx context.Context, clauses *[]string, args *[]interface{}, table string) {
@@ -2295,6 +2411,190 @@ func (i *Index) NoteList(ctx context.Context, filter NoteListFilter) ([]NoteSumm
 		notes = append(notes, n)
 	}
 	return notes, rows.Err()
+}
+
+func (i *Index) HiddenExclusiveForNoteList(ctx context.Context, filter NoteListFilter) (HiddenExclusiveSummary, error) {
+	tagList := normalizeFilterTags(filter.Tags)
+	if len(tagList) == 0 {
+		return HiddenExclusiveSummary{}, nil
+	}
+	query := strings.TrimSpace(filter.Query)
+	joins := make([]string, 0, 3)
+	clauses := make([]string, 0, 8)
+	args := make([]interface{}, 0, 16)
+	groupBy := false
+
+	if query != "" {
+		joins = append(joins, "JOIN fts ON fts.path = files.path AND fts.user_id = files.user_id")
+		clauses = append(clauses, "fts MATCH ?")
+		args = append(args, query)
+	}
+	if filter.Date != "" {
+		day, err := dateToDay(filter.Date)
+		if err != nil {
+			return HiddenExclusiveSummary{}, err
+		}
+		joins = append(joins, "JOIN file_histories ON files.id = file_histories.file_id")
+		clauses = append(clauses, "file_histories.action_date = ?")
+		args = append(args, day)
+		groupBy = true
+	}
+	if len(tagList) > 0 {
+		placeholders := strings.Repeat("?,", len(tagList))
+		placeholders = strings.TrimRight(placeholders, ",")
+		joins = append(joins, "JOIN file_tags ON files.id = file_tags.file_id")
+		joins = append(joins, "JOIN tags ON tags.id = file_tags.tag_id")
+		clauses = append(clauses, "tags.name IN ("+placeholders+")")
+		for _, tag := range tagList {
+			args = append(args, tag)
+		}
+		groupBy = true
+	}
+	if filter.JournalOnly {
+		clauses = append(clauses, "files.is_journal = 1")
+	}
+	if strings.TrimSpace(filter.ExcludeUID) != "" {
+		clauses = append(clauses, "(files.uid IS NULL OR files.uid != ?)")
+		args = append(args, filter.ExcludeUID)
+	}
+	if filter.PriorityMin != nil {
+		clauses = append(clauses, "files.priority >= ?")
+		args = append(args, *filter.PriorityMin)
+	}
+	if filter.PriorityMax != nil {
+		clauses = append(clauses, "files.priority <= ?")
+		args = append(args, *filter.PriorityMax)
+	}
+	if filter.UpdatedAfter != nil {
+		clauses = append(clauses, "files.updated_at >= ?")
+		args = append(args, *filter.UpdatedAfter)
+	}
+	if filter.UpdatedBefore != nil {
+		clauses = append(clauses, "files.updated_at < ?")
+		args = append(args, *filter.UpdatedBefore)
+	}
+	if strings.TrimSpace(filter.OwnerName) != "" {
+		ownerClause, ownerArgs, err := i.ownerClauseForName(ctx, filter.OwnerName, "files")
+		if err != nil {
+			return HiddenExclusiveSummary{}, err
+		}
+		if ownerClause != "" {
+			clauses = append(clauses, ownerClause)
+			args = append(args, ownerArgs...)
+		}
+	}
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	applyFolderFilter(filter.Folder, filter.Root, &clauses, &args, "files")
+
+	candidateSQL := "SELECT files.id FROM files"
+	if len(joins) > 0 {
+		candidateSQL += " " + strings.Join(joins, " ")
+	}
+	if len(clauses) > 0 {
+		candidateSQL += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	if groupBy {
+		candidateSQL += " GROUP BY files.id"
+	}
+	if len(tagList) > 0 {
+		candidateSQL += " HAVING COUNT(DISTINCT tags.name) = ?"
+		args = append(args, len(tagList))
+	}
+	return i.hiddenExclusiveSummaryFromCandidate(ctx, candidateSQL, args, tagList)
+}
+
+func (i *Index) HiddenExclusiveForTasks(ctx context.Context, filter HiddenTaskFilter) (HiddenExclusiveSummary, error) {
+	tagList := normalizeFilterTags(filter.Tags)
+	if len(tagList) == 0 {
+		return HiddenExclusiveSummary{}, nil
+	}
+	if filter.DueOnly && strings.TrimSpace(filter.DueDate) == "" {
+		return HiddenExclusiveSummary{}, fmt.Errorf("due date required for due-only tasks")
+	}
+	matchedTaskQuery := `
+		SELECT tasks.id AS task_id, files.id AS file_id
+		FROM tasks
+		JOIN files ON files.id = tasks.file_id
+		JOIN task_tags ON tasks.id = task_tags.task_id
+		JOIN tags ON tags.id = task_tags.tag_id`
+	clauses := make([]string, 0, 10)
+	args := make([]interface{}, 0, len(tagList)+16)
+
+	checkedValue := boolToInt(filter.Checked)
+	clauses = append(clauses, "tasks.checked = ?")
+	args = append(args, checkedValue)
+
+	placeholders := strings.Repeat("?,", len(tagList))
+	placeholders = strings.TrimRight(placeholders, ",")
+	clauses = append(clauses, "tags.name IN ("+placeholders+")")
+	for _, tag := range tagList {
+		args = append(args, tag)
+	}
+	if filter.DueOnly {
+		clauses = append(clauses, "tasks.due_date IS NOT NULL AND tasks.due_date != '' AND tasks.due_date <= ?")
+		args = append(args, strings.TrimSpace(filter.DueDate))
+	}
+	if filter.JournalOnly {
+		clauses = append(clauses, "files.is_journal = 1")
+	}
+	folderClause, folderArgs := folderWhere(filter.Folder, filter.Root, "files")
+	if folderClause != "" {
+		clauses = append(clauses, folderClause)
+		args = append(args, folderArgs...)
+	}
+	ownerClause := ""
+	ownerArgs := []interface{}{}
+	if strings.TrimSpace(filter.OwnerName) != "" {
+		clause, clauseArgs, err := i.ownerClauseForName(ctx, filter.OwnerName, "files")
+		if err != nil {
+			return HiddenExclusiveSummary{}, err
+		}
+		ownerClause = clause
+		ownerArgs = append(ownerArgs, clauseArgs...)
+	}
+	mentionTags := normalizeFilterTags(filter.MentionTags)
+	mentionClause := ""
+	mentionArgs := []interface{}{}
+	if len(mentionTags) > 0 {
+		mentionPlaceholders := strings.Repeat("?,", len(mentionTags))
+		mentionPlaceholders = strings.TrimRight(mentionPlaceholders, ",")
+		mentionClause = `
+			EXISTS (
+				SELECT 1
+				FROM task_tags mt
+				JOIN tags mtags ON mtags.id = mt.tag_id
+				WHERE mt.task_id = tasks.id AND mtags.name IN (` + mentionPlaceholders + `)
+			)`
+		for _, tag := range mentionTags {
+			mentionArgs = append(mentionArgs, tag)
+		}
+	}
+	if ownerClause != "" || mentionClause != "" {
+		switch {
+		case ownerClause != "" && mentionClause != "":
+			clauses = append(clauses, "("+ownerClause+" OR "+mentionClause+")")
+			args = append(args, ownerArgs...)
+			args = append(args, mentionArgs...)
+		case ownerClause != "":
+			clauses = append(clauses, ownerClause)
+			args = append(args, ownerArgs...)
+		case mentionClause != "":
+			clauses = append(clauses, mentionClause)
+			args = append(args, mentionArgs...)
+		}
+	}
+
+	applyAccessFilter(ctx, &clauses, &args, "files")
+	applyVisibilityFilter(ctx, &clauses, &args, "files")
+	if len(clauses) > 0 {
+		matchedTaskQuery += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	matchedTaskQuery += " GROUP BY tasks.id, files.id HAVING COUNT(DISTINCT tags.name) = ?"
+	args = append(args, len(tagList))
+
+	candidateSQL := "SELECT DISTINCT matched.file_id AS id FROM (" + matchedTaskQuery + ") matched"
+	return i.hiddenExclusiveSummaryFromCandidate(ctx, candidateSQL, args, tagList)
 }
 
 func (i *Index) OpenTasks(ctx context.Context, tags []string, limit int, dueOnly bool, dueDate string, folder string, rootOnly bool, journalOnly bool) ([]TaskItem, error) {

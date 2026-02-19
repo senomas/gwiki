@@ -1,5 +1,19 @@
 {{define "home"}}
 <section class="space-y-6">
+  {{template "hidden_exclusive_separator" .}}
   <div id="notes-feed" class="space-y-4" data-note-list>{{template "home_notes" .}}</div>
 </section>
+{{end}}
+
+{{define "hidden_exclusive_separator"}}
+{{if and .ShowHiddenExclusive (gt .HiddenExclusiveCount 0) .HiddenExclusiveTags}}
+  <div class="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+    <span>{{.HiddenExclusiveCount}} Hidden {{if eq .HiddenExclusiveCount 1}}note{{else}}notes{{end}} exclusive (</span>
+    {{range $idx, $tag := .HiddenExclusiveTags}}
+      {{if gt $idx 0}}<span>, </span>{{end}}
+      <a class="font-medium text-amber-100 underline decoration-amber-200/70 underline-offset-2 transition hover:text-amber-50" href="{{$tag.URL}}" data-preserve-month="true">{{tagLabel $tag.Name}}</a>
+    {{end}}
+    <span>)</span>
+  </div>
+{{end}}
 {{end}}

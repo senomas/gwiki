@@ -856,6 +856,102 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	}
 }
 
+func TestTagFilteredPagesShowHiddenExclusiveSeparator(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	files := map[string]string{
+		"hidden.md": strings.Join([]string{
+			"# Hidden Exclusive Note",
+			"",
+			"#tag1 #place!",
+			"- [ ] hidden open #tag1",
+			"- [x] hidden done #tag1",
+		}, "\n"),
+		"visible.md": strings.Join([]string{
+			"# Visible Note",
+			"",
+			"#tag1",
+			"- [ ] visible open #tag1",
+			"- [x] visible done #tag1",
+		}, "\n"),
+	}
+	for relPath, content := range files {
+		full := filepath.Join(notesDir, relPath)
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", relPath, err)
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			t.Fatalf("stat %s: %v", relPath, err)
+		}
+		notePath := filepath.ToSlash(filepath.Join(owner, relPath))
+		if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+			t.Fatalf("index %s: %v", relPath, err)
+		}
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{name: "home", path: "/?t=tag1"},
+		{name: "todo", path: "/todo?t=tag1"},
+		{name: "completed", path: "/completed?t=tag1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + tc.path)
+			if err != nil {
+				t.Fatalf("get %s: %v", tc.path, err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			html := string(body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s status %d: %s", tc.path, resp.StatusCode, strings.TrimSpace(html))
+			}
+			if !strings.Contains(html, "Hidden note exclusive") {
+				t.Fatalf("expected hidden-exclusive separator in %s, got %s", tc.path, html)
+			}
+			if !strings.Contains(html, "#place") {
+				t.Fatalf("expected hidden-exclusive tag link in %s, got %s", tc.path, html)
+			}
+			if !strings.Contains(html, "t=tag1%2Cplace") {
+				t.Fatalf("expected hidden-exclusive add-tag link in %s, got %s", tc.path, html)
+			}
+		})
+	}
+}
+
 func TestCompletedPageArchiveTaskFlow(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

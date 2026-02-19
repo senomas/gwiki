@@ -90,6 +90,9 @@ type ViewData struct {
 	TodoCount              int
 	DueCount               int
 	TagLinks               []TagLink
+	HiddenExclusiveCount   int
+	HiddenExclusiveTags    []TagLink
+	ShowHiddenExclusive    bool
 	ActiveTags             []string
 	TagQuery               string
 	ActiveDate             string
