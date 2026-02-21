@@ -3,7 +3,7 @@
 -include .env.local
 export
 
-.PHONY: docker-build test test-base-image test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build test quick-test test-base-image test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
 
 TEST_LOG ?= test.log
 TEST_BASE_IMAGE ?= gwiki-test-base:$(GO_VERSION)
@@ -23,22 +23,19 @@ docker-build:
 test:
 	@rm -f "$(TEST_LOG)"
 	@echo "# make test $$(date -Is)" | tee -a "$(TEST_LOG)"
-	@bash -o pipefail -c '$(MAKE) --no-print-directory test-base-image 2>&1 | tee -a "$(TEST_LOG)"'
 	@bash -o pipefail -c '$(MAKE) --no-print-directory test-unit 2>&1 | tee -a "$(TEST_LOG)"'
 	@bash -o pipefail -c '$(MAKE) --no-print-directory test-http 2>&1 | tee -a "$(TEST_LOG)"'
+
+quick-test:
+	@WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
 
 test-base-image:
 	docker build --target test-base --build-arg GO_VERSION=$(GO_VERSION) -t $(TEST_BASE_IMAGE) .
 
 test-unit:
-	docker run --rm -t \
-		-e WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) \
-		-v "$$(pwd)":/src \
-		-w /src \
-		$(TEST_BASE_IMAGE) \
-		sh -lc '/usr/local/go/bin/go mod download && CGO_ENABLED=1 /usr/local/go/bin/go test -tags "sqlite_fts5" ./...'
+	@WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
 
-test-http:
+test-http: test-base-image
 	docker run --rm -t \
 		-e WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) \
 		-v "$$(pwd)":/src \

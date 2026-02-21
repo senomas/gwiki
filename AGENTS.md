@@ -32,8 +32,9 @@ Non-goals (v1)
    - Single-user auth is required if exposed outside localhost.
 5. **Testing discipline**
    - After completing any planned work, run `make test` before reporting.
-   - Do not run `go test` directly as the default validation path; `make test` is the canonical command.
-   - `make test` must include unit/integration tests and `http_test` coverage via Docker.
+   - For fast local iteration on non-`http_test`, use `make quick-test` (or `go test -tags "sqlite_fts5" ./...`).
+   - Do not use direct `go test` as final validation; `make test` is the canonical pre-commit gate.
+   - `make test` must include non-`http_test` coverage plus `http_test` coverage via Docker.
    - Always run tests before any commit.
 6. **Logging discipline**
    - Add `WARN`/`ERROR` logs for unexpected results (e.g., failure to open files, database errors, external command failures).
@@ -41,8 +42,9 @@ Non-goals (v1)
    - Never expose raw internal/template/runtime error details to end users; log full details server-side and return a generic user-facing error message.
 7. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
-   - After implementing a complete feature, run `make test`; if it passes, commit the change before reporting completion.
-   - After commit, run `make build` to rebuild/restart before manual testing and final reporting.
+   - During implementation, you may run `make quick-test` for fast feedback on non-`http_test`.
+   - Before finalizing a feature, always run `make test`; if it passes, commit the change before reporting completion.
+   - After commit, always run `make build` to rebuild/restart before manual testing and final reporting.
    - After finishing work and committing, check `git status -sb` to confirm a clean tree.
    - Always propose a commit message when the user asks to commit; derive it from the current git diff.
 8. **Response structure**
