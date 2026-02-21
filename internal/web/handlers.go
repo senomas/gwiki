@@ -2580,6 +2580,10 @@ func filterInternalUsers(users []string) []string {
 	return out
 }
 
+func displayTitleForNotePath(notePath string, title string) string {
+	return index.DisplayTitleForPath(notePath, title)
+}
+
 func buildUserLinks(users []string, counts map[string]int, lastCommits map[string]int64, syncStates map[string]index.UserSyncState) []UserLink {
 	if len(users) == 0 {
 		return nil
@@ -11500,9 +11504,10 @@ func (s *Server) buildNoteCardsFromSummaries(ctx context.Context, notes []index.
 			metaAttrs.Updated = labelTime.Local()
 		}
 		folderLabel := s.noteFolderLabel(ctx, note.Path, metaAttrs.Folder)
+		displayTitle := displayTitleForNotePath(note.Path, note.Title)
 		cards = append(cards, NoteCard{
 			Path:        note.Path,
-			Title:       note.Title,
+			Title:       displayTitle,
 			FileName:    filepath.Base(note.Path),
 			Meta:        metaAttrs,
 			FolderLabel: folderLabel,
@@ -13558,6 +13563,7 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
+	displayTitle := displayTitleForNotePath(notePath, meta.Title)
 	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
 	if !IsAuthenticated(r.Context()) {
 		publicCtx := index.WithPublicVisibility(r.Context())
@@ -13690,10 +13696,10 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 	}
 	slog.Debug("note view data journal sidebar", "path", notePath, "duration_ms", time.Since(journalSidebarStart).Milliseconds())
 	data := ViewData{
-		Title:                 meta.Title,
+		Title:                 displayTitle,
 		ContentTemplate:       "view",
 		NotePath:              notePath,
-		NoteTitle:             meta.Title,
+		NoteTitle:             displayTitle,
 		NoteFileName:          filepath.Base(notePath),
 		NoteMeta:              noteMeta,
 		NoteVisibilityDisplay: noteVisibilityDisplay(noteMeta.Visibility, effectiveVisibility),
@@ -13775,6 +13781,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 
 	normalizedContent := []byte(normalizeLineEndings(string(content)))
 	meta := index.ParseContent(string(normalizedContent))
+	displayTitle := displayTitleForNotePath(notePath, meta.Title)
 	noteMeta := index.FrontmatterAttributes(string(normalizedContent))
 	if !IsAuthenticated(r.Context()) {
 		publicCtx := index.WithPublicVisibility(r.Context())
@@ -13869,7 +13876,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 
 	data := ViewData{
 		NotePath:              notePath,
-		NoteTitle:             meta.Title,
+		NoteTitle:             displayTitle,
 		NoteMeta:              noteMeta,
 		NoteVisibilityDisplay: noteVisibilityDisplay(noteMeta.Visibility, effectiveVisibility),
 		NoteHash:              noteHash,

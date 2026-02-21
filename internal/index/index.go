@@ -173,6 +173,7 @@ const secondsPerDay = 86400
 const ftsRankSQL = "bm25(fts, 0.2, 12.0, 10.0, 8.0, 6.0, 4.0, 3.0, 2.0, 1.0)"
 
 var journalPathRE = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
+var splitJournalPathRE = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}-\d{2}-\d{2}\.md$`)
 
 func dateToDay(date string) (int64, error) {
 	parsed, err := time.Parse("2006-01-02", date)
@@ -185,6 +186,40 @@ func dateToDay(date string) (int64, error) {
 func isJournalPath(notePath string) bool {
 	notePath = strings.TrimPrefix(notePath, "/")
 	return journalPathRE.MatchString(notePath)
+}
+
+func splitJournalDateTimeTitleForPath(notePath string) (string, bool) {
+	notePath = strings.TrimPrefix(strings.TrimSpace(notePath), "/")
+	notePath = strings.TrimPrefix(notePath, "notes/")
+	parseTitle := func(path string) (string, bool) {
+		if !splitJournalPathRE.MatchString(path) {
+			return "", false
+		}
+		dateTimePart := strings.TrimSuffix(path, ".md")
+		parsed, err := time.ParseInLocation("2006-01/02-15-04", dateTimePart, time.Local)
+		if err != nil {
+			return "", false
+		}
+		return parsed.Format("2 Jan 2006 15:04"), true
+	}
+	if title, ok := parseTitle(notePath); ok {
+		return title, true
+	}
+	if owner, relPath, err := splitOwnerPath(notePath); err == nil && owner != "" {
+		return parseTitle(relPath)
+	}
+	return "", false
+}
+
+func DisplayTitleForPath(notePath string, title string) string {
+	title = strings.TrimSpace(title)
+	if title != "" {
+		return title
+	}
+	if inferred, ok := splitJournalDateTimeTitleForPath(notePath); ok {
+		return inferred
+	}
+	return title
 }
 
 func journalDateForPath(notePath string) (string, bool) {
@@ -1650,6 +1685,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	body := StripFrontmatter(string(content))
 	blocks := ParseNoteBlocks(string(content))
 	blockTags := directBlockTagsByID(body, blocks)
+	resolvedTitle := DisplayTitleForPath(relPath, meta.Title)
 	uid := strings.TrimSpace(attrs.ID)
 	if strings.HasPrefix(uid, "TEMP-") {
 		return nil
@@ -1695,7 +1731,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		_, err = i.execContextTx(ctx, tx, `
 			INSERT INTO files(user_id, path, title, uid, visibility, hash, mtime_unix, size, created_at, updated_at, etag_time, priority, is_journal)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, userID, relPath, meta.Title, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, etagTime, meta.Priority, isJournal)
+		`, userID, relPath, resolvedTitle, uid, visibility, checksum, mtime.Unix(), size, createdAt, updatedAt, etagTime, meta.Priority, isJournal)
 		if err != nil {
 			return err
 		}
@@ -1716,7 +1752,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 		etagTime := time.Now().UnixNano()
 		_, err = i.execContextTx(ctx, tx, `
 			UPDATE files SET title=?, uid=?, visibility=?, hash=?, mtime_unix=?, size=?, updated_at=?, etag_time=?, priority=?, is_journal=? WHERE id=?
-		`, meta.Title, uid, visibility, checksum, mtime.Unix(), size, updatedAt, etagTime, meta.Priority, isJournal, existingID)
+		`, resolvedTitle, uid, visibility, checksum, mtime.Unix(), size, updatedAt, etagTime, meta.Priority, isJournal, existingID)
 		if err != nil {
 			return err
 		}
