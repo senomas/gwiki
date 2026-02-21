@@ -1059,8 +1059,11 @@ func TestTagFilteredPagesShowHiddenExclusiveSeparator(t *testing.T) {
 }
 
 func TestCompletedPageArchiveTaskFlow(t *testing.T) {
+	requireGit(t)
+
 	repo := t.TempDir()
 	owner := "local"
+	ownerRepo := filepath.Join(repo, owner)
 	notesDir := filepath.Join(repo, owner, "notes")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
@@ -1103,6 +1106,11 @@ func TestCompletedPageArchiveTaskFlow(t *testing.T) {
 	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
 		t.Fatalf("index note: %v", err)
 	}
+	runGit(t, ownerRepo, "init")
+	runGit(t, ownerRepo, "config", "user.name", owner)
+	runGit(t, ownerRepo, "config", "user.email", owner+"@example.com")
+	runGit(t, ownerRepo, "add", ".")
+	runGit(t, ownerRepo, "commit", "-m", "initial note")
 
 	completedTasks, err := idx.CompletedTasksWithMentions(ctx, nil, nil, owner, 20, false, "", "", false, false)
 	if err != nil {
@@ -1152,6 +1160,7 @@ func TestCompletedPageArchiveTaskFlow(t *testing.T) {
 
 	form := url.Values{}
 	form.Set("task_id", targetTaskID)
+	headBeforeArchive := runGit(t, ownerRepo, "rev-parse", "HEAD")
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/tasks/archive", strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatalf("new archive request: %v", err)
@@ -1168,6 +1177,22 @@ func TestCompletedPageArchiveTaskFlow(t *testing.T) {
 	}
 	if strings.TrimSpace(resp.Header.Get("HX-Refresh")) != "true" {
 		t.Fatalf("expected HX-Refresh header, got %q", resp.Header.Get("HX-Refresh"))
+	}
+	headAfterArchive := runGit(t, ownerRepo, "rev-parse", "HEAD")
+	if headAfterArchive == headBeforeArchive {
+		t.Fatalf("expected new commit after archive, head unchanged at %s", headAfterArchive)
+	}
+	lastMessage := runGit(t, ownerRepo, "log", "-1", "--format=%s")
+	wantMessage := "archive task " + notePath
+	if lastMessage != wantMessage {
+		t.Fatalf("last commit message=%q want %q", lastMessage, wantMessage)
+	}
+	lastFiles := runGit(t, ownerRepo, "show", "--name-only", "--pretty=format:", "HEAD")
+	if !strings.Contains(lastFiles, filepath.ToSlash(filepath.Join("notes", noteRel))) {
+		t.Fatalf("expected source note in archive commit files, got %q", lastFiles)
+	}
+	if !strings.Contains(lastFiles, filepath.ToSlash(filepath.Join("archive", noteRel))) {
+		t.Fatalf("expected archive note in archive commit files, got %q", lastFiles)
 	}
 
 	updatedSource, err := os.ReadFile(fullNotePath)

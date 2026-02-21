@@ -10655,6 +10655,9 @@ func initRepo(ctx context.Context, repoPath string) error {
 		}
 		return fmt.Errorf("git init failed: %s", msg)
 	}
+	if err := syncer.EnsureDefaultGitIgnore(repoPath); err != nil {
+		return fmt.Errorf("init repo .gitignore failed: %w", err)
+	}
 	return nil
 }
 
@@ -11028,7 +11031,13 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 		_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
 	}
 	if ownerName, _, splitErr := s.ownerFromNotePath(notePath); splitErr == nil {
-		s.commitOwnerRepoAsync(ownerName, "archive task "+notePath)
+		if err := commitRepoIfDirty(r.Context(), s.ownerRepoPath(ownerName), "archive task "+notePath, fullPath, archivePath); err != nil {
+			slog.Error("archive task commit failed", "owner", ownerName, "path", notePath, "archive_path", archivePath, "err", err)
+			s.internalServerError(w, r, fmt.Errorf("archive commit failed: %w", err))
+			return
+		}
+	} else {
+		slog.Warn("archive task owner resolve failed", "path", notePath, "err", splitErr)
 	}
 
 	s.addToast(r, Toast{

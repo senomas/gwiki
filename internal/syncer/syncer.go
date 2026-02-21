@@ -30,6 +30,11 @@ type Options struct {
 	EmailDomain        string
 }
 
+var defaultGitIgnoreEntries = []string{
+	"/*.log",
+	"/notes/attachments/TEMP*",
+}
+
 func Acquire(timeout time.Duration) (func(), error) {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -63,6 +68,9 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
 		return "", fmt.Errorf("auto-sync: no git repo in %s", repoDir)
+	}
+	if err := ensureDefaultGitIgnore(repoDir); err != nil {
+		return "", fmt.Errorf("auto-sync: ensure gitignore failed: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
@@ -161,7 +169,7 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	} else {
 		_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "checkout", "-b", effectiveMain)
 	}
-	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", "--", "notes/", ":(exclude)notes/attachments/TEMP-*")
+	_, _ = runGitCommand(ctx, repoDir, env, writer, "git", "add", ".")
 
 	hasChanges, err := gitHasStagedChanges(ctx, repoDir, env, writer)
 	if err != nil {
@@ -264,6 +272,55 @@ func RunWithOptions(ctx context.Context, repoPath string, opts Options) (string,
 	writeLine("auto-sync: done %s", time.Now().Format(time.RFC3339))
 
 	return output.String(), nil
+}
+
+func EnsureDefaultGitIgnore(repoDir string) error {
+	return ensureDefaultGitIgnore(repoDir)
+}
+
+func ensureDefaultGitIgnore(repoDir string) error {
+	if strings.TrimSpace(repoDir) == "" {
+		return fmt.Errorf("repo dir required")
+	}
+	ignorePath := filepath.Join(repoDir, ".gitignore")
+	contentBytes, err := os.ReadFile(ignorePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	existing := strings.ReplaceAll(string(contentBytes), "\r\n", "\n")
+	hasFile := !os.IsNotExist(err)
+
+	lines := []string{}
+	if trimmed := strings.TrimRight(existing, "\n"); trimmed != "" {
+		lines = strings.Split(trimmed, "\n")
+	}
+	existingSet := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		token := strings.TrimSpace(line)
+		if token == "" {
+			continue
+		}
+		existingSet[token] = struct{}{}
+	}
+
+	changed := !hasFile
+	for _, required := range defaultGitIgnoreEntries {
+		if _, ok := existingSet[required]; ok {
+			continue
+		}
+		lines = append(lines, required)
+		existingSet[required] = struct{}{}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+
+	next := ""
+	if len(lines) > 0 {
+		next = strings.Join(lines, "\n") + "\n"
+	}
+	return os.WriteFile(ignorePath, []byte(next), 0o644)
 }
 
 func CommitOnly(ctx context.Context, repoPath string) (string, error) {
