@@ -1532,18 +1532,30 @@
       function isAnyLauncherOpen() {
         return !!document.querySelector(".ui-overlay.is-open");
       }
+      function isCtrlSpaceShortcut(event) {
+        if (!event || !event.ctrlKey || event.metaKey || event.altKey) {
+          return false;
+        }
+        var key = event.key;
+        var code = event.code;
+        return key === " " || key === "Spacebar" || (key === "Unidentified" && code === "Space") || code === "Space";
+      }
       window.isEditableTarget = isEditableTarget;
       window.isAnyLauncherOpen = isAnyLauncherOpen;
 
       document.addEventListener("keydown", function (event) {
-        if (!event.ctrlKey || event.key !== " ") {
+        if (!isCtrlSpaceShortcut(event)) {
           return;
         }
         var target = event.target;
         if (isEditableTarget(target)) {
           return;
         }
+        if (event.repeat) {
+          return;
+        }
         event.preventDefault();
+        event.stopPropagation();
         if (launcher.classList.contains("is-open")) {
           closeLauncher();
           return;

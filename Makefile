@@ -8,6 +8,8 @@ export
 TEST_LOG ?= test.log
 TEST_BASE_IMAGE ?= gwiki-test-base:$(GO_VERSION)
 TEST_WIKI_LOG_LEVEL ?= error
+TEST_GO_CACHE ?= /tmp/gwiki-go-build-cache
+TEST_GO_MOD_CACHE ?= /tmp/gwiki-go-mod-cache
 
 WIKI_REPO_PATH ?= ../seno-wiki/
 WIKI_DATA_PATH ?= ./.wiki
@@ -27,13 +29,15 @@ test:
 	@bash -o pipefail -c '$(MAKE) --no-print-directory test-http 2>&1 | tee -a "$(TEST_LOG)"'
 
 quick-test:
-	@WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
+	@mkdir -p "$(TEST_GO_CACHE)" "$(TEST_GO_MOD_CACHE)"
+	@WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) CGO_ENABLED=1 GOCACHE="$(TEST_GO_CACHE)" GOMODCACHE="$(TEST_GO_MOD_CACHE)" go test -tags "sqlite_fts5" ./...
 
 test-base-image:
 	docker build --target test-base --build-arg GO_VERSION=$(GO_VERSION) -t $(TEST_BASE_IMAGE) .
 
 test-unit:
-	@WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) CGO_ENABLED=1 go test -tags "sqlite_fts5" ./...
+	@mkdir -p "$(TEST_GO_CACHE)" "$(TEST_GO_MOD_CACHE)"
+	@WIKI_LOG_LEVEL=$(TEST_WIKI_LOG_LEVEL) CGO_ENABLED=1 GOCACHE="$(TEST_GO_CACHE)" GOMODCACHE="$(TEST_GO_MOD_CACHE)" go test -tags "sqlite_fts5" ./...
 
 test-http: test-base-image
 	docker run --rm -t \

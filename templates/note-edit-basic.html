@@ -352,8 +352,20 @@
       }
     }
 
+    function isCtrlSpaceShortcut(event) {
+      if (!event || !event.ctrlKey || event.metaKey || event.altKey) {
+        return false;
+      }
+      var key = event.key;
+      var code = event.code;
+      return key === " " || key === "Spacebar" || (key === "Unidentified" && code === "Space") || code === "Space";
+    }
+
     textarea.addEventListener("keydown", function (event) {
-      if (!event.ctrlKey || event.key !== " ") {
+      if (!isCtrlSpaceShortcut(event)) {
+        return;
+      }
+      if (event.repeat) {
         return;
       }
       event.preventDefault();
