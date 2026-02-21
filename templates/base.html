@@ -2536,6 +2536,36 @@
         return next;
       }
 
+      function resolveInlineTagBasePath(pathname) {
+        var path = String(pathname || "").trim();
+        if (!path) {
+          return "/";
+        }
+        if (path.indexOf("/notes/") !== 0) {
+          return path;
+        }
+        var rest = path.slice("/notes/".length);
+        while (rest.charAt(0) === "/") {
+          rest = rest.slice(1);
+        }
+        if (!rest) {
+          return "/";
+        }
+        if (rest.charAt(0) !== "@") {
+          return "/";
+        }
+        var ownerPath = rest.slice(1);
+        var separator = ownerPath.indexOf("/");
+        if (separator <= 0) {
+          return "/";
+        }
+        var owner = ownerPath.slice(0, separator).trim();
+        if (!owner) {
+          return "/";
+        }
+        return "/@" + owner;
+      }
+
       function buildTagToggleHref(raw, tag) {
         if (!tag) {
           return window.location.href;
@@ -2546,6 +2576,7 @@
         } catch (err) {
           parsed = new URL(window.location.href);
         }
+        parsed.pathname = resolveInlineTagBasePath(parsed.pathname);
         var params = parsed.searchParams;
         var next = toggleTagParam(parseTagParam(params.get("t")), tag);
         if (next.length) {

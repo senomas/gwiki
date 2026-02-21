@@ -13597,7 +13597,11 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
-	baseURL := baseURLForLinks(r, "/")
+	tagBasePath := "/"
+	if resolvedTagBasePath, ok := noteTagBasePathForRequestPath(r.URL.Path); ok {
+		tagBasePath = resolvedTagBasePath
+	}
+	baseURL := baseURLForLinks(r, tagBasePath)
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
@@ -16155,9 +16159,37 @@ func sidebarRequest(r *http.Request) (*http.Request, string) {
 	return &clone, basePath
 }
 
+func noteTagBasePathForRequestPath(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/notes/") {
+		return "", false
+	}
+	rest := strings.TrimPrefix(path, "/notes/")
+	rest = strings.TrimPrefix(rest, "/")
+	if rest == "" {
+		return "/", true
+	}
+	if !strings.HasPrefix(rest, "@") {
+		return "/", true
+	}
+	ownerPath := strings.TrimPrefix(rest, "@")
+	sep := strings.Index(ownerPath, "/")
+	if sep <= 0 {
+		return "/", true
+	}
+	owner := strings.TrimSpace(ownerPath[:sep])
+	if !isValidOwnerName(owner) {
+		return "/", true
+	}
+	return "/@" + owner, true
+}
+
 func sidebarBasePath(path string) string {
 	if strings.HasPrefix(path, "/daily/") {
 		return path
+	}
+	if notesBasePath, ok := noteTagBasePathForRequestPath(path); ok {
+		return notesBasePath
 	}
 	path = strings.TrimSpace(path)
 	if path == "" {

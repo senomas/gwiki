@@ -1058,6 +1058,87 @@ func TestTagFilteredPagesShowHiddenExclusiveSeparator(t *testing.T) {
 	}
 }
 
+func TestSidebarTagLinksUseIndexOnNoteDetailAndStayOnListPages(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	noteRel := "sidebar-tags.md"
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	noteContent := "# Sidebar Tags\n\ncontent #demo\n"
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	if err := idx.IndexNote(ctx, notePath, []byte(noteContent), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	cases := []struct {
+		name       string
+		currentURL string
+		wantHref   string
+	}{
+		{name: "note detail owner scoped routes to owner index", currentURL: "/notes/@local/sidebar-tags.md", wantHref: `href="/@local?t=demo"`},
+		{name: "todo stays on todo", currentURL: "/todo", wantHref: `href="/todo?t=demo"`},
+		{name: "completed stays on completed", currentURL: "/completed", wantHref: `href="/completed?t=demo"`},
+		{name: "archived stays on archived", currentURL: "/archived", wantHref: `href="/archived?t=demo"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/sidebar", nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			req.Header.Set("HX-Current-URL", ts.URL+tc.currentURL)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("do request: %v", err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			html := string(body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("sidebar status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+			}
+			if !strings.Contains(html, tc.wantHref) {
+				t.Fatalf("expected sidebar tag href %s, got %s", tc.wantHref, html)
+			}
+		})
+	}
+}
+
 func TestCompletedPageArchiveTaskFlow(t *testing.T) {
 	requireGit(t)
 
