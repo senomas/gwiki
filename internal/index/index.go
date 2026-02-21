@@ -183,32 +183,53 @@ func dateToDay(date string) (int64, error) {
 	return parsed.UTC().Unix() / secondsPerDay, nil
 }
 
+func journalPathCandidates(notePath string) []string {
+	clean := strings.TrimPrefix(strings.TrimSpace(notePath), "/")
+	clean = strings.TrimPrefix(clean, "notes/")
+	if clean == "" {
+		return nil
+	}
+	candidates := []string{clean}
+	if owner, relPath, err := splitOwnerPath(clean); err == nil && owner != "" {
+		relPath = strings.TrimSpace(relPath)
+		if relPath != "" && relPath != clean {
+			candidates = append(candidates, relPath)
+		}
+	}
+	return candidates
+}
+
+func parseJournalPathDateTime(notePath string) (time.Time, bool, bool) {
+	for _, candidate := range journalPathCandidates(notePath) {
+		if splitJournalPathRE.MatchString(candidate) {
+			dateTimePart := strings.TrimSuffix(candidate, ".md")
+			parsed, err := time.ParseInLocation("2006-01/02-15-04", dateTimePart, time.Local)
+			if err == nil {
+				return parsed, true, true
+			}
+		}
+		if journalPathRE.MatchString(candidate) {
+			datePart := strings.TrimSuffix(candidate, ".md")
+			parsed, err := time.ParseInLocation("2006-01/02", datePart, time.Local)
+			if err == nil {
+				return parsed, false, true
+			}
+		}
+	}
+	return time.Time{}, false, false
+}
+
 func isJournalPath(notePath string) bool {
-	notePath = strings.TrimPrefix(notePath, "/")
-	return journalPathRE.MatchString(notePath)
+	_, _, ok := parseJournalPathDateTime(notePath)
+	return ok
 }
 
 func splitJournalDateTimeTitleForPath(notePath string) (string, bool) {
-	notePath = strings.TrimPrefix(strings.TrimSpace(notePath), "/")
-	notePath = strings.TrimPrefix(notePath, "notes/")
-	parseTitle := func(path string) (string, bool) {
-		if !splitJournalPathRE.MatchString(path) {
-			return "", false
-		}
-		dateTimePart := strings.TrimSuffix(path, ".md")
-		parsed, err := time.ParseInLocation("2006-01/02-15-04", dateTimePart, time.Local)
-		if err != nil {
-			return "", false
-		}
-		return parsed.Format("2 Jan 2006 15:04"), true
+	parsed, split, ok := parseJournalPathDateTime(notePath)
+	if !ok || !split {
+		return "", false
 	}
-	if title, ok := parseTitle(notePath); ok {
-		return title, true
-	}
-	if owner, relPath, err := splitOwnerPath(notePath); err == nil && owner != "" {
-		return parseTitle(relPath)
-	}
-	return "", false
+	return parsed.Format("2 Jan 2006 15:04"), true
 }
 
 func DisplayTitleForPath(notePath string, title string) string {
@@ -223,13 +244,8 @@ func DisplayTitleForPath(notePath string, title string) string {
 }
 
 func journalDateForPath(notePath string) (string, bool) {
-	notePath = strings.TrimPrefix(notePath, "/")
-	if !journalPathRE.MatchString(notePath) {
-		return "", false
-	}
-	datePart := strings.TrimSuffix(notePath, ".md")
-	parsed, err := time.Parse("2006-01/02", datePart)
-	if err != nil {
+	parsed, _, ok := parseJournalPathDateTime(notePath)
+	if !ok {
 		return "", false
 	}
 	return parsed.Format("2006-01-02"), true
@@ -239,12 +255,13 @@ func JournalDateForPath(notePath string) (string, bool) {
 	return journalDateForPath(notePath)
 }
 
-func journalEndOfDayForPath(notePath string) (time.Time, bool) {
-	notePath = strings.TrimPrefix(notePath, "/")
-	notePath = strings.TrimSuffix(notePath, ".md")
-	parsed, err := time.Parse("2006-01/02", notePath)
-	if err != nil {
+func journalUpdatedAtForPath(notePath string) (time.Time, bool) {
+	parsed, split, ok := parseJournalPathDateTime(notePath)
+	if !ok {
 		return time.Time{}, false
+	}
+	if split {
+		return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), parsed.Hour(), parsed.Minute(), 59, 0, time.Local), true
 	}
 	return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, time.Local), true
 }
@@ -1697,7 +1714,7 @@ func (i *Index) IndexNote(ctx context.Context, notePath string, content []byte, 
 	}
 	updatedAt := mtime.Unix()
 	if isJournal == 1 {
-		if journalUpdated, ok := journalEndOfDayForPath(relPath); ok {
+		if journalUpdated, ok := journalUpdatedAtForPath(relPath); ok {
 			updatedAt = journalUpdated.Unix()
 		}
 	} else if !attrs.Updated.IsZero() {
@@ -5081,12 +5098,10 @@ func (i *Index) JournalDates(ctx context.Context, ownerName string) ([]time.Time
 		if err := rows.Scan(&notePath); err != nil {
 			return nil, err
 		}
-		trimmed := strings.TrimSuffix(notePath, ".md")
-		parts := strings.Split(trimmed, "/")
-		if len(parts) != 2 {
+		dateStr, ok := journalDateForPath(notePath)
+		if !ok {
 			continue
 		}
-		dateStr := parts[0] + "-" + parts[1]
 		parsed, err := time.Parse("2006-01-02", dateStr)
 		if err != nil {
 			continue
