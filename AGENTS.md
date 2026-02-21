@@ -41,7 +41,8 @@ Non-goals (v1)
    - Never expose raw internal/template/runtime error details to end users; log full details server-side and return a generic user-facing error message.
 7. **Workflow**
    - Before making changes, explain the plan and wait for confirmation unless the task is trivial.
-   - After implementing a complete feature and `make test` passes, commit the change before reporting completion.
+   - After implementing a complete feature, run `make test`; if it passes, commit the change before reporting completion.
+   - After commit, run `make build` to rebuild/restart before manual testing and final reporting.
    - After finishing work and committing, check `git status -sb` to confirm a clean tree.
    - Always propose a commit message when the user asks to commit; derive it from the current git diff.
 8. **Response structure**
@@ -49,7 +50,7 @@ Non-goals (v1)
 9. **Dev server rebuild trigger**
    - `make dev` runs the `gwiki` compose service using the configured image.
    - `make dev-build` is deprecated/removed.
-   - After finishing code updates, always run `make build` to rebuild/restart before manual testing (and before committing).
+   - After finishing code updates and committing, always run `make build` to rebuild/restart before manual testing and final reporting.
 
 ---
 
