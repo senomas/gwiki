@@ -860,6 +860,36 @@
     .note-actions-modal .quick-launcher__action-form.hidden {
       display: none;
     }
+    .floating-launcher-btn {
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 0px) + 0.9rem);
+      right: calc(env(safe-area-inset-right, 0px) + 0.9rem);
+      z-index: 40;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 3rem;
+      height: 3rem;
+      border-radius: 0.95rem;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      background: rgba(15, 18, 28, 0.9);
+      box-shadow: 0 20px 55px -35px rgba(15, 23, 42, 0.95);
+      transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+    }
+    .floating-launcher-btn:hover {
+      border-color: rgba(125, 211, 252, 0.6);
+      background: rgba(22, 28, 44, 0.94);
+      transform: translateY(-1px);
+    }
+    .floating-launcher-btn:focus-visible {
+      outline: 2px solid rgba(125, 211, 252, 0.8);
+      outline-offset: 2px;
+    }
+    .floating-launcher-btn img {
+      width: 1.9rem;
+      height: 1.9rem;
+      object-fit: contain;
+    }
     .toast-stack {
       position: fixed;
       top: 1.5rem;
@@ -956,6 +986,9 @@
 {{else}}
   {{template "layout_sidebar" .}}
 {{end}}
+  <button id="floating-quick-launcher" type="button" data-quick-launcher="true" class="floating-launcher-btn" aria-label="Quick launcher">
+    <img src="/static/scroll.png" alt="">
+  </button>
   <div id="toast-stack" class="toast-stack" hx-get="/toast" hx-trigger="load, toast:refresh from:body" hx-swap="outerHTML"></div>
   {{template "quick_launcher" .}}
   <div id="note-actions-modal" class="note-actions-modal ui-overlay" aria-hidden="true">

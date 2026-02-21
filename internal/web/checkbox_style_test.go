@@ -80,3 +80,22 @@ func TestCtrlSpaceShortcutSupportsBraveKeyVariants(t *testing.T) {
 		t.Fatalf("expected Space code fallback in note-edit-basic template")
 	}
 }
+
+func TestFloatingQuickLauncherButtonExists(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("resolve test path")
+	}
+	basePath := filepath.Join(filepath.Dir(file), "..", "..", "templates", "base.html")
+	content, err := os.ReadFile(basePath)
+	if err != nil {
+		t.Fatalf("read base template: %v", err)
+	}
+	source := string(content)
+	if !strings.Contains(source, `id="floating-quick-launcher"`) {
+		t.Fatalf("expected floating quick launcher button in base template")
+	}
+	if !strings.Contains(source, `data-quick-launcher="true"`) {
+		t.Fatalf("expected floating quick launcher trigger attribute in base template")
+	}
+}
