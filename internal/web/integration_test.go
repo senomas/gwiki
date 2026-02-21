@@ -126,6 +126,79 @@ func TestIntegrationFlow(t *testing.T) {
 	}
 }
 
+func TestNewNoteWithoutTitleUsesSplitJournalPathPattern(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	if err := os.MkdirAll(filepath.Join(repo, owner, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	form := url.Values{}
+	form.Set("content", "plain journal entry without heading")
+	resp, err := http.PostForm(ts.URL+"/notes/new", form)
+	if err != nil {
+		t.Fatalf("post new note without title: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.Request == nil || resp.Request.URL == nil {
+		t.Fatalf("expected final request URL after redirect")
+	}
+	finalPath := resp.Request.URL.Path
+	relPath := strings.TrimPrefix(finalPath, "/notes/@"+owner+"/")
+	if relPath == finalPath {
+		relPath = strings.TrimPrefix(finalPath, "/notes/")
+	}
+	pathRe := regexp.MustCompile(`^(\d{4}-\d{2})/(\d{2})-(\d{2})-(\d{2})(?:-\d+)?\.md$`)
+	matches := pathRe.FindStringSubmatch(relPath)
+	if len(matches) != 5 {
+		t.Fatalf("expected split journal path, got %q", finalPath)
+	}
+	fullPath := filepath.Join(repo, owner, "notes", filepath.FromSlash(relPath))
+	contentBytes, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Fatalf("read created split journal note: %v", err)
+	}
+	content := string(contentBytes)
+
+	dayDate, err := time.ParseInLocation("2006-01-02", matches[1]+"-"+matches[2], time.Local)
+	if err != nil {
+		t.Fatalf("parse journal date from path: %v", err)
+	}
+	expectedDateHeading := "# " + dayDate.Format("2 Jan 2006")
+	expectedTimeHeading := "## " + matches[3] + ":" + matches[4]
+	if !strings.Contains(content, expectedDateHeading) {
+		t.Fatalf("expected date heading %q in note content, got %q", expectedDateHeading, content)
+	}
+	if !strings.Contains(content, expectedTimeHeading) {
+		t.Fatalf("expected time heading %q in note content, got %q", expectedTimeHeading, content)
+	}
+}
+
 func TestEditDeleteRequireOwnerScopedRoute(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

@@ -172,8 +172,8 @@ type fileRecord struct {
 const secondsPerDay = 86400
 const ftsRankSQL = "bm25(fts, 0.2, 12.0, 10.0, 8.0, 6.0, 4.0, 3.0, 2.0, 1.0)"
 
-var journalPathRE = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
-var splitJournalPathRE = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}-\d{2}-\d{2}\.md$`)
+var journalPathRE = regexp.MustCompile(`^(\d{4}-\d{2})/(\d{2})\.md$`)
+var splitJournalPathRE = regexp.MustCompile(`^(\d{4}-\d{2})/(\d{2})-(\d{2})-(\d{2})(?:-\d+)?\.md$`)
 
 func dateToDay(date string) (int64, error) {
 	parsed, err := time.Parse("2006-01-02", date)
@@ -201,15 +201,15 @@ func journalPathCandidates(notePath string) []string {
 
 func parseJournalPathDateTime(notePath string) (time.Time, bool, bool) {
 	for _, candidate := range journalPathCandidates(notePath) {
-		if splitJournalPathRE.MatchString(candidate) {
-			dateTimePart := strings.TrimSuffix(candidate, ".md")
+		if matches := splitJournalPathRE.FindStringSubmatch(candidate); len(matches) == 5 {
+			dateTimePart := matches[1] + "/" + matches[2] + "-" + matches[3] + "-" + matches[4]
 			parsed, err := time.ParseInLocation("2006-01/02-15-04", dateTimePart, time.Local)
 			if err == nil {
 				return parsed, true, true
 			}
 		}
-		if journalPathRE.MatchString(candidate) {
-			datePart := strings.TrimSuffix(candidate, ".md")
+		if matches := journalPathRE.FindStringSubmatch(candidate); len(matches) == 3 {
+			datePart := matches[1] + "/" + matches[2]
 			parsed, err := time.ParseInLocation("2006-01/02", datePart, time.Local)
 			if err == nil {
 				return parsed, false, true

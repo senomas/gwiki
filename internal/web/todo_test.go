@@ -28,6 +28,25 @@ func TestFilterFutureJournalTasks(t *testing.T) {
 	}
 }
 
+func TestFilterFutureJournalTasksSplitJournalPaths(t *testing.T) {
+	now := time.Date(2026, 1, 19, 12, 0, 0, 0, time.Local)
+	owner := "local"
+	tasks := []index.TaskItem{
+		{Path: owner + "/2026-01/19-09-30.md", Text: "today split", Hash: "a", FileID: 1},
+		{Path: owner + "/2026-01/21-08-00-2.md", Text: "future split", Hash: "b", FileID: 2},
+		{Path: owner + "/notes/normal.md", Text: "normal", Hash: "c", FileID: 3},
+	}
+	filtered := filterFutureJournalTasks(tasks, now)
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 tasks after filter, got %d", len(filtered))
+	}
+	for _, task := range filtered {
+		if task.Path == owner+"/2026-01/21-08-00-2.md" {
+			t.Fatalf("future split journal task should be filtered")
+		}
+	}
+}
+
 func TestApplyRenderReplacementsDue(t *testing.T) {
 	input := `<p>Pay rent due:2026-02-05 and call @due(2026-02-07).</p>`
 	out := applyRenderReplacements(input)

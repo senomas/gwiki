@@ -54,7 +54,7 @@ import (
 var (
 	linkifyURLRegexp = regexp.MustCompile(`^(?:http|https|ftp)://(?:[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-z]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/#?][-a-zA-Z0-9@:%_+.~#$!?&/=\(\);,'">\^{}\[\]]*)?`)
 	journalFolderRE  = regexp.MustCompile(`^\d{4}-\d{2}$`)
-	journalNoteRE    = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}\.md$`)
+	journalNoteRE    = regexp.MustCompile(`^\d{4}-\d{2}/\d{2}(?:-\d{2}-\d{2}(?:-\d+)?)?\.md$`)
 	journalDateH1    = regexp.MustCompile(`^#\s*(\d{4}-\d{2}-\d{2})\s*$`)
 	wikiLinkRe       = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	taskCheckboxRe   = regexp.MustCompile(`(?i)<input\b[^>]*type="checkbox"[^>]*>`)
@@ -817,6 +817,30 @@ func normalizeFolderPath(input string) (string, error) {
 		return "", fs.ErrUnsafePath
 	}
 	return clean, nil
+}
+
+func splitJournalRelPath(ts time.Time, suffix int) string {
+	base := ts.Format("02-15-04")
+	if suffix > 1 {
+		base = base + "-" + strconv.Itoa(suffix)
+	}
+	return filepath.ToSlash(filepath.Join(ts.Format("2006-01"), base+".md"))
+}
+
+func (s *Server) uniqueSplitJournalNotePath(ownerName string, ts time.Time) (string, error) {
+	for suffix := 1; ; suffix++ {
+		relPath := splitJournalRelPath(ts, suffix)
+		notePath := filepath.ToSlash(filepath.Join(ownerName, relPath))
+		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+		if err != nil {
+			return "", err
+		}
+		if _, statErr := os.Stat(fullPath); os.IsNotExist(statErr) {
+			return notePath, nil
+		} else if statErr != nil {
+			return "", statErr
+		}
+	}
 }
 
 func isJournalNotePath(notePath string) bool {
@@ -3956,22 +3980,16 @@ func filterFutureJournalTasks(tasks []index.TaskItem, now time.Time) []index.Tas
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	filtered := make([]index.TaskItem, 0, len(tasks))
 	for _, task := range tasks {
-		taskPath := task.Path
-		if _, rel, err := fs.SplitOwnerNotePath(task.Path); err == nil {
-			taskPath = rel
-		}
-		if !journalNoteRE.MatchString(taskPath) {
+		if !isJournalNotePath(task.Path) {
 			filtered = append(filtered, task)
 			continue
 		}
-		trimmed := strings.TrimSuffix(taskPath, ".md")
-		parts := strings.Split(trimmed, "/")
-		if len(parts) != 2 {
+		journalDate, ok := index.JournalDateForPath(task.Path)
+		if !ok {
 			filtered = append(filtered, task)
 			continue
 		}
-		dateStr := parts[0] + "-" + parts[1]
-		date, err := time.ParseInLocation("2006-01-02", dateStr, now.Location())
+		date, err := time.ParseInLocation("2006-01-02", journalDate, now.Location())
 		if err != nil {
 			filtered = append(filtered, task)
 			continue
@@ -11894,6 +11912,9 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	journalMode := false
 	journalDay := now
+	journalFromDateHeading := false
+	journalFromMissingTitle := false
+	journalFixedPath := ""
 	lines := strings.Split(content, "\n")
 	firstLine := -1
 	for i, line := range lines {
@@ -11908,6 +11929,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		if matches := journalDateH1.FindStringSubmatch(line); len(matches) == 2 {
 			if parsed, err := time.Parse("2006-01-02", matches[1]); err == nil {
 				journalMode = true
+				journalFromDateHeading = true
 				journalDay = parsed
 				remaining := append([]string{}, lines[:firstLine]...)
 				remaining = append(remaining, lines[firstLine+1:]...)
@@ -11918,6 +11940,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	title := index.DeriveTitleFromBody(content)
 	if title == "" {
 		journalMode = true
+		journalFromMissingTitle = true
 	}
 	customFilename := ""
 	if duplicateAction == "rename" {
@@ -11973,11 +11996,40 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if journalMode {
-		journalDate := journalDay.Format("2 Jan 2006")
-		journalTime := now.Format("15:04")
+		useSplitJournalPath := journalFromMissingTitle && !journalFromDateHeading
+		journalEntryTime := now
+		if journalFromDateHeading {
+			journalEntryTime = time.Date(journalDay.Year(), journalDay.Month(), journalDay.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), now.Location())
+		}
+		journalDate := journalEntryTime.Format("2 Jan 2006")
+		journalTime := journalEntryTime.Format("15:04")
 		journalEntry := "## " + journalTime + "\n\n" + strings.TrimSpace(content) + "\n"
-		journalRel := filepath.ToSlash(filepath.Join(journalDay.Format("2006-01"), journalDay.Format("02")+".md"))
-		notePath := filepath.ToSlash(filepath.Join(ownerName, journalRel))
+		notePath := ""
+		var pathErr error
+		if useSplitJournalPath {
+			notePath, pathErr = s.uniqueSplitJournalNotePath(ownerName, journalEntryTime)
+		} else {
+			journalRel := filepath.ToSlash(filepath.Join(journalDay.Format("2006-01"), journalDay.Format("02")+".md"))
+			notePath = filepath.ToSlash(filepath.Join(ownerName, journalRel))
+		}
+		if pathErr != nil {
+			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+			s.renderEditError(w, r, ViewData{
+				Title:            "New note",
+				ContentTemplate:  "edit",
+				RawContent:       content,
+				FrontmatterBlock: frontmatter,
+				OwnerOptions:     ownerOptions,
+				SelectedOwner:    ownerName,
+				SaveAction:       "/notes/new",
+				UploadToken:      uploadToken,
+				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+				ErrorMessage:     pathErr.Error(),
+				ErrorReturnURL:   "/notes/new",
+			}, http.StatusBadRequest)
+			return
+		}
 		fullPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
 		if err != nil {
 			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
@@ -11997,57 +12049,115 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			}, http.StatusBadRequest)
 			return
 		}
-		if existing, err := os.ReadFile(fullPath); err == nil {
-			existingContent := strings.TrimRight(normalizeLineEndings(string(existing)), "\n")
-			updatedContent := existingContent + "\n\n" + journalEntry
-			derivedTitle := index.DeriveTitleFromBody(updatedContent)
-			if derivedTitle == "" {
-				derivedTitle = journalDate
-			}
-			updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
-			if err != nil {
-				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-				s.renderEditError(w, r, ViewData{
-					Title:            "New note",
-					ContentTemplate:  "edit",
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					OwnerOptions:     ownerOptions,
-					SelectedOwner:    ownerName,
-					SaveAction:       "/notes/new",
-					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
-					ErrorMessage:     err.Error(),
-					ErrorReturnURL:   "/notes/new",
-				}, http.StatusInternalServerError)
-				return
-			}
-			unlock := s.locker.Lock(notePath)
-			attrs := index.FrontmatterAttributes(updatedContent)
-			if updated, err := s.localizeAttachmentLinks(r.Context(), ownerName, attrs.ID, updatedContent); err != nil {
+		if !useSplitJournalPath {
+			if existing, err := os.ReadFile(fullPath); err == nil {
+				existingContent := strings.TrimRight(normalizeLineEndings(string(existing)), "\n")
+				updatedContent := existingContent + "\n\n" + journalEntry
+				derivedTitle := index.DeriveTitleFromBody(updatedContent)
+				if derivedTitle == "" {
+					derivedTitle = journalDate
+				}
+				updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
+				if err != nil {
+					ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+					s.renderEditError(w, r, ViewData{
+						Title:            "New note",
+						ContentTemplate:  "edit",
+						RawContent:       content,
+						FrontmatterBlock: frontmatter,
+						OwnerOptions:     ownerOptions,
+						SelectedOwner:    ownerName,
+						SaveAction:       "/notes/new",
+						UploadToken:      uploadToken,
+						Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+						AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+						ErrorMessage:     err.Error(),
+						ErrorReturnURL:   "/notes/new",
+					}, http.StatusInternalServerError)
+					return
+				}
+				unlock := s.locker.Lock(notePath)
+				attrs := index.FrontmatterAttributes(updatedContent)
+				if updated, err := s.localizeAttachmentLinks(r.Context(), ownerName, attrs.ID, updatedContent); err != nil {
+					unlock()
+					ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+					s.renderEditError(w, r, ViewData{
+						Title:            "New note",
+						ContentTemplate:  "edit",
+						RawContent:       content,
+						FrontmatterBlock: frontmatter,
+						OwnerOptions:     ownerOptions,
+						SelectedOwner:    ownerName,
+						SaveAction:       "/notes/new",
+						UploadToken:      uploadToken,
+						Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+						AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+						ErrorMessage:     err.Error(),
+						ErrorReturnURL:   "/notes/new",
+					}, http.StatusBadRequest)
+					return
+				} else {
+					updatedContent = updated
+				}
+				if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
+					unlock()
+					ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+					s.renderEditError(w, r, ViewData{
+						Title:            "New note",
+						ContentTemplate:  "edit",
+						RawContent:       content,
+						FrontmatterBlock: frontmatter,
+						OwnerOptions:     ownerOptions,
+						SelectedOwner:    ownerName,
+						SaveAction:       "/notes/new",
+						UploadToken:      uploadToken,
+						Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+						AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+						ErrorMessage:     err.Error(),
+						ErrorReturnURL:   "/notes/new",
+					}, http.StatusInternalServerError)
+					return
+				}
 				unlock()
-				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-				s.renderEditError(w, r, ViewData{
-					Title:            "New note",
-					ContentTemplate:  "edit",
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					OwnerOptions:     ownerOptions,
-					SelectedOwner:    ownerName,
-					SaveAction:       "/notes/new",
-					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
-					ErrorMessage:     err.Error(),
-					ErrorReturnURL:   "/notes/new",
-				}, http.StatusBadRequest)
+				if err := s.promoteTempAttachments(ownerName, uploadToken, updatedContent); err != nil {
+					ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
+					s.renderEditError(w, r, ViewData{
+						Title:            "New note",
+						ContentTemplate:  "edit",
+						RawContent:       content,
+						FrontmatterBlock: frontmatter,
+						OwnerOptions:     ownerOptions,
+						SelectedOwner:    ownerName,
+						SaveAction:       "/notes/new",
+						UploadToken:      uploadToken,
+						Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
+						AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
+						ErrorMessage:     err.Error(),
+						ErrorReturnURL:   "/notes/new",
+					}, http.StatusInternalServerError)
+					return
+				}
+				if info, err := os.Stat(fullPath); err == nil {
+					_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
+				}
+				s.commitOwnerRepoAsync(ownerName, "save "+notePath)
+				s.addToast(r, Toast{
+					ID:              uuid.NewString(),
+					Message:         "Journal entry saved.",
+					Kind:            "success",
+					DurationSeconds: 3,
+					CreatedAt:       time.Now(),
+				})
+				targetURL := noteHref(notePath, currentUserName(r.Context()))
+				if isHTMX(r) {
+					w.Header().Set("HX-Redirect", targetURL)
+					w.Header().Set("X-Redirect-Location", targetURL)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				http.Redirect(w, r, targetURL, http.StatusSeeOther)
 				return
-			} else {
-				updatedContent = updated
-			}
-			if err := fs.WriteFileAtomic(fullPath, []byte(updatedContent), 0o644); err != nil {
-				unlock()
+			} else if err != nil && !os.IsNotExist(err) {
 				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
 				s.renderEditError(w, r, ViewData{
 					Title:            "New note",
@@ -12065,62 +12175,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				}, http.StatusInternalServerError)
 				return
 			}
-			unlock()
-			if err := s.promoteTempAttachments(ownerName, uploadToken, updatedContent); err != nil {
-				ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-				s.renderEditError(w, r, ViewData{
-					Title:            "New note",
-					ContentTemplate:  "edit",
-					RawContent:       content,
-					FrontmatterBlock: frontmatter,
-					OwnerOptions:     ownerOptions,
-					SelectedOwner:    ownerName,
-					SaveAction:       "/notes/new",
-					UploadToken:      uploadToken,
-					Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-					AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
-					ErrorMessage:     err.Error(),
-					ErrorReturnURL:   "/notes/new",
-				}, http.StatusInternalServerError)
-				return
-			}
-			if info, err := os.Stat(fullPath); err == nil {
-				_ = s.idx.IndexNote(r.Context(), notePath, []byte(updatedContent), info.ModTime(), info.Size())
-			}
-			s.commitOwnerRepoAsync(ownerName, "save "+notePath)
-			s.addToast(r, Toast{
-				ID:              uuid.NewString(),
-				Message:         "Journal entry saved.",
-				Kind:            "success",
-				DurationSeconds: 3,
-				CreatedAt:       time.Now(),
-			})
-			targetURL := noteHref(notePath, currentUserName(r.Context()))
-			if isHTMX(r) {
-				w.Header().Set("HX-Redirect", targetURL)
-				w.Header().Set("X-Redirect-Location", targetURL)
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			http.Redirect(w, r, targetURL, http.StatusSeeOther)
-			return
-		} else if err != nil && !os.IsNotExist(err) {
-			ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
-			s.renderEditError(w, r, ViewData{
-				Title:            "New note",
-				ContentTemplate:  "edit",
-				RawContent:       content,
-				FrontmatterBlock: frontmatter,
-				OwnerOptions:     ownerOptions,
-				SelectedOwner:    ownerName,
-				SaveAction:       "/notes/new",
-				UploadToken:      uploadToken,
-				Attachments:      listAttachmentNames(s.noteAttachmentsDir(ownerName, uploadToken)),
-				AttachmentBase:   "/" + filepath.ToSlash(filepath.Join("attachments", uploadToken)),
-				ErrorMessage:     err.Error(),
-				ErrorReturnURL:   "/notes/new",
-			}, http.StatusInternalServerError)
-			return
 		}
 
 		content = "# " + journalDate + "\n\n" + journalEntry
@@ -12130,7 +12184,12 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		}
 		mergedContent = normalizeLineEndings(mergedContent)
 		title = journalDate
-		folderInput = journalDay.Format("2006-01")
+		if useSplitJournalPath {
+			folderInput = journalEntryTime.Format("2006-01")
+			journalFixedPath = notePath
+		} else {
+			folderInput = journalDay.Format("2006-01")
+		}
 	} else {
 		mergedContent = normalizeLineEndings(mergedContent)
 	}
@@ -12332,8 +12391,12 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 
 	var notePath string
 	if journalMode {
-		relPath := filepath.ToSlash(filepath.Join(folder, journalDay.Format("02")+".md"))
-		notePath = filepath.ToSlash(filepath.Join(ownerName, relPath))
+		if journalFixedPath != "" {
+			notePath = journalFixedPath
+		} else {
+			relPath := filepath.ToSlash(filepath.Join(folder, journalDay.Format("02")+".md"))
+			notePath = filepath.ToSlash(filepath.Join(ownerName, relPath))
+		}
 	} else {
 		slug := slugify(title)
 		if customFilename != "" {

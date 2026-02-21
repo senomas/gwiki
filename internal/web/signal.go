@@ -479,14 +479,29 @@ func normalizeSignalTimestamp(ts int64) int64 {
 	return ts * 1000
 }
 
+func signalEntryTime(tsMillis int64) time.Time {
+	normalized := normalizeSignalTimestamp(tsMillis)
+	if normalized <= 0 {
+		return time.Now().In(time.Local)
+	}
+	return time.UnixMilli(normalized).In(time.Local)
+}
+
 func (p *signalPoller) notePathForTimestamp(tsMillis int64) string {
-	now := time.Now()
-	month := now.Format("2006-01")
-	day := now.Format("02")
-	return filepath.ToSlash(filepath.Join(p.cfg.SignalOwner, month, day+".md"))
+	entryTime := signalEntryTime(tsMillis)
+	if p.server != nil {
+		if notePath, err := p.server.uniqueSplitJournalNotePath(p.cfg.SignalOwner, entryTime); err == nil {
+			return notePath
+		} else {
+			slog.Warn("signal journal path fallback", "owner", p.cfg.SignalOwner, "ts_millis", tsMillis, "err", err)
+		}
+	}
+	relPath := splitJournalRelPath(entryTime, 1)
+	return filepath.ToSlash(filepath.Join(p.cfg.SignalOwner, relPath))
 }
 
 func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg signalMessage) error {
+	entryTime := signalEntryTime(msg.TSMillis)
 	content := ""
 	fullPath, err := fs.NoteFilePath(p.cfg.RepoPath, notePath)
 	if err == nil {
@@ -494,7 +509,7 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 			content = normalizeLineEndings(string(raw))
 		}
 	}
-	frontmatter, body, noteID, err := ensureSignalFrontmatter(content, time.Now(), historyUser(ctx))
+	frontmatter, body, noteID, err := ensureSignalFrontmatter(content, entryTime, historyUser(ctx))
 	if err != nil {
 		return err
 	}
@@ -510,9 +525,9 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 	if entry == "" {
 		return nil
 	}
-	journalEntry := "## " + time.Now().Format("15:04") + "\n\n" + entry + "\n"
+	journalEntry := "## " + entryTime.Format("15:04") + "\n\n" + entry + "\n"
 	if body == "" {
-		journalDate := time.Now().Format("2 Jan 2006")
+		journalDate := entryTime.Format("2 Jan 2006")
 		body = "# " + journalDate + "\n\n" + journalEntry
 	} else {
 		body = strings.TrimRight(body, "\n") + "\n\n" + journalEntry

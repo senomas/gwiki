@@ -293,3 +293,31 @@ func TestIndexNoteNonJournalUpdatedFromFrontmatter(t *testing.T) {
 		t.Fatalf("non-journal is_journal=%d want 0", isJournal)
 	}
 }
+
+func TestDisplayTitleForPathSplitJournalWithSuffix(t *testing.T) {
+	got := DisplayTitleForPath("2026-02/21-10-15-2.md", "")
+	if got != "21 Feb 2026 10:15" {
+		t.Fatalf("DisplayTitleForPath split journal suffix=%q want %q", got, "21 Feb 2026 10:15")
+	}
+}
+
+func TestJournalUpdatedAtForPathSplitJournalWithSuffix(t *testing.T) {
+	got, ok := journalUpdatedAtForPath("local/2026-02/21-10-15-2.md")
+	if !ok {
+		t.Fatalf("journalUpdatedAtForPath split journal suffix: expected ok")
+	}
+	want := time.Date(2026, time.February, 21, 10, 15, 59, 0, time.Local)
+	if !got.Equal(want) {
+		t.Fatalf("journalUpdatedAtForPath split journal suffix=%s want %s", got.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+}
+
+func TestJournalDateForPathSplitJournalWithSuffix(t *testing.T) {
+	got, ok := JournalDateForPath("local/2026-02/21-10-15-2.md")
+	if !ok {
+		t.Fatalf("JournalDateForPath split journal suffix: expected ok")
+	}
+	if got != "2026-02-21" {
+		t.Fatalf("JournalDateForPath split journal suffix=%q want %q", got, "2026-02-21")
+	}
+}

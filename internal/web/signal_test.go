@@ -106,6 +106,54 @@ func TestSignalPollerWriteSignalDebugMessage_DisabledWithoutDev(t *testing.T) {
 	}
 }
 
+func TestSignalNotePathForTimestampUsesMessageTime(t *testing.T) {
+	tmpDir := t.TempDir()
+	owner := "seno"
+	if err := os.MkdirAll(filepath.Join(tmpDir, owner, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	cfg := config.Config{
+		RepoPath:    tmpDir,
+		SignalOwner: owner,
+	}
+	poller := signalPoller{
+		cfg:    cfg,
+		server: &Server{cfg: cfg},
+	}
+	ts := time.Date(2026, time.February, 16, 10, 17, 43, 0, time.Local).UnixMilli()
+	got := poller.notePathForTimestamp(ts)
+	want := filepath.ToSlash(filepath.Join(owner, "2026-02", "16-10-17.md"))
+	if got != want {
+		t.Fatalf("signal note path=%q want %q", got, want)
+	}
+}
+
+func TestSignalNotePathForTimestampMinuteCollisionAddsSuffix(t *testing.T) {
+	tmpDir := t.TempDir()
+	owner := "seno"
+	baseDir := filepath.Join(tmpDir, owner, "notes", "2026-02")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes month: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, "16-10-17.md"), []byte("existing"), 0o644); err != nil {
+		t.Fatalf("write existing note: %v", err)
+	}
+	cfg := config.Config{
+		RepoPath:    tmpDir,
+		SignalOwner: owner,
+	}
+	poller := signalPoller{
+		cfg:    cfg,
+		server: &Server{cfg: cfg},
+	}
+	ts := time.Date(2026, time.February, 16, 10, 17, 59, 0, time.Local).UnixMilli()
+	got := poller.notePathForTimestamp(ts)
+	want := filepath.ToSlash(filepath.Join(owner, "2026-02", "16-10-17-2.md"))
+	if got != want {
+		t.Fatalf("signal note path collision=%q want %q", got, want)
+	}
+}
+
 func TestDecodeSignalMessage_ImageOnlyPreviewWithText(t *testing.T) {
 	raw := []byte(`{
 		"envelope": {
