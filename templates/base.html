@@ -1454,10 +1454,36 @@
         if (closestEventTarget(target, "a, button, input, textarea, select, summary, details, label, [role=\"button\"], [contenteditable=\"true\"]")) {
           return false;
         }
-        if (closestEventTarget(target, "[data-note-list]")) {
+        return true;
+      }
+      var touchTapWindowMs = 320;
+      var touchTapMaxDistancePx = 24;
+      var lastTouchTapAt = 0;
+      var lastTouchTapX = 0;
+      var lastTouchTapY = 0;
+      function resetTouchTapState() {
+        lastTouchTapAt = 0;
+        lastTouchTapX = 0;
+        lastTouchTapY = 0;
+      }
+      function isTouchDoubleTap(clientX, clientY) {
+        var x = Number(clientX);
+        var y = Number(clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          resetTouchTapState();
           return false;
         }
-        return true;
+        var now = Date.now();
+        var delta = now - lastTouchTapAt;
+        var dx = x - lastTouchTapX;
+        var dy = y - lastTouchTapY;
+        lastTouchTapAt = now;
+        lastTouchTapX = x;
+        lastTouchTapY = y;
+        if (delta <= 0 || delta > touchTapWindowMs) {
+          return false;
+        }
+        return (dx * dx) + (dy * dy) <= touchTapMaxDistancePx * touchTapMaxDistancePx;
       }
       function editableTargets() {
         var nodes = document.querySelectorAll("input, textarea, select, [contenteditable=\"true\"]");
@@ -1650,6 +1676,41 @@
         }
         openLauncher();
       });
+
+      document.addEventListener("pointerup", function (event) {
+        if (!event || event.pointerType !== "touch") {
+          return;
+        }
+        if (!isTouchDoubleTap(event.clientX, event.clientY)) {
+          return;
+        }
+        if (!shouldOpenLauncherOnDoubleClick(event)) {
+          return;
+        }
+        resetTouchTapState();
+        openLauncher();
+      }, {passive: true});
+
+      if (!window.PointerEvent) {
+        document.addEventListener("touchend", function (event) {
+          if (!event || !event.changedTouches || event.changedTouches.length !== 1) {
+            return;
+          }
+          var touch = event.changedTouches[0];
+          if (!touch || !isTouchDoubleTap(touch.clientX, touch.clientY)) {
+            return;
+          }
+          var synthetic = {
+            target: event.target,
+            defaultPrevented: !!event.defaultPrevented
+          };
+          if (!shouldOpenLauncherOnDoubleClick(synthetic)) {
+            return;
+          }
+          resetTouchTapState();
+          openLauncher();
+        }, {passive: true});
+      }
 
       document.addEventListener("keydown", function (event) {
         if (!launcher.classList.contains("is-open")) {
