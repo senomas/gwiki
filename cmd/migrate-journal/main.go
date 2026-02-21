@@ -7,6 +7,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -60,6 +61,22 @@ type migrateResult struct {
 	CreatedTargets int
 	UpdatedTargets int
 	DeletedSource  bool
+}
+
+type targetEntryPlan struct {
+	Created              bool
+	Updated              bool
+	TargetID             string
+	Content              string
+	SourceAttachmentRefs map[string]struct{}
+}
+
+type attachmentRef struct {
+	start  int
+	end    int
+	noteID string
+	rel    string
+	prefix string
 }
 
 func main() {
@@ -275,31 +292,58 @@ func migrateSourceFile(src sourceFile, now time.Time, dryRun bool) (migrateResul
 	if err != nil {
 		return out, err
 	}
+	content := normalizeLineEndings(string(contentBytes))
+	sourceAttrs := index.FrontmatterAttributes(content)
+	sourceNoteID := strings.TrimSpace(sourceAttrs.ID)
+	attachmentsRoot := filepath.Join(filepath.Dir(filepath.Dir(src.Path)), "attachments")
+	sourceAttachmentsDir := ""
+	if sourceNoteID != "" {
+		sourceAttachmentsDir = filepath.Join(attachmentsRoot, sourceNoteID)
+	}
+
 	day, err := journalDayFromRel(src.Rel)
 	if err != nil {
 		return out, err
 	}
-	split := parseDailyJournal(string(contentBytes), day)
+	split := parseDailyJournal(content, day)
 	if len(split.Order) == 0 {
 		out.Skipped = true
 		return out, nil
 	}
 
 	dateTitle := day.Format("2 Jan 2006")
+	keepSourceAttachments := false
 	for _, bucket := range split.Order {
 		body := strings.TrimSpace(split.Buckets[bucket])
 		if body == "" {
 			continue
 		}
 		targetPath := filepath.Join(filepath.Dir(src.Path), targetFileName(day, bucket))
-		created, updated, err := writeTargetEntry(targetPath, dateTitle, body, now, dryRun)
+		plan, err := planTargetEntry(targetPath, dateTitle, body, now, sourceNoteID)
 		if err != nil {
 			return out, err
 		}
-		if created {
+		if !plan.Created && !plan.Updated {
+			continue
+		}
+		if sourceNoteID != "" && plan.TargetID == sourceNoteID {
+			keepSourceAttachments = true
+		}
+		if !dryRun {
+			if err := copyAttachmentRefs(sourceAttachmentsDir, filepath.Join(attachmentsRoot, plan.TargetID), plan.SourceAttachmentRefs); err != nil {
+				return out, err
+			}
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+				return out, err
+			}
+			if err := fsio.WriteFileAtomic(targetPath, []byte(plan.Content), 0o644); err != nil {
+				return out, err
+			}
+		}
+		if plan.Created {
 			out.CreatedTargets++
 		}
-		if updated {
+		if plan.Updated {
 			out.UpdatedTargets++
 		}
 	}
@@ -316,41 +360,77 @@ func migrateSourceFile(src sourceFile, now time.Time, dryRun bool) (migrateResul
 	if err := os.Remove(src.Path); err != nil {
 		return out, err
 	}
+	if sourceAttachmentsDir != "" && !keepSourceAttachments {
+		if err := removeAttachmentDir(sourceAttachmentsDir); err != nil {
+			return out, err
+		}
+	}
 	out.DeletedSource = true
 	return out, nil
 }
 
-func writeTargetEntry(targetPath, dateTitle, body string, now time.Time, dryRun bool) (bool, bool, error) {
+func planTargetEntry(targetPath, dateTitle, body string, now time.Time, sourceNoteID string) (targetEntryPlan, error) {
+	var out targetEntryPlan
 	body = strings.TrimSpace(normalizeLineEndings(body))
 	if body == "" {
-		return false, false, nil
-	}
-	existingBytes, err := os.ReadFile(targetPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, false, err
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		if dryRun {
-			return true, false, nil
-		}
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-			return false, false, err
-		}
-		return true, false, fsio.WriteFileAtomic(targetPath, []byte(buildMigratedNoteContent(dateTitle, body, now)), 0o644)
+		return out, nil
 	}
 
-	frontmatter, existingBody, hasFrontmatter := splitFrontmatterBlock(normalizeLineEndings(string(existingBytes)))
+	existingBytes, err := os.ReadFile(targetPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return out, err
+	}
+
+	if errors.Is(err, os.ErrNotExist) {
+		targetID := uuid.NewString()
+		rewrittenBody, refs := rewriteAttachmentRefs(body, sourceNoteID, targetID)
+		out.Created = true
+		out.TargetID = targetID
+		out.Content = buildMigratedNoteContent(dateTitle, rewrittenBody, now, targetID)
+		out.SourceAttachmentRefs = refs
+		return out, nil
+	}
+
+	existing := normalizeLineEndings(string(existingBytes))
+	frontmatter, existingBody, hasFrontmatter := splitFrontmatterBlock(existing)
+
+	targetID := ""
+	hadID := false
+	if hasFrontmatter {
+		attrs := index.FrontmatterAttributes(frontmatter)
+		targetID = strings.TrimSpace(attrs.ID)
+		hadID = targetID != ""
+	}
+	if targetID == "" {
+		targetID = uuid.NewString()
+	}
+
 	mergedBody := mergeBodies(existingBody, body)
+	rewrittenBody, refs := rewriteAttachmentRefs(mergedBody, sourceNoteID, targetID)
 	var next string
 	if hasFrontmatter {
-		next = composeFrontmatterBody(frontmatter, mergedBody)
+		if !hadID {
+			withBody := composeFrontmatterBody(frontmatter, existingBody)
+			withID, err := index.SetFrontmatterID(withBody, targetID)
+			if err != nil {
+				return out, err
+			}
+			var ok bool
+			frontmatter, _, ok = splitFrontmatterBlock(normalizeLineEndings(withID))
+			if !ok {
+				return out, fmt.Errorf("frontmatter id update failed for %s", targetPath)
+			}
+		}
+		next = composeFrontmatterBody(frontmatter, rewrittenBody)
 	} else {
-		next = buildMigratedNoteContent(dateTitle, mergedBody, now)
+		next = buildMigratedNoteContent(dateTitle, rewrittenBody, now, targetID)
 	}
-	if dryRun {
-		return false, true, nil
-	}
-	return false, true, fsio.WriteFileAtomic(targetPath, []byte(next), 0o644)
+
+	out.Updated = true
+	out.TargetID = targetID
+	out.Content = next
+	out.SourceAttachmentRefs = refs
+	return out, nil
 }
 
 func parseDailyJournal(content string, day time.Time) splitResult {
@@ -503,6 +583,239 @@ func mergeBodies(existing, incoming string) string {
 	return existing + "\n\n" + incoming
 }
 
+func rewriteAttachmentRefs(content, sourceNoteID, targetNoteID string) (string, map[string]struct{}) {
+	sourceNoteID = strings.TrimSpace(sourceNoteID)
+	targetNoteID = strings.TrimSpace(targetNoteID)
+	if sourceNoteID == "" || targetNoteID == "" || sourceNoteID == targetNoteID {
+		return content, nil
+	}
+
+	refs := scanAttachmentRefs(content)
+	if len(refs) == 0 {
+		return content, nil
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].start == refs[j].start {
+			return refs[i].end < refs[j].end
+		}
+		return refs[i].start < refs[j].start
+	})
+
+	replaced := map[string]struct{}{}
+	var b strings.Builder
+	b.Grow(len(content))
+	cursor := 0
+	for _, ref := range refs {
+		if ref.noteID != sourceNoteID {
+			continue
+		}
+		if ref.start < cursor {
+			continue
+		}
+		b.WriteString(content[cursor:ref.start])
+		b.WriteString(ref.prefix)
+		b.WriteString(targetNoteID)
+		b.WriteByte('/')
+		b.WriteString(ref.rel)
+		cursor = ref.end
+		replaced[ref.rel] = struct{}{}
+	}
+	if len(replaced) == 0 {
+		return content, nil
+	}
+	b.WriteString(content[cursor:])
+	return b.String(), replaced
+}
+
+func scanAttachmentRefs(content string) []attachmentRef {
+	refs := make([]attachmentRef, 0, 8)
+	prefixes := []string{"/attachments/", "attachments/"}
+	isDelim := func(r byte) bool {
+		switch r {
+		case ' ', '\n', '\r', '\t', ')', ']', '"', '\'', '<', '>', '(':
+			return true
+		default:
+			return false
+		}
+	}
+	for _, prefix := range prefixes {
+		offset := 0
+		for {
+			idx := strings.Index(content[offset:], prefix)
+			if idx == -1 {
+				break
+			}
+			start := offset + idx
+			cursor := start + len(prefix)
+			if cursor >= len(content) {
+				break
+			}
+			slash := strings.IndexByte(content[cursor:], '/')
+			if slash <= 0 {
+				offset = cursor
+				continue
+			}
+			noteID := strings.TrimSpace(content[cursor : cursor+slash])
+			if noteID == "" {
+				offset = cursor + slash
+				continue
+			}
+			pathStart := cursor + slash + 1
+			pathEnd := pathStart
+			for pathEnd < len(content) && !isDelim(content[pathEnd]) {
+				pathEnd++
+			}
+			if pathEnd <= pathStart {
+				offset = pathStart
+				continue
+			}
+			rel := strings.TrimSpace(content[pathStart:pathEnd])
+			rel = strings.TrimPrefix(rel, "./")
+			rel = strings.TrimPrefix(rel, "/")
+			rel = path.Clean(rel)
+			if rel == "." || strings.HasPrefix(rel, "..") || strings.Contains(rel, "\\") || rel == "" {
+				offset = pathEnd
+				continue
+			}
+			refs = append(refs, attachmentRef{
+				start:  start,
+				end:    pathEnd,
+				noteID: noteID,
+				rel:    rel,
+				prefix: prefix,
+			})
+			offset = pathEnd
+		}
+	}
+	return refs
+}
+
+func copyAttachmentRefs(sourceDir, targetDir string, refs map[string]struct{}) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	sourceDir = filepath.Clean(strings.TrimSpace(sourceDir))
+	targetDir = filepath.Clean(strings.TrimSpace(targetDir))
+	if sourceDir == "" || targetDir == "" {
+		return fmt.Errorf("attachment copy requires source and target dirs")
+	}
+	if sourceDir == targetDir {
+		return nil
+	}
+	if info, err := os.Stat(sourceDir); err != nil {
+		return fmt.Errorf("stat source attachments dir %s: %w", sourceDir, err)
+	} else if !info.IsDir() {
+		return fmt.Errorf("source attachments path is not a directory: %s", sourceDir)
+	}
+
+	keys := make([]string, 0, len(refs))
+	for rel := range refs {
+		keys = append(keys, rel)
+	}
+	sort.Strings(keys)
+	for _, rel := range keys {
+		srcPath, err := safeJoinUnder(sourceDir, rel)
+		if err != nil {
+			return fmt.Errorf("resolve source attachment %q: %w", rel, err)
+		}
+		dstPath, err := safeJoinUnder(targetDir, rel)
+		if err != nil {
+			return fmt.Errorf("resolve target attachment %q: %w", rel, err)
+		}
+		if err := copyAttachmentFile(srcPath, dstPath); err != nil {
+			return fmt.Errorf("copy attachment %q: %w", rel, err)
+		}
+	}
+	return nil
+}
+
+func safeJoinUnder(rootDir, rel string) (string, error) {
+	rootDir = filepath.Clean(strings.TrimSpace(rootDir))
+	rel = strings.TrimSpace(rel)
+	rel = strings.TrimPrefix(rel, "/")
+	if rootDir == "" || rel == "" {
+		return "", fmt.Errorf("invalid path")
+	}
+	full := filepath.Clean(filepath.Join(rootDir, filepath.FromSlash(rel)))
+	relative, err := filepath.Rel(rootDir, full)
+	if err != nil {
+		return "", err
+	}
+	if relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes root")
+	}
+	return full, nil
+}
+
+func copyAttachmentFile(srcPath, dstPath string) error {
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		return err
+	}
+	if srcInfo.IsDir() {
+		return fmt.Errorf("source is directory")
+	}
+	if filepath.Clean(srcPath) == filepath.Clean(dstPath) {
+		return nil
+	}
+
+	if dstInfo, err := os.Stat(dstPath); err == nil {
+		if dstInfo.IsDir() {
+			return fmt.Errorf("target exists as directory")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return err
+	}
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	tmpFile, err := os.CreateTemp(filepath.Dir(dstPath), ".copy-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err := io.Copy(tmpFile, srcFile); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, dstPath)
+}
+
+func removeAttachmentDir(dir string) error {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" {
+		return nil
+	}
+	if _, err := os.Stat(dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 func journalDayFromRel(rel string) (time.Time, error) {
 	rel = filepath.ToSlash(strings.TrimSpace(rel))
 	if !sourceJournalFileRe.MatchString(rel) {
@@ -520,11 +833,15 @@ func targetFileName(day time.Time, bucket string) string {
 	return fmt.Sprintf("%s-%s.md", day.Format("02"), bucket)
 }
 
-func buildMigratedNoteContent(dateTitle, body string, now time.Time) string {
+func buildMigratedNoteContent(dateTitle, body string, now time.Time, noteID string) string {
 	body = strings.TrimSpace(normalizeLineEndings(body))
+	noteID = strings.TrimSpace(noteID)
+	if noteID == "" {
+		noteID = uuid.NewString()
+	}
 	fm := []string{
 		"---",
-		"id: " + uuid.NewString(),
+		"id: " + noteID,
 		"title: " + dateTitle,
 		"created: " + now.Format(time.RFC3339),
 		"updated: " + now.Format(time.RFC3339),
