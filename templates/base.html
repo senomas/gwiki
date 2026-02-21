@@ -189,6 +189,28 @@
       text-decoration: underline;
       text-underline-offset: 3px;
     }
+    a.js-wiki-missing,
+    .note-body a.js-wiki-missing {
+      color: #fecaca;
+      background: rgba(127, 29, 29, 0.2);
+      border: 1px dashed rgba(251, 113, 133, 0.7);
+      border-radius: 999px;
+      padding: 0.02rem 0.38rem;
+      text-decoration-line: underline;
+      text-decoration-style: dashed;
+      text-decoration-color: rgba(253, 164, 175, 0.95);
+      text-underline-offset: 3px;
+      transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+    }
+    a.js-wiki-missing:hover,
+    a.js-wiki-missing:focus-visible,
+    .note-body a.js-wiki-missing:hover,
+    .note-body a.js-wiki-missing:focus-visible {
+      color: #ffe4e6;
+      background: rgba(153, 27, 27, 0.3);
+      border-color: rgba(253, 164, 175, 0.95);
+      outline: none;
+    }
     .note-body a.inline-tag-toggle {
       color: #7dd3fc;
       text-decoration: none;

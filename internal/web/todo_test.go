@@ -42,6 +42,45 @@ func TestApplyRenderReplacementsDue(t *testing.T) {
 	}
 }
 
+func TestApplyRenderReplacementsMissingWikiLinkAddsClassAndRef(t *testing.T) {
+	input := `<p><a href="/__missing__?ref=%40alice%2Fdemo%2Ffile.md">Demo</a></p>`
+	out := applyRenderReplacements(input)
+	if !strings.Contains(out, `class="js-wiki-missing"`) {
+		t.Fatalf("expected missing-link class, got %q", out)
+	}
+	if !strings.Contains(out, `data-wiki-ref="@alice/demo/file.md"`) {
+		t.Fatalf("expected decoded data-wiki-ref, got %q", out)
+	}
+}
+
+func TestApplyRenderReplacementsMissingWikiLinkMergesClassWithoutDuplicates(t *testing.T) {
+	input := `<p><a class="foo" href="/__missing__?ref=demo.md">Demo</a></p>`
+	out := applyRenderReplacements(input)
+	if !strings.Contains(out, `class="foo js-wiki-missing"`) {
+		t.Fatalf("expected class merge, got %q", out)
+	}
+	if strings.Count(out, "js-wiki-missing") != 1 {
+		t.Fatalf("expected js-wiki-missing once, got %q", out)
+	}
+}
+
+func TestApplyRenderReplacementsMissingWikiLinkIsIdempotent(t *testing.T) {
+	input := `<p><a href="/__missing__?ref=demo%20note.md">Demo</a></p>`
+	out1 := applyRenderReplacements(input)
+	out2 := applyRenderReplacements(out1)
+	if out1 != out2 {
+		t.Fatalf("expected idempotent replacement\nfirst: %q\nsecond:%q", out1, out2)
+	}
+}
+
+func TestApplyRenderReplacementsNonMissingLinkUnchanged(t *testing.T) {
+	input := `<p><a href="/notes/@alice/demo.md">Demo</a></p>`
+	out := applyRenderReplacements(input)
+	if out != input {
+		t.Fatalf("expected non-missing link unchanged, got %q", out)
+	}
+}
+
 func TestBuildTodoTagFilteredRenderTasks_ContextBeforeSnippet(t *testing.T) {
 	tasks := []index.TaskItem{
 		{LineNo: 2, Hash: strings.Repeat("a", 64)},

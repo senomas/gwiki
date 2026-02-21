@@ -7522,13 +7522,81 @@ func toggleTag(tags []string, target string) []string {
 }
 
 func applyRenderReplacements(input string) string {
-	return replaceTaskTokens(input)
+	output := replaceTaskTokens(input)
+	return replaceMissingWikiLinkAnchors(output)
 }
 
 var inboxTagRe = regexp.MustCompile(`(?i)#inbox\b`)
 var inboxLinkRe = regexp.MustCompile(`(?i)<a\s+[^>]*href="[^"]*type=inbox[^"]*"[^>]*>`)
 var inboxHrefAttrRe = regexp.MustCompile(`(?i)\bhref="([^"]*)"`)
 var inboxClassAttrRe = regexp.MustCompile(`(?i)\bclass="([^"]*)"`)
+var missingWikiLinkAnchorRe = regexp.MustCompile(`(?i)<a\b[^>]*\bhref="/__missing__\?ref=[^"]*"[^>]*>`)
+var anchorHrefAttrRe = regexp.MustCompile(`(?i)\bhref="([^"]*)"`)
+var anchorClassAttrRe = regexp.MustCompile(`(?i)\bclass="([^"]*)"`)
+var anchorMissingRefAttrRe = regexp.MustCompile(`(?i)\bdata-wiki-ref="([^"]*)"`)
+
+func replaceMissingWikiLinkAnchors(input string) string {
+	return missingWikiLinkAnchorRe.ReplaceAllStringFunc(input, func(anchor string) string {
+		hrefMatch := anchorHrefAttrRe.FindStringSubmatch(anchor)
+		if len(hrefMatch) < 2 {
+			return anchor
+		}
+		ref := missingWikiRefFromHref(hrefMatch[1])
+		anchor = appendAnchorClass(anchor, "js-wiki-missing")
+		if ref != "" {
+			anchor = setAnchorMissingRef(anchor, ref)
+		}
+		return anchor
+	})
+}
+
+func missingWikiRefFromHref(href string) string {
+	parsed, err := url.Parse(strings.TrimSpace(href))
+	if err != nil {
+		return ""
+	}
+	if parsed.Path != "/__missing__" {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Query().Get("ref"))
+}
+
+func appendAnchorClass(anchor, token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return anchor
+	}
+	match := anchorClassAttrRe.FindStringSubmatch(anchor)
+	if len(match) >= 2 {
+		fields := strings.Fields(match[1])
+		for _, field := range fields {
+			if field == token {
+				return anchor
+			}
+		}
+		fields = append(fields, token)
+		classValue := html.EscapeString(strings.Join(fields, " "))
+		return anchorClassAttrRe.ReplaceAllString(anchor, fmt.Sprintf(`class="%s"`, classValue))
+	}
+	closer := strings.LastIndex(anchor, ">")
+	if closer <= 0 {
+		return anchor
+	}
+	return anchor[:closer] + fmt.Sprintf(` class="%s"`, html.EscapeString(token)) + anchor[closer:]
+}
+
+func setAnchorMissingRef(anchor, ref string) string {
+	escapedRef := html.EscapeString(ref)
+	attr := fmt.Sprintf(`data-wiki-ref="%s"`, escapedRef)
+	if anchorMissingRefAttrRe.MatchString(anchor) {
+		return anchorMissingRefAttrRe.ReplaceAllString(anchor, attr)
+	}
+	closer := strings.LastIndex(anchor, ">")
+	if closer <= 0 {
+		return anchor
+	}
+	return anchor[:closer] + " " + attr + anchor[closer:]
+}
 
 func replaceDueTokens(input string) string {
 	return dueTokenRe.ReplaceAllStringFunc(input, func(match string) string {
