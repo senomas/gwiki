@@ -284,6 +284,71 @@ func TestEditDeleteRequireOwnerScopedRoute(t *testing.T) {
 	scopedResp.Body.Close()
 }
 
+func TestNoteDetailLinksExposeDoubleClickOwnership(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	content := "# Dblclick Contract\n\nbody\n"
+	noteRel := "dblclick-contract.md"
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/notes/@" + owner + "/" + noteRel)
+	if err != nil {
+		t.Fatalf("get note view: %v", err)
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("view status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+	body := string(bodyBytes)
+	if !strings.Contains(body, `class="text-sky-300 hover:text-sky-200 js-note-actions"`) {
+		t.Fatalf("expected note action link in rendered detail, got %s", body)
+	}
+	if !strings.Contains(body, `data-dblclick-own="true"`) {
+		t.Fatalf("expected data-dblclick-own on note action link, got %s", body)
+	}
+}
+
 func TestSearchHashQueryUsesTagFuzzyOnly(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"

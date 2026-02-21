@@ -1415,6 +1415,50 @@
         }
         return false;
       }
+      function closestEventTarget(target, selector) {
+        if (!target || !selector) {
+          return null;
+        }
+        var el = target.nodeType === 1 ? target : target.parentElement;
+        if (!el || !el.closest) {
+          return null;
+        }
+        return el.closest(selector);
+      }
+      function shouldOpenLauncherOnDoubleClick(event) {
+        if (!event || event.defaultPrevented) {
+          return false;
+        }
+        if (launcher.classList.contains("is-open")) {
+          return false;
+        }
+        var target = event.target;
+        if (!target) {
+          return false;
+        }
+        if (isEditableTarget(target)) {
+          return false;
+        }
+        if (!closestEventTarget(target, ".app-shell")) {
+          return false;
+        }
+        if (closestEventTarget(target, ".ui-overlay")) {
+          return false;
+        }
+        if (closestEventTarget(target, "[data-dblclick-own]")) {
+          return false;
+        }
+        if (closestEventTarget(target, ".js-note-actions")) {
+          return false;
+        }
+        if (closestEventTarget(target, "a, button, input, textarea, select, summary, details, label, [role=\"button\"], [contenteditable=\"true\"]")) {
+          return false;
+        }
+        if (closestEventTarget(target, "[data-note-list]")) {
+          return false;
+        }
+        return true;
+      }
       function editableTargets() {
         var nodes = document.querySelectorAll("input, textarea, select, [contenteditable=\"true\"]");
         return Array.prototype.filter.call(nodes, function (node) {
@@ -1597,6 +1641,13 @@
         }
         event.stopPropagation();
         event.preventDefault();
+        openLauncher();
+      });
+
+      document.addEventListener("dblclick", function (event) {
+        if (!shouldOpenLauncherOnDoubleClick(event)) {
+          return;
+        }
         openLauncher();
       });
 

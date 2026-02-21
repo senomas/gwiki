@@ -3,9 +3,9 @@
   {{if .NotePath}}
     <h1 class="text-2xl font-semibold text-slate-100">
       {{if .NoteURL}}
-        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}">{{.NoteTitle}}</a>
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}" data-dblclick-own="true">{{.NoteTitle}}</a>
       {{else}}
-        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{noteHref .NotePath .CurrentUser.Name}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{noteHref .NotePath .CurrentUser.Name}}">{{.NoteTitle}}</a>
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{noteHref .NotePath .CurrentUser.Name}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{noteHref .NotePath .CurrentUser.Name}}" data-dblclick-own="true">{{.NoteTitle}}</a>
       {{end}}
     </h1>
   {{else}}
@@ -80,11 +80,11 @@
   {{if .NotePath}}
     <h1 class="text-2xl font-semibold text-slate-100">
       {{if .NoteURL}}
-        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}">
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}" data-dblclick-own="true">
           {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
         </a>
       {{else}}
-      <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{noteHref .NotePath .CurrentUser.Name}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{noteHref .NotePath .CurrentUser.Name}}">
+      <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{noteHref .NotePath .CurrentUser.Name}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{noteHref .NotePath .CurrentUser.Name}}" data-dblclick-own="true">
         {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
       </a>
       {{end}}
