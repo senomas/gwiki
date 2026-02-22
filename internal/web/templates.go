@@ -77,6 +77,9 @@ func MustParseTemplates() *Templates {
 		"noteHrefWithSuffix": func(notePath string, suffix string, currentUser ...string) string {
 			return noteHrefWithSuffix(notePath, suffix, currentUser...)
 		},
+		"archivedNoteHref": func(notePath string) string {
+			return archivedNoteHref(notePath)
+		},
 		"toJSON": func(value any) template.JS {
 			encoded, err := json.Marshal(value)
 			if err != nil {

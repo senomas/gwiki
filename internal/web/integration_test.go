@@ -1234,6 +1234,14 @@ func TestSidebarTagLinksUseIndexOnNoteDetailAndStayOnListPages(t *testing.T) {
 	if err := idx.IndexNote(ctx, notePath, []byte(noteContent), info.ModTime(), info.Size()); err != nil {
 		t.Fatalf("index note: %v", err)
 	}
+	archiveDir := filepath.Join(repo, owner, "archive")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	archiveContent := "- [x] archived #demo\n"
+	if err := os.WriteFile(filepath.Join(archiveDir, "sidebar-tags.md"), []byte(archiveContent), 0o644); err != nil {
+		t.Fatalf("write archive note: %v", err)
+	}
 
 	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
 	srv, err := NewServer(cfg, idx)

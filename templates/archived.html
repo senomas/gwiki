@@ -1,25 +1,279 @@
 {{define "archived"}}
 <section class="space-y-6">
-  <header>
-    <h1 class="text-2xl font-semibold text-slate-100">Archived</h1>
-    <p class="text-sm text-slate-400">Archived task snapshots grouped by original note path.</p>
-  </header>
-  <div class="space-y-3">
-    {{if not .ArchivedNotes}}
-      <div class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm text-slate-400 shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
-        No archived notes.
-      </div>
-    {{else}}
-      {{range .ArchivedNotes}}
-        <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
-          <a class="text-lg font-semibold text-sky-300 hover:text-sky-200" href="{{.URL}}">{{.Title}}</a>
-          <div class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">{{.Path}}</div>
-          <div class="mt-2 text-xs text-slate-400">Updated {{.UpdatedAt.Format "02 Jan 2006 15:04:05"}}</div>
-        </article>
-      {{end}}
-    {{end}}
-  </div>
+  <div id="notes-feed" class="space-y-4" data-note-list>{{template "archived_notes" .}}</div>
 </section>
+{{end}}
+
+{{define "archived_notes"}}
+{{if and (eq .HomeOffset 0) .HomePriorityNotes}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Important ({{len .HomePriorityNotes}} notes)</summary>
+{{end}}
+{{if .HomePriorityNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomePriorityNotes}}
+    {{template "archived_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if and (eq .HomeOffset 0) .HomePriorityNotes}}
+</details>
+{{end}}
+
+{{if eq .HomeOffset 0}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">Today ({{len .HomeTodayNotes}} notes)</summary>
+{{end}}
+{{if .HomeTodayNotes}}
+  <div class="space-y-4 pt-2">
+  {{range .HomeTodayNotes}}
+    {{template "archived_note_item" (dict "Note" . "Root" $)}}
+  {{end}}
+  </div>
+{{end}}
+{{if eq .HomeOffset 0}}
+</details>
+{{end}}
+
+{{if eq .HomeOffset 0}}
+<div
+  class="home-section-loader"
+  hx-get="/archived/section?name=planned{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+>
+  {{template "archived_section_skeleton" (dict "Label" "Planned")}}
+</div>
+<div
+  class="home-section-loader"
+  hx-get="/archived/section?name=rest{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+>
+  {{template "archived_section_skeleton" (dict "Label" "Rest")}}
+</div>
+{{end}}
+{{end}}
+
+{{define "archived_note_item"}}
+<article
+  class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]"
+>
+  <div class="mt-4">
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex-1">
+        {{ $note := .Note }}
+        {{ $root := .Root }}
+        {{ $noteURL := archivedNoteHref $note.Path }}
+        {{ if $root.RawQuery }}{{ $noteURL = printf "%s?%s" $noteURL $root.RawQuery }}{{ end }}
+        {{template "archived_note_detail" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "RenderedHTML" $note.RenderedHTML "FolderLabel" $note.FolderLabel "CurrentUser" $root.CurrentUser)}}
+      </div>
+    </div>
+  </div>
+</article>
+{{end}}
+
+{{define "archived_note_detail"}}
+<div class="space-y-3">
+  {{if .NotePath}}
+    <h1 class="text-2xl font-semibold text-slate-100">
+      {{if .NoteURL}}
+        <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}" data-dblclick-own="true">{{.NoteTitle}}</a>
+      {{else}}
+        <span class="text-sky-300">{{.NoteTitle}}</span>
+      {{end}}
+    </h1>
+    <div class="text-xs uppercase tracking-[0.18em] text-slate-500">{{.NotePath}}</div>
+  {{else}}
+    <h1 class="text-2xl font-semibold text-slate-100">{{.NoteTitle}}</h1>
+  {{end}}
+  {{if .NoteMeta.Has}}
+    <details class="group">
+      <summary class="list-none cursor-pointer select-none text-xs text-slate-500">
+        <span class="group-open:hidden">
+          <span class="mr-2">{{if .FolderLabel}}{{.FolderLabel}}{{else}}{{if .NoteMeta.Folder}}{{.NoteMeta.Folder}}{{else}}/{{end}}{{end}}</span>
+          {{if .NoteMeta.Updated.IsZero}}
+            {{if .NoteMeta.UpdatedRaw}}{{.NoteMeta.UpdatedRaw}}{{else}}Metadata{{end}}
+          {{else}}
+            {{.NoteMeta.Updated.Format "02/01/2006 15:04:05"}}
+          {{end}}
+        </span>
+        <span class="hidden group-open:inline">Metadata</span>
+      </summary>
+      <div class="mt-2 grid gap-x-6 gap-y-1 text-xs text-slate-500 sm:grid-cols-[max-content,1fr]">
+        <span class="uppercase tracking-[0.18em] text-slate-600">Folder</span><span>{{if .FolderLabel}}{{.FolderLabel}}{{else}}{{if .NoteMeta.Folder}}{{.NoteMeta.Folder}}{{else}}/{{end}}{{end}}</span>
+        {{if .NoteMeta.Updated.IsZero}}{{else}}<span class="uppercase tracking-[0.18em] text-slate-600">Updated</span><span>{{.NoteMeta.Updated.Format "02/01/2006 15:04:05"}}</span>{{end}}
+        {{if .NoteMeta.Created.IsZero}}{{else}}<span class="uppercase tracking-[0.18em] text-slate-600">Created</span><span>{{.NoteMeta.Created.Format "02/01/2006 15:04:05"}}</span>{{end}}
+        {{if .NoteMeta.Priority}}<span class="uppercase tracking-[0.18em] text-slate-600">Priority</span><span>{{.NoteMeta.Priority}}</span>{{end}}
+      </div>
+    </details>
+  {{end}}
+  <div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="{{.NoteMeta.ID}}" data-note-path="{{.NotePath}}">
+    {{.RenderedHTML}}
+  </div>
+</div>
+{{end}}
+
+{{define "archived_section_skeleton"}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
+    {{.Label}} (loading...)
+  </summary>
+  <div class="space-y-4 pt-2">
+    {{template "home_note_item_skeleton" .}}
+    {{template "home_note_item_skeleton" .}}
+    {{template "home_note_item_skeleton" .}}
+  </div>
+</details>
+{{end}}
+
+{{define "archived_section_next_loader"}}
+{{$root := .Root}}
+<div
+  class="home-section-loader"
+  hx-get="/archived/section?name={{.SectionName}}{{if $root.TagQuery}}&t={{$root.TagQuery}}{{end}}{{if $root.FolderQuery}}&f={{$root.FolderQuery}}{{end}}{{if $root.SearchQueryParam}}&s={{$root.SearchQueryParam}}{{end}}&offset={{.NextOffset}}"
+  hx-trigger="revealed"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+>
+  {{if .SkeletonNotes}}
+    {{range .SkeletonNotes}}
+      {{template "archived_note_item_skeleton_title" (dict "Note" . "Root" $root)}}
+    {{end}}
+  {{else}}
+    {{template "home_note_item_skeleton" $root}}
+  {{end}}
+</div>
+{{end}}
+
+{{define "archived_note_item_skeleton_title"}}
+<article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+  <div class="mt-4">
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex-1">
+        {{ $note := .Note }}
+        {{ $root := .Root }}
+        {{ $noteURL := archivedNoteHref $note.Path }}
+        {{ if $root.RawQuery }}{{ $noteURL = printf "%s?%s" $noteURL $root.RawQuery }}{{ end }}
+        {{template "note_detail_skeleton" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "NoteFileName" $note.FileName "CurrentUser" $root.CurrentUser)}}
+      </div>
+    </div>
+  </div>
+</article>
+{{end}}
+
+{{define "archived_section_planned"}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
+    Planned ({{len .HomePlannedNotes}} notes)
+  </summary>
+  <div class="space-y-4 pt-2">
+    {{template "archived_section_planned_chunk" .}}
+  </div>
+</details>
+{{end}}
+
+{{define "archived_section_planned_chunk"}}
+{{range .HomePlannedNotes}}
+  {{template "archived_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomePlannedHasMore}}
+  {{template "archived_section_next_loader" (dict "SectionName" "planned" "NextOffset" .HomePlannedNextOffset "SkeletonNotes" .HomePlannedSkeletonNotes "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "archived_section_rest"}}
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
+    Week ({{len .HomeWeekNotes}} notes)
+  </summary>
+  <div class="space-y-4 pt-2">
+    {{template "archived_section_week_chunk" .}}
+  </div>
+</details>
+
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
+    Month ({{len .HomeMonthNotes}} notes)
+  </summary>
+  <div class="space-y-4 pt-2">
+    {{template "archived_section_month_chunk" .}}
+  </div>
+</details>
+
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
+    Year ({{len .HomeYearNotes}} notes)
+  </summary>
+  <div class="space-y-4 pt-2">
+    {{template "archived_section_year_chunk" .}}
+  </div>
+</details>
+
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
+    Last Year ({{len .HomeLastYearNotes}} notes)
+  </summary>
+  <div class="space-y-4 pt-2">
+    {{template "archived_section_last_year_chunk" .}}
+  </div>
+</details>
+
+<details class="home-section" open>
+  <summary class="home-section-summary pt-1 text-xs uppercase tracking-[0.22em] text-slate-500">
+    Others ({{len .HomeOtherNotes}} notes)
+  </summary>
+  <div class="space-y-4 pt-2">
+    {{template "archived_section_other_chunk" .}}
+  </div>
+</details>
+{{end}}
+
+{{define "archived_section_week_chunk"}}
+{{range .HomeWeekNotes}}
+  {{template "archived_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeWeekHasMore}}
+  {{template "archived_section_next_loader" (dict "SectionName" "week" "NextOffset" .HomeWeekNextOffset "SkeletonNotes" .HomeWeekSkeletonNotes "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "archived_section_month_chunk"}}
+{{range .HomeMonthNotes}}
+  {{template "archived_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeMonthHasMore}}
+  {{template "archived_section_next_loader" (dict "SectionName" "month" "NextOffset" .HomeMonthNextOffset "SkeletonNotes" .HomeMonthSkeletonNotes "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "archived_section_year_chunk"}}
+{{range .HomeYearNotes}}
+  {{template "archived_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeYearHasMore}}
+  {{template "archived_section_next_loader" (dict "SectionName" "year" "NextOffset" .HomeYearNextOffset "SkeletonNotes" .HomeYearSkeletonNotes "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "archived_section_last_year_chunk"}}
+{{range .HomeLastYearNotes}}
+  {{template "archived_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeLastYearHasMore}}
+  {{template "archived_section_next_loader" (dict "SectionName" "lastYear" "NextOffset" .HomeLastYearNextOffset "SkeletonNotes" .HomeLastYearSkeletonNotes "Root" .)}}
+{{end}}
+{{end}}
+
+{{define "archived_section_other_chunk"}}
+{{range .HomeOtherNotes}}
+  {{template "archived_note_item" (dict "Note" . "Root" $)}}
+{{end}}
+{{if .HomeOtherHasMore}}
+  {{template "archived_section_next_loader" (dict "SectionName" "others" "NextOffset" .HomeOtherNextOffset "SkeletonNotes" .HomeOtherSkeletonNotes "Root" .)}}
+{{end}}
 {{end}}
 
 {{define "archived_detail"}}

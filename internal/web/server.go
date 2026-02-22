@@ -275,6 +275,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/todo", s.handleTodo)
 	s.mux.HandleFunc("/completed/page", s.handleCompletedPage)
 	s.mux.HandleFunc("/completed", s.handleCompleted)
+	s.mux.HandleFunc("/archived/section", s.handleArchivedSection)
 	s.mux.HandleFunc("/archived/", s.handleArchived)
 	s.mux.HandleFunc("/archived", s.handleArchived)
 	s.mux.HandleFunc("/broken", s.handleBroken)

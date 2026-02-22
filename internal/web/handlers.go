@@ -2057,6 +2057,30 @@ func buildCompletedLink(raw string) string {
 	return "/completed?" + u.RawQuery
 }
 
+func buildArchivedLink(raw string) string {
+	if raw == "" {
+		return "/archived"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return "/archived"
+	}
+	query := normalizeQueryKeys(u.Query())
+	query.Del("o")
+	encoded := query.Encode()
+	if encoded == "" {
+		return "/archived"
+	}
+	return "/archived?" + encoded
+}
+
+func archiveBaseURLForLinks(r *http.Request) string {
+	base := baseURLForLinks(r, "/archived")
+	return mutateURL(base, func(query url.Values) {
+		query.Del("o")
+	})
+}
+
 func noteCardETag(meta index.FrontmatterAttrs, hash string, etagTime int64, userKey string) string {
 	if hash == "" {
 		return ""
@@ -2487,6 +2511,9 @@ func buildFolderTree(folders []string, hasRoot bool, activeFolder string, active
 }
 
 func (s *Server) populateSidebarData(r *http.Request, basePath string, data *ViewData) error {
+	if strings.EqualFold(strings.TrimSpace(basePath), "/archived") {
+		return s.populateArchiveSidebarData(r, data)
+	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
@@ -2602,7 +2629,116 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	data.FilterQuery = filterQuery
 	data.TodoURL = buildTodoLink(currentURLString(r))
 	data.CompletedURL = buildCompletedLink(currentURLString(r))
-	data.ArchivedURL = "/archived"
+	data.ArchivedURL = buildArchivedLink(currentURLString(r))
+	data.InboxURL = toggleTagURL(currentURLString(r), "inbox")
+	if len(tagLinks) > 0 {
+		for _, tag := range tagLinks {
+			if tag.Name == "inbox" {
+				data.InboxCount = tag.Count
+				break
+			}
+		}
+	}
+	data.RawQuery = queryWithout(currentURLString(r), "o")
+	data.HomeURL = baseURL
+	data.ActiveDate = activeDate
+	data.DateQuery = buildDateQuery(activeDate)
+	data.SearchQuery = activeSearch
+	data.SearchQueryParam = buildSearchQuery(activeSearch)
+	data.UpdateDays = updateDays
+	data.CalendarMonth = calendar
+	applyCalendarLinks(data, baseURL)
+	data.JournalSidebar = journalSidebar
+	data.Users = buildUserLinks(users, userCounts, userLastCommits, userSyncStates)
+	return nil
+}
+
+func (s *Server) populateArchiveSidebarData(r *http.Request, data *ViewData) error {
+	ownerName := currentUserName(r.Context())
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	activeDate := ""
+	baseURL := archiveBaseURLForLinks(r)
+	activeTodo, activeDue, _, noteTags := splitSpecialTags(activeTags)
+	urlTags := append([]string{}, noteTags...)
+	sourceNotes, err := s.listArchivedSourceNotes(r.Context(), ownerName)
+	if err != nil {
+		return err
+	}
+
+	tags := archiveTagSummaries(sourceNotes, activeFolder, activeRoot)
+	allowed := map[string]struct{}{}
+	if len(urlTags) > 0 {
+		allowed = archiveAllowedTagSet(sourceNotes, noteTags, activeFolder, activeRoot)
+	}
+	tagLinks := buildTagLinks(urlTags, tags, allowed, baseURL)
+
+	todoCount := 0
+	dueCount := 0
+	if IsAuthenticated(r.Context()) {
+		todoCount, dueCount, err = s.loadSpecialTagCounts(r, noteTags, nil, activeTodo, activeDue, activeDate, activeFolder, activeRoot, false, ownerName)
+		if err != nil {
+			return err
+		}
+	}
+
+	updateDays := archiveUpdateDays(sourceNotes, 60, activeFolder, activeRoot)
+	tagQuery := buildTagsQuery(urlTags)
+	filterQuery := queryWithout(baseURL, "d")
+	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
+	folders, hasRoot := archiveFolders(sourceNotes)
+	folderTree := buildFolderTree(folders, hasRoot, activeFolder, activeRoot, baseURL)
+
+	users, err := s.idx.ListUsers(r.Context())
+	if err != nil {
+		return err
+	}
+	currentUser := currentUserName(r.Context())
+	users = filterSidebarUsers(users)
+	userCounts, err := s.idx.CountSharedNotesByOwner(r.Context(), currentUser)
+	if err != nil {
+		return err
+	}
+	if currentUser != "" {
+		ownCount, countErr := s.idx.CountOwnedNotesByOwner(r.Context(), currentUser)
+		if countErr != nil {
+			slog.Warn("sidebar current user notes count", "user", currentUser, "err", countErr)
+		} else {
+			userCounts[currentUser] = ownCount
+		}
+	}
+	userSyncStates, err := s.idx.UserSyncStates(r.Context())
+	if err != nil {
+		slog.Warn("sidebar user sync states", "err", err)
+		userSyncStates = map[string]index.UserSyncState{}
+	}
+	userLastCommits := map[string]int64{}
+	for _, user := range users {
+		repoPath := s.ownerRepoPath(user)
+		lastCommitUnix, commitErr := latestRepoCommitUnix(r.Context(), repoPath)
+		if commitErr != nil {
+			slog.Warn("sidebar user last commit", "user", user, "repo", repoPath, "err", commitErr)
+			continue
+		}
+		if lastCommitUnix > 0 {
+			userLastCommits[user] = lastCommitUnix
+		}
+	}
+
+	data.Tags = tags
+	data.TagLinks = tagLinks
+	data.TodoCount = todoCount
+	data.DueCount = dueCount
+	data.ActiveTags = urlTags
+	data.TagQuery = tagQuery
+	data.FolderTree = folderTree
+	data.ActiveFolder = activeFolder
+	data.FolderQuery = buildFolderQuery(activeFolder, activeRoot)
+	data.FilterQuery = filterQuery
+	data.TodoURL = buildTodoLink(currentURLString(r))
+	data.CompletedURL = buildCompletedLink(currentURLString(r))
+	data.ArchivedURL = buildArchivedLink(currentURLString(r))
 	data.InboxURL = toggleTagURL(currentURLString(r), "inbox")
 	if len(tagLinks) > 0 {
 		for _, tag := range tagLinks {
@@ -2621,7 +2757,6 @@ func (s *Server) populateSidebarData(r *http.Request, basePath string, data *Vie
 	data.UpdateDays = updateDays
 	data.CalendarMonth = calendar
 	applyCalendarLinks(data, baseURL)
-	data.JournalSidebar = journalSidebar
 	data.Users = buildUserLinks(users, userCounts, userLastCommits, userSyncStates)
 	return nil
 }
@@ -9664,103 +9799,717 @@ func archivedNoteHref(notePath string) string {
 	return "/archived/" + notePathWithUserPrefix(notePath)
 }
 
-func (s *Server) listArchivedNotesForUser(ctx context.Context) ([]ArchivedNote, error) {
-	ownerOptions, defaultOwner, err := s.ownerOptionsForUser(ctx)
+type archivedSourceNote struct {
+	Owner       string
+	Path        string
+	RelPath     string
+	Title       string
+	FileName    string
+	UpdatedAt   time.Time
+	Priority    int
+	Tags        []string
+	TagSet      map[string]struct{}
+	Folder      string
+	Meta        index.FrontmatterAttrs
+	Content     string
+	SearchText  string
+	SectionRank int
+}
+
+func parseFrontmatterPriority(raw string) int {
+	priority := strings.TrimSpace(raw)
+	if priority == "" {
+		return 10
+	}
+	parsed, err := strconv.Atoi(priority)
+	if err != nil || parsed <= 0 {
+		return 10
+	}
+	return parsed
+}
+
+func normalizeArchiveTag(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ""
+	}
+	return strings.ToLower(tag)
+}
+
+func archiveRelativeFolder(relPath string) string {
+	relPath = strings.TrimSpace(relPath)
+	if relPath == "" {
+		return ""
+	}
+	folder := filepath.ToSlash(filepath.Dir(relPath))
+	if folder == "." || folder == "/" {
+		return ""
+	}
+	normalized, err := normalizeFolderPath(folder)
 	if err != nil {
+		return ""
+	}
+	return normalized
+}
+
+func archiveFolderLabel(ctx context.Context, ownerName string, folder string) string {
+	folder = strings.TrimSpace(folder)
+	if folder == "" {
+		folder = "/"
+	}
+	ownerLabel := ownerName
+	if ownerLabel == "" {
+		ownerLabel = "Unknown"
+	}
+	if currentUserName(ctx) != "" && strings.EqualFold(ownerLabel, currentUserName(ctx)) {
+		ownerLabel = "Personal"
+	}
+	return ownerLabel + "/" + strings.TrimPrefix(folder, "/")
+}
+
+func archiveMatchesTags(note archivedSourceNote, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	if len(note.TagSet) == 0 {
+		return false
+	}
+	for _, tag := range required {
+		tag = normalizeArchiveTag(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := note.TagSet[tag]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func archiveMatchesSearch(note archivedSourceNote, query string) bool {
+	query = strings.TrimSpace(strings.ToLower(query))
+	if query == "" {
+		return true
+	}
+	terms := strings.Fields(query)
+	if len(terms) == 0 {
+		return true
+	}
+	for _, term := range terms {
+		if !strings.Contains(note.SearchText, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func archiveMatchesFolder(note archivedSourceNote, folder string, rootOnly bool) bool {
+	folder = strings.TrimSpace(folder)
+	noteFolder := strings.TrimSpace(note.Folder)
+	if rootOnly {
+		return noteFolder == ""
+	}
+	if folder == "" {
+		return true
+	}
+	return noteFolder == folder || strings.HasPrefix(noteFolder, folder+"/")
+}
+
+func archiveSectionRank(updatedAt time.Time, priority int, now time.Time) int {
+	startOfDay, endOfDay, startOfWeek, startOfMonth, startOfYear, startOfLastYear := homeSectionBounds(now)
+	switch {
+	case priority <= 5:
+		return 0
+	case (updatedAt.Equal(startOfDay) || updatedAt.After(startOfDay)) && updatedAt.Before(endOfDay):
+		return 1
+	case updatedAt.Equal(endOfDay) || updatedAt.After(endOfDay):
+		return 2
+	case (updatedAt.Equal(startOfWeek) || updatedAt.After(startOfWeek)) && updatedAt.Before(startOfDay):
+		return 3
+	case (updatedAt.Equal(startOfMonth) || updatedAt.After(startOfMonth)) && updatedAt.Before(startOfWeek):
+		return 4
+	case (updatedAt.Equal(startOfYear) || updatedAt.After(startOfYear)) && updatedAt.Before(startOfMonth):
+		return 5
+	case (updatedAt.Equal(startOfLastYear) || updatedAt.After(startOfLastYear)) && updatedAt.Before(startOfYear):
+		return 6
+	default:
+		return 7
+	}
+}
+
+func archivedSectionRankByName(section string) (int, bool) {
+	switch strings.TrimSpace(section) {
+	case "priority":
+		return 0, true
+	case "today":
+		return 1, true
+	case "planned":
+		return 2, true
+	case "week":
+		return 3, true
+	case "month":
+		return 4, true
+	case "year":
+		return 5, true
+	case "lastYear":
+		return 6, true
+	case "others":
+		return 7, true
+	default:
+		return 0, false
+	}
+}
+
+func sortArchivedSourceNotes(notes []archivedSourceNote) {
+	sort.Slice(notes, func(i, j int) bool {
+		if notes[i].SectionRank != notes[j].SectionRank {
+			return notes[i].SectionRank < notes[j].SectionRank
+		}
+		if notes[i].Priority != notes[j].Priority {
+			return notes[i].Priority < notes[j].Priority
+		}
+		if notes[i].UpdatedAt.Equal(notes[j].UpdatedAt) {
+			return notes[i].Path < notes[j].Path
+		}
+		return notes[i].UpdatedAt.After(notes[j].UpdatedAt)
+	})
+}
+
+func archiveTagSummaries(notes []archivedSourceNote, folder string, rootOnly bool) []index.TagSummary {
+	counts := map[string]int{}
+	for _, note := range notes {
+		if !archiveMatchesFolder(note, folder, rootOnly) {
+			continue
+		}
+		for _, tag := range note.Tags {
+			counts[tag]++
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	out := make([]index.TagSummary, 0, len(counts))
+	for name, count := range counts {
+		out = append(out, index.TagSummary{Name: name, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func archiveAllowedTagSet(notes []archivedSourceNote, selectedTags []string, folder string, rootOnly bool) map[string]struct{} {
+	if len(selectedTags) == 0 {
+		return nil
+	}
+	allowed := map[string]struct{}{}
+	for _, note := range notes {
+		if !archiveMatchesFolder(note, folder, rootOnly) {
+			continue
+		}
+		if !archiveMatchesTags(note, selectedTags) {
+			continue
+		}
+		for _, tag := range note.Tags {
+			allowed[tag] = struct{}{}
+		}
+	}
+	return allowed
+}
+
+func archiveFolders(notes []archivedSourceNote) ([]string, bool) {
+	set := map[string]struct{}{}
+	hasRoot := false
+	for _, note := range notes {
+		if strings.TrimSpace(note.Folder) == "" {
+			hasRoot = true
+			continue
+		}
+		set[note.Folder] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil, hasRoot
+	}
+	folders := make([]string, 0, len(set))
+	for folder := range set {
+		folders = append(folders, folder)
+	}
+	sort.Strings(folders)
+	return folders, hasRoot
+}
+
+func archiveUpdateDays(notes []archivedSourceNote, limit int, folder string, rootOnly bool) []index.UpdateDaySummary {
+	if limit <= 0 {
+		limit = 60
+	}
+	counts := map[string]int{}
+	for _, note := range notes {
+		if !archiveMatchesFolder(note, folder, rootOnly) {
+			continue
+		}
+		day := note.UpdatedAt.In(time.Local).Format("2006-01-02")
+		counts[day]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	days := make([]string, 0, len(counts))
+	for day := range counts {
+		days = append(days, day)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(days)))
+	if len(days) > limit {
+		days = days[:limit]
+	}
+	out := make([]index.UpdateDaySummary, 0, len(days))
+	for _, day := range days {
+		out = append(out, index.UpdateDaySummary{Day: day, Count: counts[day]})
+	}
+	return out
+}
+
+func filterArchivedSourceNotes(notes []archivedSourceNote, tags []string, query string, folder string, rootOnly bool, now time.Time) []archivedSourceNote {
+	filtered := make([]archivedSourceNote, 0, len(notes))
+	for _, note := range notes {
+		if !archiveMatchesFolder(note, folder, rootOnly) {
+			continue
+		}
+		if !archiveMatchesTags(note, tags) {
+			continue
+		}
+		if !archiveMatchesSearch(note, query) {
+			continue
+		}
+		note.SectionRank = archiveSectionRank(note.UpdatedAt, note.Priority, now)
+		filtered = append(filtered, note)
+	}
+	sortArchivedSourceNotes(filtered)
+	return filtered
+}
+
+func archiveSkeletonPreviewNote(note archivedSourceNote) NoteCard {
+	return NoteCard{
+		Path:     note.Path,
+		Title:    note.Title,
+		FileName: note.FileName,
+	}
+}
+
+func (s *Server) listArchivedSourceNotes(ctx context.Context, ownerName string) ([]archivedSourceNote, error) {
+	ownerName = strings.TrimSpace(ownerName)
+	if ownerName == "" {
+		return nil, nil
+	}
+	archiveRoot := filepath.Join(s.cfg.RepoPath, ownerName, "archive")
+	info, err := os.Stat(archiveRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	owners := make([]string, 0, len(ownerOptions)+1)
-	seen := make(map[string]struct{}, len(ownerOptions)+1)
-	if strings.TrimSpace(defaultOwner) != "" {
-		owners = append(owners, defaultOwner)
-		seen[defaultOwner] = struct{}{}
+	if !info.IsDir() {
+		return nil, nil
 	}
-	for _, option := range ownerOptions {
-		owner := strings.TrimSpace(option.Name)
-		if owner == "" {
-			continue
+	notes := make([]archivedSourceNote, 0)
+	if err := filepath.WalkDir(archiveRoot, func(fullPath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		if _, ok := seen[owner]; ok {
-			continue
+		if d.IsDir() {
+			return nil
 		}
-		seen[owner] = struct{}{}
-		owners = append(owners, owner)
-	}
-	if len(owners) == 0 {
-		entries, err := os.ReadDir(s.cfg.RepoPath)
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+			return nil
+		}
+		relPath, err := filepath.Rel(archiveRoot, fullPath)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			owner := strings.TrimSpace(entry.Name())
-			if owner == "" || strings.HasPrefix(owner, ".") {
-				continue
-			}
-			if _, ok := seen[owner]; ok {
-				continue
-			}
-			seen[owner] = struct{}{}
-			owners = append(owners, owner)
-		}
-	}
-	out := make([]ArchivedNote, 0)
-	for _, owner := range owners {
-		archiveRoot := filepath.Join(s.cfg.RepoPath, owner, "archive")
-		info, err := os.Stat(archiveRoot)
+		relPath = filepath.ToSlash(relPath)
+		relPath, err = fs.NormalizeNotePath(relPath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, err
+			slog.Warn("archive path normalize failed", "owner", ownerName, "path", fullPath, "err", err)
+			return nil
 		}
-		if !info.IsDir() {
-			continue
+		notePath := filepath.ToSlash(filepath.Join(ownerName, relPath))
+		fileInfo, err := d.Info()
+		if err != nil {
+			return err
 		}
-		if err := filepath.WalkDir(archiveRoot, func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
-				return nil
-			}
-			relPath, err := filepath.Rel(archiveRoot, path)
-			if err != nil {
-				return err
-			}
-			relPath = filepath.ToSlash(relPath)
-			notePath := filepath.ToSlash(filepath.Join(owner, relPath))
-			fileInfo, err := d.Info()
-			if err != nil {
-				return err
-			}
-			title := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+		contentBytes, err := os.ReadFile(fullPath)
+		if err != nil {
+			slog.Warn("archive read failed", "owner", ownerName, "path", fullPath, "err", err)
+			return nil
+		}
+		normalized := normalizeLineEndings(string(contentBytes))
+		parsed := index.ParseContent(normalized)
+		meta := index.FrontmatterAttributes(normalized)
+		title := displayTitleForNotePath(notePath, parsed.Title)
+		if strings.TrimSpace(title) == "" {
+			title = strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
 			if strings.TrimSpace(title) == "" {
 				title = relPath
 			}
-			out = append(out, ArchivedNote{
-				Path:      notePath,
-				Title:     title,
-				URL:       archivedNoteHref(notePath),
-				UpdatedAt: fileInfo.ModTime().Local(),
-			})
-			return nil
-		}); err != nil {
+		}
+		priority := parsed.Priority
+		if priority <= 0 {
+			priority = parseFrontmatterPriority(meta.Priority)
+		}
+		updatedAt := fileInfo.ModTime().Local()
+		if !meta.Updated.IsZero() {
+			updatedAt = meta.Updated.Local()
+		} else {
+			meta.Updated = updatedAt
+		}
+		tagSet := make(map[string]struct{}, len(parsed.Tags))
+		tags := make([]string, 0, len(parsed.Tags))
+		for _, rawTag := range parsed.Tags {
+			tag := normalizeArchiveTag(rawTag)
+			if tag == "" {
+				continue
+			}
+			if _, ok := tagSet[tag]; ok {
+				continue
+			}
+			tagSet[tag] = struct{}{}
+			tags = append(tags, tag)
+		}
+		sort.Strings(tags)
+		notes = append(notes, archivedSourceNote{
+			Owner:      ownerName,
+			Path:       notePath,
+			RelPath:    relPath,
+			Title:      title,
+			FileName:   filepath.Base(relPath),
+			UpdatedAt:  updatedAt,
+			Priority:   priority,
+			Tags:       tags,
+			TagSet:     tagSet,
+			Folder:     archiveRelativeFolder(relPath),
+			Meta:       meta,
+			Content:    normalized,
+			SearchText: strings.ToLower(title + "\n" + relPath + "\n" + index.StripFrontmatter(normalized)),
+		})
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Slice(notes, func(i, j int) bool {
+		if notes[i].Priority != notes[j].Priority {
+			return notes[i].Priority < notes[j].Priority
+		}
+		if notes[i].UpdatedAt.Equal(notes[j].UpdatedAt) {
+			return notes[i].Path < notes[j].Path
+		}
+		return notes[i].UpdatedAt.After(notes[j].UpdatedAt)
+	})
+	return notes, nil
+}
+
+func (s *Server) buildArchiveNoteCards(r *http.Request, notes []archivedSourceNote) ([]NoteCard, error) {
+	cards := make([]NoteCard, 0, len(notes))
+	for _, note := range notes {
+		renderCtx := withWikiLinkOwner(r.Context(), note.Owner)
+		rendered, err := s.renderNoteBody(renderCtx, []byte(note.Content))
+		if err != nil {
 			return nil, err
 		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
-			return out[i].Path < out[j].Path
+		meta := note.Meta
+		if meta.Updated.IsZero() {
+			meta.Updated = note.UpdatedAt
 		}
-		return out[i].UpdatedAt.After(out[j].UpdatedAt)
-	})
-	return out, nil
+		cards = append(cards, NoteCard{
+			Path:         note.Path,
+			Title:        note.Title,
+			FileName:     note.FileName,
+			RenderedHTML: template.HTML(rendered),
+			Meta:         meta,
+			FolderLabel:  archiveFolderLabel(r.Context(), note.Owner, note.Folder),
+			SectionRank:  note.SectionRank,
+		})
+	}
+	return cards, nil
+}
+
+func (s *Server) loadArchivedSectionNotesPage(
+	r *http.Request,
+	ctx context.Context,
+	section string,
+	tags []string,
+	activeSearch string,
+	folder string,
+	rootOnly bool,
+	ownerName string,
+	offset int,
+	limit int,
+) ([]NoteCard, []NoteCard, int, bool, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = homeNotesPageSize
+	}
+	targetRank, ok := archivedSectionRankByName(section)
+	if !ok {
+		return nil, nil, offset, false, fmt.Errorf("unknown section %q", section)
+	}
+	sourceNotes, err := s.listArchivedSourceNotes(ctx, ownerName)
+	if err != nil {
+		return nil, nil, offset, false, err
+	}
+	filtered := filterArchivedSourceNotes(sourceNotes, tags, activeSearch, folder, rootOnly, time.Now())
+	sectionNotes := make([]archivedSourceNote, 0, len(filtered))
+	for _, note := range filtered {
+		if note.SectionRank == targetRank {
+			sectionNotes = append(sectionNotes, note)
+		}
+	}
+	if offset >= len(sectionNotes) {
+		return []NoteCard{}, nil, offset, false, nil
+	}
+	end := offset + limit
+	if end > len(sectionNotes) {
+		end = len(sectionNotes)
+	}
+	nextOffset := end
+	hasMore := nextOffset < len(sectionNotes)
+	cards, err := s.buildArchiveNoteCards(r, sectionNotes[offset:end])
+	if err != nil {
+		return nil, nil, offset, false, err
+	}
+	skeletonNotes := []NoteCard(nil)
+	if hasMore {
+		skeletonNotes = append(skeletonNotes, archiveSkeletonPreviewNote(sectionNotes[nextOffset]))
+	}
+	return cards, skeletonNotes, nextOffset, hasMore, nil
+}
+
+func (s *Server) renderArchivedPage(w http.ResponseWriter, r *http.Request) {
+	ownerName := currentUserName(r.Context())
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	_, _, _, noteTags := splitSpecialTags(activeTags)
+	urlTags := append([]string{}, noteTags...)
+	sourceNotes, err := s.listArchivedSourceNotes(r.Context(), ownerName)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	filtered := filterArchivedSourceNotes(sourceNotes, noteTags, activeSearch, activeFolder, activeRoot, time.Now())
+	prioritySummaries := make([]archivedSourceNote, 0)
+	todaySummaries := make([]archivedSourceNote, 0)
+	for _, note := range filtered {
+		switch note.SectionRank {
+		case 0:
+			prioritySummaries = append(prioritySummaries, note)
+		case 1:
+			todaySummaries = append(todaySummaries, note)
+		}
+	}
+	priorityNotes, err := s.buildArchiveNoteCards(r, prioritySummaries)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	todayNotes, err := s.buildArchiveNoteCards(r, todaySummaries)
+	if err != nil {
+		s.internalServerError(w, r, err)
+		return
+	}
+	baseURL := archiveBaseURLForLinks(r)
+	data := ViewData{
+		Title:             "Archived",
+		ContentTemplate:   "archived",
+		HomePriorityNotes: priorityNotes,
+		HomeTodayNotes:    todayNotes,
+		HomePlannedNotes:  nil,
+		HomeWeekNotes:     nil,
+		HomeMonthNotes:    nil,
+		HomeYearNotes:     nil,
+		HomeLastYearNotes: nil,
+		HomeOtherNotes:    nil,
+		HomeOffset:        0,
+		ActiveTags:        urlTags,
+		TagQuery:          buildTagsQuery(urlTags),
+		FolderQuery:       buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:       queryWithout(baseURL, "d"),
+		HomeURL:           baseURL,
+		SearchQuery:       activeSearch,
+		SearchQueryParam:  buildSearchQuery(activeSearch),
+		RawQuery:          queryWithout(currentURLString(r), "o"),
+		ReturnURL:         sanitizeReturnURL(r, r.URL.RequestURI()),
+	}
+	s.attachViewData(r, &data)
+	s.views.RenderPage(w, data)
+}
+
+func (s *Server) handleArchivedSection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireAuth(w, r) {
+		return
+	}
+	section := strings.TrimSpace(r.URL.Query().Get("name"))
+	if section == "" {
+		http.Error(w, "missing section", http.StatusBadRequest)
+		return
+	}
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	ownerName := currentUserName(r.Context())
+	activeTags := parseTagsParam(r.URL.Query().Get("t"))
+	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
+	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
+	_, _, _, noteTags := splitSpecialTags(activeTags)
+	urlTags := append([]string{}, noteTags...)
+	baseURL := archiveBaseURLForLinks(r)
+	data := ViewData{
+		ActiveTags:       urlTags,
+		TagQuery:         buildTagsQuery(urlTags),
+		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      queryWithout(baseURL, "d"),
+		HomeURL:          baseURL,
+		SearchQuery:      activeSearch,
+		SearchQueryParam: buildSearchQuery(activeSearch),
+		RawQuery:         queryWithout(currentURLString(r), "name", "offset", "o"),
+	}
+
+	switch section {
+	case "planned":
+		notes, skeletonNotes, nextOffset, hasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "planned", noteTags, activeSearch, activeFolder, activeRoot, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data.HomePlannedNotes = notes
+		data.HomePlannedSkeletonNotes = skeletonNotes
+		data.HomePlannedHasMore = hasMore
+		data.HomePlannedNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		if offset > 0 {
+			s.views.RenderTemplate(w, "archived_section_planned_chunk", data)
+			return
+		}
+		s.views.RenderTemplate(w, "archived_section_planned", data)
+	case "rest":
+		weekNotes, weekSkeletonNotes, weekNextOffset, weekHasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, ownerName, 0, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		monthNotes, monthSkeletonNotes, monthNextOffset, monthHasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, ownerName, 0, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		yearNotes, yearSkeletonNotes, yearNextOffset, yearHasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, ownerName, 0, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		lastYearNotes, lastYearSkeletonNotes, lastYearNextOffset, lastYearHasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, ownerName, 0, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		otherNotes, otherSkeletonNotes, otherNextOffset, otherHasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, ownerName, 0, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data.HomeWeekNotes = weekNotes
+		data.HomeWeekSkeletonNotes = weekSkeletonNotes
+		data.HomeWeekHasMore = weekHasMore
+		data.HomeWeekNextOffset = weekNextOffset
+		data.HomeMonthNotes = monthNotes
+		data.HomeMonthSkeletonNotes = monthSkeletonNotes
+		data.HomeMonthHasMore = monthHasMore
+		data.HomeMonthNextOffset = monthNextOffset
+		data.HomeYearNotes = yearNotes
+		data.HomeYearSkeletonNotes = yearSkeletonNotes
+		data.HomeYearHasMore = yearHasMore
+		data.HomeYearNextOffset = yearNextOffset
+		data.HomeLastYearNotes = lastYearNotes
+		data.HomeLastYearSkeletonNotes = lastYearSkeletonNotes
+		data.HomeLastYearHasMore = lastYearHasMore
+		data.HomeLastYearNextOffset = lastYearNextOffset
+		data.HomeOtherNotes = otherNotes
+		data.HomeOtherSkeletonNotes = otherSkeletonNotes
+		data.HomeOtherHasMore = otherHasMore
+		data.HomeOtherNextOffset = otherNextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "archived_section_rest", data)
+	case "week":
+		notes, skeletonNotes, nextOffset, hasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data.HomeWeekNotes = notes
+		data.HomeWeekSkeletonNotes = skeletonNotes
+		data.HomeWeekHasMore = hasMore
+		data.HomeWeekNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "archived_section_week_chunk", data)
+	case "month":
+		notes, skeletonNotes, nextOffset, hasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data.HomeMonthNotes = notes
+		data.HomeMonthSkeletonNotes = skeletonNotes
+		data.HomeMonthHasMore = hasMore
+		data.HomeMonthNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "archived_section_month_chunk", data)
+	case "year":
+		notes, skeletonNotes, nextOffset, hasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data.HomeYearNotes = notes
+		data.HomeYearSkeletonNotes = skeletonNotes
+		data.HomeYearHasMore = hasMore
+		data.HomeYearNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "archived_section_year_chunk", data)
+	case "lastYear":
+		notes, skeletonNotes, nextOffset, hasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data.HomeLastYearNotes = notes
+		data.HomeLastYearSkeletonNotes = skeletonNotes
+		data.HomeLastYearHasMore = hasMore
+		data.HomeLastYearNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "archived_section_last_year_chunk", data)
+	case "others":
+		notes, skeletonNotes, nextOffset, hasMore, err := s.loadArchivedSectionNotesPage(r, r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, ownerName, offset, homeNotesPageSize)
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		data.HomeOtherNotes = notes
+		data.HomeOtherSkeletonNotes = skeletonNotes
+		data.HomeOtherHasMore = hasMore
+		data.HomeOtherNextOffset = nextOffset
+		s.attachViewData(r, &data)
+		s.views.RenderTemplate(w, "archived_section_other_chunk", data)
+	default:
+		http.Error(w, "unknown section", http.StatusBadRequest)
+	}
 }
 
 func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
@@ -9774,18 +10523,7 @@ func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
 	routeRef := strings.TrimPrefix(r.URL.Path, "/archived")
 	routeRef = strings.TrimPrefix(strings.TrimSpace(routeRef), "/")
 	if routeRef == "" {
-		notes, err := s.listArchivedNotesForUser(r.Context())
-		if err != nil {
-			s.internalServerError(w, r, err)
-			return
-		}
-		data := ViewData{
-			Title:           "Archived",
-			ContentTemplate: "archived",
-			ArchivedNotes:   notes,
-		}
-		s.attachViewData(r, &data)
-		s.views.RenderPage(w, data)
+		s.renderArchivedPage(w, r)
 		return
 	}
 	if unescaped, err := url.PathUnescape(routeRef); err == nil {
@@ -9818,15 +10556,20 @@ func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
 		s.internalServerError(w, r, err)
 		return
 	}
-	rendered, err := s.renderMarkdown(r.Context(), []byte(normalizeLineEndings(string(content))))
+	normalized := normalizeLineEndings(string(content))
+	rendered, err := s.renderMarkdown(r.Context(), []byte(normalized))
 	if err != nil {
 		s.internalServerError(w, r, err)
 		return
 	}
-	_, relPath, _ := fs.SplitOwnerNotePath(parsedPath)
-	title := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+	parsed := index.ParseContent(normalized)
+	title := displayTitleForNotePath(parsedPath, parsed.Title)
 	if strings.TrimSpace(title) == "" {
-		title = relPath
+		_, relPath, _ := fs.SplitOwnerNotePath(parsedPath)
+		title = strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+		if strings.TrimSpace(title) == "" {
+			title = relPath
+		}
 	}
 	data := ViewData{
 		Title:           "Archived - " + title,
@@ -11423,13 +12166,28 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 		setPrivateCacheHeaders(w)
 	}
 	baseURL := baseURLForLinks(&pageReq, basePath)
+	if strings.EqualFold(strings.TrimSpace(basePath), "/archived") {
+		baseURL = archiveBaseURLForLinks(&pageReq)
+	}
 	query := pageURL.Query()
 	activeDate := parseDateParam(query.Get("d"))
 	activeFolder, activeRoot := parseFolderParam(query.Get("f"))
-	updateDays, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
-	if err != nil {
-		s.internalServerError(w, r, err)
-		return
+	updateDays := []index.UpdateDaySummary(nil)
+	if strings.EqualFold(strings.TrimSpace(basePath), "/archived") {
+		ownerName := currentUserName(r.Context())
+		sourceNotes, sourceErr := s.listArchivedSourceNotes(r.Context(), ownerName)
+		if sourceErr != nil {
+			s.internalServerError(w, r, sourceErr)
+			return
+		}
+		updateDays = archiveUpdateDays(sourceNotes, 60, activeFolder, activeRoot)
+	} else {
+		updateDaysFromIndex, err := s.idx.ListUpdateDays(r.Context(), 60, activeFolder, activeRoot, "")
+		if err != nil {
+			s.internalServerError(w, r, err)
+			return
+		}
+		updateDays = updateDaysFromIndex
 	}
 	calendar := buildCalendarMonth(calendarReferenceDate(&pageReq), updateDays, baseURL, activeDate)
 	data := ViewData{
@@ -11455,6 +12213,9 @@ func (s *Server) handleCalendarSkeleton(w http.ResponseWriter, r *http.Request) 
 	pageReq := *r
 	pageReq.URL = pageURL
 	baseURL := baseURLForLinks(&pageReq, basePath)
+	if strings.EqualFold(strings.TrimSpace(basePath), "/archived") {
+		baseURL = archiveBaseURLForLinks(&pageReq)
+	}
 	activeDate := parseDateParam(pageURL.Query().Get("d"))
 	calendar := buildCalendarMonth(calendarReferenceDate(&pageReq), nil, baseURL, activeDate)
 	data := ViewData{
@@ -16348,6 +17109,9 @@ func noteTagBasePathForRequestPath(path string) (string, bool) {
 func sidebarBasePath(path string) string {
 	if strings.HasPrefix(path, "/daily/") {
 		return path
+	}
+	if path == "/archived" || strings.HasPrefix(path, "/archived/") {
+		return "/archived"
 	}
 	if notesBasePath, ok := noteTagBasePathForRequestPath(path); ok {
 		return notesBasePath

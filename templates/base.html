@@ -2698,6 +2698,9 @@
         if (!path) {
           return "/";
         }
+        if (path === "/archived" || path.indexOf("/archived/") === 0) {
+          return "/archived";
+        }
         if (path.indexOf("/notes/") !== 0) {
           return path;
         }
