@@ -525,7 +525,7 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 	if entry == "" {
 		return nil
 	}
-	journalEntry := "## " + entryTime.Format("15:04") + "\n\n" + entry + "\n"
+	journalEntry := entry
 	if body == "" {
 		body = journalEntry
 	} else {

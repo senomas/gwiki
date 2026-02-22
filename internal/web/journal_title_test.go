@@ -65,8 +65,6 @@ func TestSaveNoteCommon_JournalAllowsNoH1Title(t *testing.T) {
 	existing := strings.Join([]string{
 		"# Old Journal Title",
 		"",
-		"## 02:40",
-		"",
 		"old line",
 		"",
 	}, "\n")
@@ -96,7 +94,7 @@ func TestSaveNoteCommon_JournalAllowsNoH1Title(t *testing.T) {
 	result, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
 		NotePath:       notePath,
 		TargetOwner:    owner,
-		Content:        "## 02:40\n\nupdated line",
+		Content:        "updated line",
 		RenameDecision: "cancel",
 	})
 	if apiErr != nil {
@@ -115,8 +113,8 @@ func TestSaveNoteCommon_JournalAllowsNoH1Title(t *testing.T) {
 	if strings.Contains(body, "# Old Journal Title") {
 		t.Fatalf("expected old H1 title removed from journal body, got:\n%s", body)
 	}
-	if first := firstNonEmptyLine(body); first != "## 02:40" {
-		t.Fatalf("expected first non-empty body line to be ## heading, got %q", first)
+	if first := firstNonEmptyLine(body); first != "updated line" {
+		t.Fatalf("expected first non-empty body line to be updated content, got %q", first)
 	}
 }
 

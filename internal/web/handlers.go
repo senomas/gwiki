@@ -12851,8 +12851,7 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		if journalFromDateHeading {
 			journalEntryTime = time.Date(journalDay.Year(), journalDay.Month(), journalDay.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), now.Location())
 		}
-		journalTime := journalEntryTime.Format("15:04")
-		journalEntry := "## " + journalTime + "\n\n" + strings.TrimSpace(content) + "\n"
+		journalEntry := strings.TrimSpace(content)
 		notePath := ""
 		var pathErr error
 		if useSplitJournalPath {
@@ -12901,7 +12900,13 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		if !useSplitJournalPath {
 			if existing, err := os.ReadFile(fullPath); err == nil {
 				existingContent := strings.TrimRight(normalizeLineEndings(string(existing)), "\n")
-				updatedContent := existingContent + "\n\n" + journalEntry
+				updatedContent := existingContent
+				if journalEntry != "" {
+					if updatedContent != "" {
+						updatedContent += "\n\n"
+					}
+					updatedContent += journalEntry
+				}
 				updatedContent = stripJournalFirstLineH1(notePath, updatedContent)
 				derivedTitle := index.DeriveTitleFromBody(updatedContent)
 				updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))

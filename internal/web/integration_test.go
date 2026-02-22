@@ -190,12 +190,14 @@ func TestNewNoteWithoutTitleUsesSplitJournalPathPattern(t *testing.T) {
 		t.Fatalf("parse journal date from path: %v", err)
 	}
 	expectedDateHeading := "# " + dayDate.Format("2 Jan 2006")
-	expectedTimeHeading := "## " + matches[3] + ":" + matches[4]
 	if strings.Contains(content, expectedDateHeading) {
 		t.Fatalf("did not expect date heading %q in note content, got %q", expectedDateHeading, content)
 	}
-	if !strings.Contains(content, expectedTimeHeading) {
-		t.Fatalf("expected time heading %q in note content, got %q", expectedTimeHeading, content)
+	if strings.Contains(content, "## "+matches[3]+":"+matches[4]) {
+		t.Fatalf("did not expect injected time heading in note content, got %q", content)
+	}
+	if !strings.Contains(content, "plain journal entry without heading") {
+		t.Fatalf("expected journal body text preserved, got %q", content)
 	}
 }
 
