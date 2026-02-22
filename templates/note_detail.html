@@ -81,16 +81,16 @@
     <h1 class="text-2xl font-semibold text-slate-100">
       {{if .NoteURL}}
         <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{.NoteURL}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{.NoteURL}}" data-dblclick-own="true">
-          {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
+          {{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NoteFileName}}{{end}}
         </a>
       {{else}}
       <a class="text-sky-300 hover:text-sky-200 js-note-actions" href="{{noteHref .NotePath .CurrentUser.Name}}" data-note-path="{{.NotePath}}" data-note-id="{{.NoteMeta.ID}}" data-note-url="{{noteHref .NotePath .CurrentUser.Name}}" data-dblclick-own="true">
-        {{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}
+        {{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NoteFileName}}{{end}}
       </a>
       {{end}}
     </h1>
   {{else}}
-    <h1 class="text-2xl font-semibold text-slate-100">{{if .NoteFileName}}{{.NoteFileName}}{{else}}{{.NoteTitle}}{{end}}</h1>
+    <h1 class="text-2xl font-semibold text-slate-100">{{if .NoteTitle}}{{.NoteTitle}}{{else}}{{.NoteFileName}}{{end}}</h1>
   {{end}}
   <div class="note-skeleton-meta note-skeleton-line note-skeleton-line--short"></div>
   <div class="note-body space-y-3 text-sm leading-relaxed text-slate-200">

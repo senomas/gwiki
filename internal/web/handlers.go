@@ -8348,12 +8348,13 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 
 	switch section {
 	case "planned":
-		plannedNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "planned", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		plannedNotes, skeletonNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "planned", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomePlannedNotes = plannedNotes
+		data.HomePlannedSkeletonNotes = skeletonNotes
 		data.HomePlannedHasMore = hasMore
 		data.HomePlannedNextOffset = nextOffset
 		s.attachViewData(r, &data)
@@ -8363,99 +8364,109 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 		}
 		s.views.RenderTemplate(w, "home_section_planned", data)
 	case "rest":
-		weekNotes, weekNextOffset, weekHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
+		weekNotes, weekSkeletonNotes, weekNextOffset, weekHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
-		monthNotes, monthNextOffset, monthHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
+		monthNotes, monthSkeletonNotes, monthNextOffset, monthHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
-		yearNotes, yearNextOffset, yearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
+		yearNotes, yearSkeletonNotes, yearNextOffset, yearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
-		lastYearNotes, lastYearNextOffset, lastYearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
+		lastYearNotes, lastYearSkeletonNotes, lastYearNextOffset, lastYearHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
-		otherNotes, otherNextOffset, otherHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
+		otherNotes, otherSkeletonNotes, otherNextOffset, otherHasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, 0, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeWeekNotes = weekNotes
+		data.HomeWeekSkeletonNotes = weekSkeletonNotes
 		data.HomeWeekHasMore = weekHasMore
 		data.HomeWeekNextOffset = weekNextOffset
 		data.HomeMonthNotes = monthNotes
+		data.HomeMonthSkeletonNotes = monthSkeletonNotes
 		data.HomeMonthHasMore = monthHasMore
 		data.HomeMonthNextOffset = monthNextOffset
 		data.HomeYearNotes = yearNotes
+		data.HomeYearSkeletonNotes = yearSkeletonNotes
 		data.HomeYearHasMore = yearHasMore
 		data.HomeYearNextOffset = yearNextOffset
 		data.HomeLastYearNotes = lastYearNotes
+		data.HomeLastYearSkeletonNotes = lastYearSkeletonNotes
 		data.HomeLastYearHasMore = lastYearHasMore
 		data.HomeLastYearNextOffset = lastYearNextOffset
 		data.HomeOtherNotes = otherNotes
+		data.HomeOtherSkeletonNotes = otherSkeletonNotes
 		data.HomeOtherHasMore = otherHasMore
 		data.HomeOtherNextOffset = otherNextOffset
 		s.attachViewData(r, &data)
 		s.views.RenderTemplate(w, "home_section_rest", data)
 	case "week":
-		weekNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		weekNotes, skeletonNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "week", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeWeekNotes = weekNotes
+		data.HomeWeekSkeletonNotes = skeletonNotes
 		data.HomeWeekHasMore = hasMore
 		data.HomeWeekNextOffset = nextOffset
 		s.attachViewData(r, &data)
 		s.views.RenderTemplate(w, "home_section_week_chunk", data)
 	case "month":
-		monthNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		monthNotes, skeletonNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "month", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeMonthNotes = monthNotes
+		data.HomeMonthSkeletonNotes = skeletonNotes
 		data.HomeMonthHasMore = hasMore
 		data.HomeMonthNextOffset = nextOffset
 		s.attachViewData(r, &data)
 		s.views.RenderTemplate(w, "home_section_month_chunk", data)
 	case "year":
-		yearNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		yearNotes, skeletonNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "year", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeYearNotes = yearNotes
+		data.HomeYearSkeletonNotes = skeletonNotes
 		data.HomeYearHasMore = hasMore
 		data.HomeYearNextOffset = nextOffset
 		s.attachViewData(r, &data)
 		s.views.RenderTemplate(w, "home_section_year_chunk", data)
 	case "lastYear":
-		lastYearNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		lastYearNotes, skeletonNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "lastYear", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeLastYearNotes = lastYearNotes
+		data.HomeLastYearSkeletonNotes = skeletonNotes
 		data.HomeLastYearHasMore = hasMore
 		data.HomeLastYearNextOffset = nextOffset
 		s.attachViewData(r, &data)
 		s.views.RenderTemplate(w, "home_section_last_year_chunk", data)
 	case "others":
-		otherNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
+		otherNotes, skeletonNotes, nextOffset, hasMore, err := s.loadHomeSectionNotesPage(r.Context(), "others", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName, offset, homeNotesPageSize)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
 		data.HomeOtherNotes = otherNotes
+		data.HomeOtherSkeletonNotes = skeletonNotes
 		data.HomeOtherHasMore = hasMore
 		data.HomeOtherNextOffset = nextOffset
 		s.attachViewData(r, &data)
@@ -8656,7 +8667,7 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	todoNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
+	todoNotes, skeletonNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
 		r,
 		r.Context(),
 		noteTags,
@@ -8730,32 +8741,33 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := ViewData{
-		Title:            "Todo",
-		ContentTemplate:  "todo",
-		TodoNotes:        todoNotes,
-		TodoHasMore:      hasMore,
-		TodoNextOffset:   nextOffset,
-		TodoOffset:       0,
-		Tags:             tags,
-		TagLinks:         tagLinks,
-		TodoCount:        todoCount,
-		DueCount:         dueCount,
-		ActiveTags:       urlTags,
-		TagQuery:         tagQuery,
-		FolderTree:       folderTree,
-		ActiveFolder:     activeFolder,
-		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:      filterQuery,
-		HomeURL:          baseURL,
-		ActiveDate:       activeDate,
-		DateQuery:        buildDateQuery(activeDate),
-		SearchQuery:      activeSearch,
-		SearchQueryParam: buildSearchQuery(activeSearch),
-		ReturnURL:        sanitizeReturnURL(r, r.URL.RequestURI()),
-		UpdateDays:       updateDays,
-		CalendarMonth:    calendar,
-		JournalSidebar:   journalSidebar,
-		RawQuery:         queryWithout(currentURLString(r), "offset"),
+		Title:             "Todo",
+		ContentTemplate:   "todo",
+		TodoNotes:         todoNotes,
+		TodoSkeletonNotes: skeletonNotes,
+		TodoHasMore:       hasMore,
+		TodoNextOffset:    nextOffset,
+		TodoOffset:        0,
+		Tags:              tags,
+		TagLinks:          tagLinks,
+		TodoCount:         todoCount,
+		DueCount:          dueCount,
+		ActiveTags:        urlTags,
+		TagQuery:          tagQuery,
+		FolderTree:        folderTree,
+		ActiveFolder:      activeFolder,
+		FolderQuery:       buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:       filterQuery,
+		HomeURL:           baseURL,
+		ActiveDate:        activeDate,
+		DateQuery:         buildDateQuery(activeDate),
+		SearchQuery:       activeSearch,
+		SearchQueryParam:  buildSearchQuery(activeSearch),
+		ReturnURL:         sanitizeReturnURL(r, r.URL.RequestURI()),
+		UpdateDays:        updateDays,
+		CalendarMonth:     calendar,
+		JournalSidebar:    journalSidebar,
+		RawQuery:          queryWithout(currentURLString(r), "offset"),
 	}
 	if hiddenExclusive.Count > 0 && len(hiddenExclusive.Tags) > 0 {
 		data.HiddenExclusiveCount = hiddenExclusive.Count
@@ -8793,7 +8805,7 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 	mentionTagsActive, noteTags := splitMentionTags(noteTags)
 	currentUser := currentUserName(r.Context())
 	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
-	todoNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
+	todoNotes, skeletonNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
 		r,
 		r.Context(),
 		noteTags,
@@ -8819,14 +8831,15 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 		urlTags = append(urlTags, journalTagName)
 	}
 	data := ViewData{
-		TodoNotes:        todoNotes,
-		TodoHasMore:      hasMore,
-		TodoNextOffset:   nextOffset,
-		TodoOffset:       offset,
-		TagQuery:         buildTagsQuery(urlTags),
-		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
-		SearchQueryParam: buildSearchQuery(activeSearch),
-		RawQuery:         queryWithout(currentURLString(r), "offset"),
+		TodoNotes:         todoNotes,
+		TodoSkeletonNotes: skeletonNotes,
+		TodoHasMore:       hasMore,
+		TodoNextOffset:    nextOffset,
+		TodoOffset:        offset,
+		TagQuery:          buildTagsQuery(urlTags),
+		FolderQuery:       buildFolderQuery(activeFolder, activeRoot),
+		SearchQueryParam:  buildSearchQuery(activeSearch),
+		RawQuery:          queryWithout(currentURLString(r), "offset"),
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "todo_notes_chunk", data)
@@ -8883,7 +8896,7 @@ func (s *Server) handleCompleted(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	completedNotes, nextOffset, hasMore, err := s.loadCompletedNotesPage(
+	completedNotes, skeletonNotes, nextOffset, hasMore, err := s.loadCompletedNotesPage(
 		r,
 		r.Context(),
 		noteTags,
@@ -8955,32 +8968,33 @@ func (s *Server) handleCompleted(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := ViewData{
-		Title:               "Completed",
-		ContentTemplate:     "completed",
-		CompletedNotes:      completedNotes,
-		CompletedHasMore:    hasMore,
-		CompletedNextOffset: nextOffset,
-		CompletedOffset:     0,
-		Tags:                tags,
-		TagLinks:            tagLinks,
-		TodoCount:           todoCount,
-		DueCount:            dueCount,
-		ActiveTags:          urlTags,
-		TagQuery:            tagQuery,
-		FolderTree:          folderTree,
-		ActiveFolder:        activeFolder,
-		FolderQuery:         buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:         filterQuery,
-		HomeURL:             baseURL,
-		ActiveDate:          activeDate,
-		DateQuery:           buildDateQuery(activeDate),
-		SearchQuery:         activeSearch,
-		SearchQueryParam:    buildSearchQuery(activeSearch),
-		ReturnURL:           sanitizeReturnURL(r, r.URL.RequestURI()),
-		UpdateDays:          updateDays,
-		CalendarMonth:       calendar,
-		JournalSidebar:      journalSidebar,
-		RawQuery:            queryWithout(currentURLString(r), "offset"),
+		Title:                  "Completed",
+		ContentTemplate:        "completed",
+		CompletedNotes:         completedNotes,
+		CompletedSkeletonNotes: skeletonNotes,
+		CompletedHasMore:       hasMore,
+		CompletedNextOffset:    nextOffset,
+		CompletedOffset:        0,
+		Tags:                   tags,
+		TagLinks:               tagLinks,
+		TodoCount:              todoCount,
+		DueCount:               dueCount,
+		ActiveTags:             urlTags,
+		TagQuery:               tagQuery,
+		FolderTree:             folderTree,
+		ActiveFolder:           activeFolder,
+		FolderQuery:            buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:            filterQuery,
+		HomeURL:                baseURL,
+		ActiveDate:             activeDate,
+		DateQuery:              buildDateQuery(activeDate),
+		SearchQuery:            activeSearch,
+		SearchQueryParam:       buildSearchQuery(activeSearch),
+		ReturnURL:              sanitizeReturnURL(r, r.URL.RequestURI()),
+		UpdateDays:             updateDays,
+		CalendarMonth:          calendar,
+		JournalSidebar:         journalSidebar,
+		RawQuery:               queryWithout(currentURLString(r), "offset"),
 	}
 	if hiddenExclusive.Count > 0 && len(hiddenExclusive.Tags) > 0 {
 		data.HiddenExclusiveCount = hiddenExclusive.Count
@@ -9017,7 +9031,7 @@ func (s *Server) handleCompletedPage(w http.ResponseWriter, r *http.Request) {
 	mentionTagsActive, noteTags := splitMentionTags(noteTags)
 	currentUser := currentUserName(r.Context())
 	mentionTagsFilter := buildTodoMentionTagsFilter(mentionTagsActive, currentUser)
-	completedNotes, nextOffset, hasMore, err := s.loadCompletedNotesPage(
+	completedNotes, skeletonNotes, nextOffset, hasMore, err := s.loadCompletedNotesPage(
 		r,
 		r.Context(),
 		noteTags,
@@ -9041,14 +9055,15 @@ func (s *Server) handleCompletedPage(w http.ResponseWriter, r *http.Request) {
 		urlTags = append(urlTags, journalTagName)
 	}
 	data := ViewData{
-		CompletedNotes:      completedNotes,
-		CompletedHasMore:    hasMore,
-		CompletedNextOffset: nextOffset,
-		CompletedOffset:     offset,
-		TagQuery:            buildTagsQuery(urlTags),
-		FolderQuery:         buildFolderQuery(activeFolder, activeRoot),
-		SearchQueryParam:    buildSearchQuery(activeSearch),
-		RawQuery:            queryWithout(currentURLString(r), "offset"),
+		CompletedNotes:         completedNotes,
+		CompletedSkeletonNotes: skeletonNotes,
+		CompletedHasMore:       hasMore,
+		CompletedNextOffset:    nextOffset,
+		CompletedOffset:        offset,
+		TagQuery:               buildTagsQuery(urlTags),
+		FolderQuery:            buildFolderQuery(activeFolder, activeRoot),
+		SearchQueryParam:       buildSearchQuery(activeSearch),
+		RawQuery:               queryWithout(currentURLString(r), "offset"),
 	}
 	s.attachViewData(r, &data)
 	s.views.RenderTemplate(w, "completed_notes_chunk", data)
@@ -9083,7 +9098,7 @@ func (s *Server) loadTodoNotesPage(
 	activeJournal bool,
 	offset int,
 	limit int,
-) ([]NoteCard, int, bool, error) {
+) ([]NoteCard, []NoteCard, int, bool, error) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -9103,7 +9118,7 @@ func (s *Server) loadTodoNotesPage(
 		activeJournal,
 	)
 	if err != nil {
-		return nil, offset, false, err
+		return nil, nil, offset, false, err
 	}
 	tasksByNote := make(map[string][]index.TaskItem)
 	noteTitles := make(map[string]string)
@@ -9116,7 +9131,7 @@ func (s *Server) loadTodoNotesPage(
 		}
 		tasksByNote[task.Path] = append(tasksByNote[task.Path], task)
 		if _, ok := noteTitles[task.Path]; !ok {
-			noteTitles[task.Path] = task.Title
+			noteTitles[task.Path] = displayTitleForNotePath(task.Path, task.Title)
 			noteUpdated[task.Path] = task.UpdatedAt
 			noteEarliestDue[task.Path] = dueTime
 			continue
@@ -9209,7 +9224,7 @@ func (s *Server) loadTodoNotesPage(
 		return leftUpdated.Before(rightUpdated)
 	})
 	if offset >= len(todoNotes) {
-		return []NoteCard{}, offset, false, nil
+		return []NoteCard{}, nil, offset, false, nil
 	}
 	end := offset + limit
 	if end > len(todoNotes) {
@@ -9217,7 +9232,8 @@ func (s *Server) loadTodoNotesPage(
 	}
 	nextOffset := end
 	hasMore := nextOffset < len(todoNotes)
-	return todoNotes[offset:end], nextOffset, hasMore, nil
+	skeletonNotes := nextPageSkeletonPreview(todoNotes, nextOffset, hasMore, 1)
+	return todoNotes[offset:end], skeletonNotes, nextOffset, hasMore, nil
 }
 
 func (s *Server) loadCompletedNotesPage(
@@ -9233,7 +9249,7 @@ func (s *Server) loadCompletedNotesPage(
 	activeJournal bool,
 	offset int,
 	limit int,
-) ([]NoteCard, int, bool, error) {
+) ([]NoteCard, []NoteCard, int, bool, error) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -9253,7 +9269,7 @@ func (s *Server) loadCompletedNotesPage(
 		activeJournal,
 	)
 	if err != nil {
-		return nil, offset, false, err
+		return nil, nil, offset, false, err
 	}
 	tasksByNote := make(map[string][]index.TaskItem)
 	noteTitles := make(map[string]string)
@@ -9266,7 +9282,7 @@ func (s *Server) loadCompletedNotesPage(
 		}
 		tasksByNote[task.Path] = append(tasksByNote[task.Path], task)
 		if _, ok := noteTitles[task.Path]; !ok {
-			noteTitles[task.Path] = task.Title
+			noteTitles[task.Path] = displayTitleForNotePath(task.Path, task.Title)
 			noteUpdated[task.Path] = task.UpdatedAt
 			noteEarliestDue[task.Path] = dueTime
 			continue
@@ -9332,7 +9348,7 @@ func (s *Server) loadCompletedNotesPage(
 		return leftUpdated.Before(rightUpdated)
 	})
 	if offset >= len(completedNotes) {
-		return []NoteCard{}, offset, false, nil
+		return []NoteCard{}, nil, offset, false, nil
 	}
 	end := offset + limit
 	if end > len(completedNotes) {
@@ -9340,7 +9356,8 @@ func (s *Server) loadCompletedNotesPage(
 	}
 	nextOffset := end
 	hasMore := nextOffset < len(completedNotes)
-	return completedNotes[offset:end], nextOffset, hasMore, nil
+	skeletonNotes := nextPageSkeletonPreview(completedNotes, nextOffset, hasMore, 1)
+	return completedNotes[offset:end], skeletonNotes, nextOffset, hasMore, nil
 }
 
 func buildTodoDebugSnippet(lines []string, tasks []index.TaskItem) (string, []index.Task) {
@@ -11622,11 +11639,41 @@ func homeSectionBounds(now time.Time) (time.Time, time.Time, time.Time, time.Tim
 }
 
 func (s *Server) loadHomeSectionNotes(ctx context.Context, section string, tags []string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string) ([]NoteCard, error) {
-	notes, _, _, err := s.loadHomeSectionNotesPage(ctx, section, tags, activeSearch, folder, rootOnly, journalOnly, ownerName, 0, homeSectionsMaxNotes)
+	notes, _, _, _, err := s.loadHomeSectionNotesPage(ctx, section, tags, activeSearch, folder, rootOnly, journalOnly, ownerName, 0, homeSectionsMaxNotes)
 	return notes, err
 }
 
-func (s *Server) loadHomeSectionNotesPage(ctx context.Context, section string, tags []string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string, offset int, limit int) ([]NoteCard, int, bool, error) {
+func homeSectionSkeletonPreviewNote(summary index.NoteSummary) NoteCard {
+	return NoteCard{
+		Path:     summary.Path,
+		Title:    displayTitleForNotePath(summary.Path, summary.Title),
+		FileName: filepath.Base(summary.Path),
+	}
+}
+
+func nextPageSkeletonPreview(notes []NoteCard, nextOffset int, hasMore bool, previewCount int) []NoteCard {
+	if !hasMore || nextOffset < 0 || nextOffset >= len(notes) {
+		return nil
+	}
+	if previewCount <= 0 {
+		previewCount = 1
+	}
+	end := nextOffset + previewCount
+	if end > len(notes) {
+		end = len(notes)
+	}
+	out := make([]NoteCard, 0, end-nextOffset)
+	for i := nextOffset; i < end; i++ {
+		out = append(out, NoteCard{
+			Path:     notes[i].Path,
+			Title:    notes[i].Title,
+			FileName: notes[i].FileName,
+		})
+	}
+	return out
+}
+
+func (s *Server) loadHomeSectionNotesPage(ctx context.Context, section string, tags []string, activeSearch string, folder string, rootOnly bool, journalOnly bool, ownerName string, offset int, limit int) ([]NoteCard, []NoteCard, int, bool, error) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -11690,22 +11737,24 @@ func (s *Server) loadHomeSectionNotesPage(ctx context.Context, section string, t
 		updatedBefore := startOfLastYear.Unix()
 		filter.UpdatedBefore = &updatedBefore
 	default:
-		return nil, offset, false, fmt.Errorf("unknown section %q", section)
+		return nil, nil, offset, false, fmt.Errorf("unknown section %q", section)
 	}
 	notes, err := s.idx.NoteList(ctx, filter)
 	if err != nil {
-		return nil, offset, false, err
+		return nil, nil, offset, false, err
 	}
 	hasMore := len(notes) > limit
+	skeletonNotes := []NoteCard(nil)
 	if hasMore {
+		skeletonNotes = append(skeletonNotes, homeSectionSkeletonPreviewNote(notes[limit]))
 		notes = notes[:limit]
 	}
 	nextOffset := offset + len(notes)
 	cards, err := s.buildNoteCardsFromSummaries(ctx, notes)
 	if err != nil {
-		return nil, offset, false, err
+		return nil, nil, offset, false, err
 	}
-	return cards, nextOffset, hasMore, nil
+	return cards, skeletonNotes, nextOffset, hasMore, nil
 }
 
 func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {

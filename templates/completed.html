@@ -44,6 +44,12 @@
   hx-swap="outerHTML"
   aria-hidden="true"
 >
-  {{template "todo_note_item_skeleton" .}}
+  {{if .CompletedSkeletonNotes}}
+    {{range .CompletedSkeletonNotes}}
+      {{template "todo_note_item_skeleton_title" (dict "Note" . "Root" $)}}
+    {{end}}
+  {{else}}
+    {{template "todo_note_item_skeleton" .}}
+  {{end}}
 </div>
 {{end}}

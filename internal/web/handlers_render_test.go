@@ -1,11 +1,25 @@
 package web
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"gwiki/internal/index"
 )
+
+func renderTemplateForTest(t *testing.T, name string, data ViewData) string {
+	t.Helper()
+	views := MustParseTemplates()
+	rec := httptest.NewRecorder()
+	views.RenderTemplate(rec, name, data)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("render %s status=%d body=%s", name, rec.Code, rec.Body.String())
+	}
+	return rec.Body.String()
+}
 
 func TestRemapTasksToBodyLineNumbers_ShiftAfterFilter(t *testing.T) {
 	body := "- [ ] open #inbox\n"
@@ -142,5 +156,77 @@ func TestConvertInboxTaskLine_StripsInboxAndSignal(t *testing.T) {
 	}
 	if got != "  - plan #work" {
 		t.Fatalf("expected converted line, got %q", got)
+	}
+}
+
+func TestTodoNextLoaderSkeletonShowsTitle(t *testing.T) {
+	data := ViewData{
+		TodoNextOffset: 10,
+		TodoSkeletonNotes: []NoteCard{
+			{
+				Path:     "seno/2026-02/22-11-06.md",
+				Title:    "22 Feb 2026 11:06",
+				FileName: "22-11-06.md",
+			},
+		},
+		CurrentUser: User{Name: "seno"},
+	}
+	out := renderTemplateForTest(t, "todo_next_loader", data)
+	if !regexp.MustCompile(`>\s*22 Feb 2026 11:06\s*<`).MatchString(out) {
+		t.Fatalf("expected skeleton to render note title, got %s", out)
+	}
+}
+
+func TestCompletedNextLoaderSkeletonShowsTitle(t *testing.T) {
+	data := ViewData{
+		CompletedNextOffset: 5,
+		CompletedSkeletonNotes: []NoteCard{
+			{
+				Path:     "seno/2026-02/21-10-15.md",
+				Title:    "21 Feb 2026 10:15",
+				FileName: "21-10-15.md",
+			},
+		},
+		CurrentUser: User{Name: "seno"},
+	}
+	out := renderTemplateForTest(t, "completed_next_loader", data)
+	if !regexp.MustCompile(`>\s*21 Feb 2026 10:15\s*<`).MatchString(out) {
+		t.Fatalf("expected completed skeleton to render note title, got %s", out)
+	}
+}
+
+func TestHomeSectionNextLoaderSkeletonShowsTitle(t *testing.T) {
+	data := ViewData{
+		HomePlannedHasMore:    true,
+		HomePlannedNextOffset: 30,
+		HomePlannedSkeletonNotes: []NoteCard{
+			{
+				Path:     "seno/2026-02/20-09-45.md",
+				Title:    "20 Feb 2026 09:45",
+				FileName: "20-09-45.md",
+			},
+		},
+		CurrentUser: User{Name: "seno"},
+	}
+	out := renderTemplateForTest(t, "home_section_planned_chunk", data)
+	if !regexp.MustCompile(`>\s*20 Feb 2026 09:45\s*<`).MatchString(out) {
+		t.Fatalf("expected home section skeleton to render note title, got %s", out)
+	}
+}
+
+func TestNoteDetailSkeletonPrefersTitleOverFileName(t *testing.T) {
+	data := ViewData{
+		NotePath:     "seno/2026-02/21-10-15.md",
+		NoteURL:      "/notes/@seno/2026-02/21-10-15.md",
+		NoteTitle:    "21 Feb 2026 10:15",
+		NoteFileName: "21-10-15.md",
+		CurrentUser:  User{Name: "seno"},
+	}
+	out := renderTemplateForTest(t, "note_detail_skeleton", data)
+	if !regexp.MustCompile(`>\s*21 Feb 2026 10:15\s*<`).MatchString(out) {
+		t.Fatalf("expected note skeleton heading to use title, got %s", out)
+	}
+	if regexp.MustCompile(`>\s*21-10-15\.md\s*<`).MatchString(out) {
+		t.Fatalf("expected note skeleton heading to avoid filename when title exists, got %s", out)
 	}
 }

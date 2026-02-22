@@ -50,7 +50,7 @@
   {{template "home_note_item" (dict "Note" . "Root" $)}}
 {{end}}
 {{if .HomeWeekHasMore}}
-  {{template "home_section_next_loader" (dict "SectionName" "week" "NextOffset" .HomeWeekNextOffset "Root" .)}}
+  {{template "home_section_next_loader" (dict "SectionName" "week" "NextOffset" .HomeWeekNextOffset "SkeletonNotes" .HomeWeekSkeletonNotes "Root" .)}}
 {{end}}
 {{end}}
 
@@ -59,7 +59,7 @@
   {{template "home_note_item" (dict "Note" . "Root" $)}}
 {{end}}
 {{if .HomeMonthHasMore}}
-  {{template "home_section_next_loader" (dict "SectionName" "month" "NextOffset" .HomeMonthNextOffset "Root" .)}}
+  {{template "home_section_next_loader" (dict "SectionName" "month" "NextOffset" .HomeMonthNextOffset "SkeletonNotes" .HomeMonthSkeletonNotes "Root" .)}}
 {{end}}
 {{end}}
 
@@ -68,7 +68,7 @@
   {{template "home_note_item" (dict "Note" . "Root" $)}}
 {{end}}
 {{if .HomeYearHasMore}}
-  {{template "home_section_next_loader" (dict "SectionName" "year" "NextOffset" .HomeYearNextOffset "Root" .)}}
+  {{template "home_section_next_loader" (dict "SectionName" "year" "NextOffset" .HomeYearNextOffset "SkeletonNotes" .HomeYearSkeletonNotes "Root" .)}}
 {{end}}
 {{end}}
 
@@ -77,7 +77,7 @@
   {{template "home_note_item" (dict "Note" . "Root" $)}}
 {{end}}
 {{if .HomeLastYearHasMore}}
-  {{template "home_section_next_loader" (dict "SectionName" "lastYear" "NextOffset" .HomeLastYearNextOffset "Root" .)}}
+  {{template "home_section_next_loader" (dict "SectionName" "lastYear" "NextOffset" .HomeLastYearNextOffset "SkeletonNotes" .HomeLastYearSkeletonNotes "Root" .)}}
 {{end}}
 {{end}}
 
@@ -86,6 +86,6 @@
   {{template "home_note_item" (dict "Note" . "Root" $)}}
 {{end}}
 {{if .HomeOtherHasMore}}
-  {{template "home_section_next_loader" (dict "SectionName" "others" "NextOffset" .HomeOtherNextOffset "Root" .)}}
+  {{template "home_section_next_loader" (dict "SectionName" "others" "NextOffset" .HomeOtherNextOffset "SkeletonNotes" .HomeOtherSkeletonNotes "Root" .)}}
 {{end}}
 {{end}}

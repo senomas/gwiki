@@ -14,6 +14,6 @@
   {{template "home_note_item" (dict "Note" . "Root" $)}}
 {{end}}
 {{if .HomePlannedHasMore}}
-  {{template "home_section_next_loader" (dict "SectionName" "planned" "NextOffset" .HomePlannedNextOffset "Root" .)}}
+  {{template "home_section_next_loader" (dict "SectionName" "planned" "NextOffset" .HomePlannedNextOffset "SkeletonNotes" .HomePlannedSkeletonNotes "Root" .)}}
 {{end}}
 {{end}}

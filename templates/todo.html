@@ -44,8 +44,24 @@
   hx-swap="outerHTML"
   aria-hidden="true"
 >
-  {{template "todo_note_item_skeleton" .}}
+  {{if .TodoSkeletonNotes}}
+    {{range .TodoSkeletonNotes}}
+      {{template "todo_note_item_skeleton_title" (dict "Note" . "Root" $)}}
+    {{end}}
+  {{else}}
+    {{template "todo_note_item_skeleton" .}}
+  {{end}}
 </div>
+{{end}}
+
+{{define "todo_note_item_skeleton_title"}}
+  {{ $note := .Note }}
+  {{ $root := .Root }}
+  <article class="rounded-2xl border border-slate-800/70 bg-[#13161a]/70 p-4 text-sm shadow-[0_20px_60px_-50px_rgba(0,0,0,0.8)]">
+    {{ $noteURL := noteHref $note.Path $root.CurrentUser.Name }}
+    {{ if $root.RawQuery }}{{ $noteURL = printf "%s?%s" $noteURL $root.RawQuery }}{{ end }}
+    {{template "note_detail_skeleton" (dict "NoteTitle" $note.Title "NoteMeta" $note.Meta "NotePath" $note.Path "NoteURL" $noteURL "NoteFileName" $note.FileName "CurrentUser" $root.CurrentUser)}}
+  </article>
 {{end}}
 
 {{define "todo_note_item_skeleton"}}
