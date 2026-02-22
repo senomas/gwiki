@@ -10148,7 +10148,7 @@ func (s *Server) listArchivedSourceNotes(ctx context.Context, ownerName string) 
 		normalized := normalizeLineEndings(string(contentBytes))
 		parsed := index.ParseContent(normalized)
 		meta := index.FrontmatterAttributes(normalized)
-		title := displayTitleForNotePath(notePath, parsed.Title)
+		title := archivedDisplayTitleForNotePath(notePath, parsed.Title)
 		if strings.TrimSpace(title) == "" {
 			title = strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
 			if strings.TrimSpace(title) == "" {
@@ -10566,7 +10566,7 @@ func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parsed := index.ParseContent(normalized)
-	title := displayTitleForNotePath(parsedPath, parsed.Title)
+	title := archivedDisplayTitleForNotePath(parsedPath, parsed.Title)
 	if strings.TrimSpace(title) == "" {
 		_, relPath, _ := fs.SplitOwnerNotePath(parsedPath)
 		title = strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))

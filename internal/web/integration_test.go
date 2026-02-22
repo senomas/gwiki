@@ -1497,6 +1497,137 @@ func TestCompletedPageArchiveTaskFlow(t *testing.T) {
 	}
 }
 
+func TestArchivedJournalTitlesUsePath(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	if err := os.MkdirAll(filepath.Join(repo, owner, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, owner, "archive", "2026-02"), 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	dailyContent := strings.Join([]string{
+		"---",
+		"title: Manual Daily Title",
+		"---",
+		"",
+		"daily archived body",
+	}, "\n")
+	splitContent := strings.Join([]string{
+		"---",
+		"title: Manual Split Title",
+		"---",
+		"",
+		"split archived body",
+	}, "\n")
+	suffixContent := strings.Join([]string{
+		"---",
+		"title: Manual Split Suffix Title",
+		"---",
+		"",
+		"suffix archived body",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(repo, owner, "archive", "2026-02", "22.md"), []byte(dailyContent), 0o644); err != nil {
+		t.Fatalf("write daily archive note: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, owner, "archive", "2026-02", "22-09-35.md"), []byte(splitContent), 0o644); err != nil {
+		t.Fatalf("write split archive note: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, owner, "archive", "2026-02", "22-09-35-2.md"), []byte(suffixContent), 0o644); err != nil {
+		t.Fatalf("write split suffix archive note: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/archived")
+	if err != nil {
+		t.Fatalf("get archived list: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archived list status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "22 Feb 2026") {
+		t.Fatalf("expected archived list daily journal title, got %s", html)
+	}
+	if !strings.Contains(html, "22 Feb 2026 09:35") {
+		t.Fatalf("expected archived list split journal title, got %s", html)
+	}
+	if strings.Contains(html, "Manual Daily Title") || strings.Contains(html, "Manual Split Title") || strings.Contains(html, "Manual Split Suffix Title") {
+		t.Fatalf("expected archived list journal path title override, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/archived/@local/2026-02/22.md")
+	if err != nil {
+		t.Fatalf("get archived daily detail: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archived daily detail status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "Archived - 22 Feb 2026") {
+		t.Fatalf("expected archived daily page title from path, got %s", html)
+	}
+	if strings.Contains(html, "Archived - Manual Daily Title") {
+		t.Fatalf("expected archived daily explicit title ignored, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/archived/@local/2026-02/22-09-35.md")
+	if err != nil {
+		t.Fatalf("get archived split detail: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archived split detail status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "Archived - 22 Feb 2026 09:35") {
+		t.Fatalf("expected archived split page title from path, got %s", html)
+	}
+
+	resp, err = http.Get(ts.URL + "/archived/@local/2026-02/22-09-35-2.md")
+	if err != nil {
+		t.Fatalf("get archived split suffix detail: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html = string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archived split suffix detail status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "Archived - 22 Feb 2026 09:35") {
+		t.Fatalf("expected archived split suffix page title from path, got %s", html)
+	}
+}
+
 func TestQuickLauncherHashQueryReturnsTagsOnly(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"
