@@ -6670,6 +6670,37 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.views.RenderPage(w, data)
 		return
 	}
+	clientIP := loginRemoteIP(r)
+	if s.loginLimiter != nil {
+		allowed, retryAfter, reason := s.loginLimiter.Allow(clientIP, user, time.Now())
+		if !allowed {
+			seconds := int(retryAfter.Seconds())
+			if retryAfter > 0 && time.Duration(seconds)*time.Second < retryAfter {
+				seconds++
+			}
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			slog.Warn(
+				"login rate limited",
+				"ip", clientIP,
+				"user_hash", loginUsernameHash(user),
+				"retry_after_sec", seconds,
+				"reason", reason,
+			)
+			data := ViewData{
+				Title:           "Login",
+				ContentTemplate: "login",
+				ErrorMessage:    "too many login attempts, please try again later",
+				ReturnURL:       returnTo,
+			}
+			s.attachViewData(r, &data)
+			w.WriteHeader(http.StatusTooManyRequests)
+			s.views.RenderPage(w, data)
+			return
+		}
+	}
 	if err := s.refreshAuthSources(r.Context()); err != nil {
 		slog.Warn("refresh auth sources", "err", err)
 		data := ViewData{
@@ -6683,6 +6714,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.auth.Authenticate(user, pass) {
+		if s.loginLimiter != nil {
+			s.loginLimiter.OnFailure(clientIP, user, time.Now())
+		}
 		data := ViewData{
 			Title:           "Login",
 			ContentTemplate: "login",
@@ -6695,6 +6729,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.auth.IsExpired(user, time.Now()) {
 		returnTo = "/password/change"
+	}
+	if s.loginLimiter != nil {
+		s.loginLimiter.OnSuccess(clientIP, user)
 	}
 	token, err := s.auth.CreateToken(user)
 	if err != nil {

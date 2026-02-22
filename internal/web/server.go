@@ -15,15 +15,16 @@ import (
 )
 
 type Server struct {
-	cfg     config.Config
-	idx     *index.Index
-	mux     *http.ServeMux
-	locker  *fs.Locker
-	views   *Templates
-	auth    *Auth
-	toasts  *toastStore
-	events  *sseHub
-	apiKeys map[string]apiKeyEntry
+	cfg          config.Config
+	idx          *index.Index
+	mux          *http.ServeMux
+	locker       *fs.Locker
+	views        *Templates
+	auth         *Auth
+	loginLimiter *loginRateLimiter
+	toasts       *toastStore
+	events       *sseHub
+	apiKeys      map[string]apiKeyEntry
 }
 
 func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
@@ -36,15 +37,16 @@ func NewServer(cfg config.Config, idx *index.Index) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		cfg:     cfg,
-		idx:     idx,
-		mux:     http.NewServeMux(),
-		locker:  fs.NewLocker(),
-		views:   MustParseTemplates(),
-		auth:    auth,
-		toasts:  newToastStore(),
-		events:  newSSEHub(),
-		apiKeys: apiKeys,
+		cfg:          cfg,
+		idx:          idx,
+		mux:          http.NewServeMux(),
+		locker:       fs.NewLocker(),
+		views:        MustParseTemplates(),
+		auth:         auth,
+		loginLimiter: newLoginRateLimiter(cfg),
+		toasts:       newToastStore(),
+		events:       newSSEHub(),
+		apiKeys:      apiKeys,
 	}
 	embedCacheStore = idx
 

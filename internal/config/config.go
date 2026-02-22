@@ -9,26 +9,35 @@ import (
 )
 
 type Config struct {
-	RepoPath             string
-	DataPath             string
-	ListenAddr           string
-	AuthUser             string
-	AuthPass             string
-	AuthFile             string
-	SignalURL            string
-	SignalNumber         string
-	SignalOwner          string
-	SignalGroup          string
-	SignalPoll           time.Duration
-	SignalHTTPTimeout    time.Duration
-	GitDebounce          time.Duration
-	GitPushDebounce      time.Duration
-	GitSchedule          time.Duration
-	NoteLockTimeout      time.Duration
-	UpdatedHistoryMax    int
-	DBLockTimeout        time.Duration
-	DBBusyTimeout        time.Duration
-	PasswordExpiryMonths int
+	RepoPath                      string
+	DataPath                      string
+	ListenAddr                    string
+	AuthUser                      string
+	AuthPass                      string
+	AuthFile                      string
+	LoginRateLimitIPWindow        time.Duration
+	LoginRateLimitIPBlock         time.Duration
+	LoginRateLimitIPMaxAttempts   int
+	LoginRateLimitUserWindow      time.Duration
+	LoginRateLimitUserBlock       time.Duration
+	LoginRateLimitUserBlockAfter  int
+	LoginRateLimitDelayStartAfter int
+	LoginRateLimitDelayMax        time.Duration
+	LoginRateLimitSweep           time.Duration
+	SignalURL                     string
+	SignalNumber                  string
+	SignalOwner                   string
+	SignalGroup                   string
+	SignalPoll                    time.Duration
+	SignalHTTPTimeout             time.Duration
+	GitDebounce                   time.Duration
+	GitPushDebounce               time.Duration
+	GitSchedule                   time.Duration
+	NoteLockTimeout               time.Duration
+	UpdatedHistoryMax             int
+	DBLockTimeout                 time.Duration
+	DBBusyTimeout                 time.Duration
+	PasswordExpiryMonths          int
 }
 
 func Load() Config {
@@ -55,6 +64,15 @@ func Load() Config {
 	cfg.GitDebounce = parseDurationOr("WIKI_GIT_DEBOUNCE", 3*time.Minute)
 	cfg.GitPushDebounce = parseDurationOr("WIKI_GIT_PUSH_DEBOUNCE", 10*time.Minute)
 	cfg.GitSchedule = parseDurationOr("WIKI_GIT_SCHEDULE", 10*time.Minute)
+	cfg.LoginRateLimitIPWindow = parseDurationOr("WIKI_LOGIN_RL_IP_WINDOW", 5*time.Minute)
+	cfg.LoginRateLimitIPBlock = parseDurationOr("WIKI_LOGIN_RL_IP_BLOCK", 5*time.Minute)
+	cfg.LoginRateLimitIPMaxAttempts = parseIntOr("WIKI_LOGIN_RL_IP_MAX", 60)
+	cfg.LoginRateLimitUserWindow = parseDurationOr("WIKI_LOGIN_RL_USER_WINDOW", 10*time.Minute)
+	cfg.LoginRateLimitUserBlock = parseDurationOr("WIKI_LOGIN_RL_USER_BLOCK", 10*time.Minute)
+	cfg.LoginRateLimitUserBlockAfter = parseIntOr("WIKI_LOGIN_RL_USER_BLOCK_AFTER", 12)
+	cfg.LoginRateLimitDelayStartAfter = parseIntOr("WIKI_LOGIN_RL_DELAY_START_AFTER", 3)
+	cfg.LoginRateLimitDelayMax = parseDurationOr("WIKI_LOGIN_RL_DELAY_MAX", 30*time.Second)
+	cfg.LoginRateLimitSweep = parseDurationOr("WIKI_LOGIN_RL_SWEEP", 10*time.Minute)
 	cfg.SignalPoll = parseDurationOr("WIKI_SIGNAL_POLL", 30*time.Second)
 	cfg.SignalHTTPTimeout = parseDurationOr("WIKI_SIGNAL_HTTP_TIMEOUT", 60*time.Second)
 	cfg.NoteLockTimeout = parseDurationOr("WIKI_NOTE_LOCK_TIMEOUT", 5*time.Second)
