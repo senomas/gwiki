@@ -7951,8 +7951,11 @@ func extractInboxFromNote(content string, startLine int, endLine int) (string, e
 	if startLine <= 0 || endLine <= 0 || startLine > endLine {
 		return "", fmt.Errorf("invalid line range")
 	}
-	if startLine > len(lines) || endLine > len(lines) {
+	if startLine > len(lines) {
 		return "", fmt.Errorf("line range out of bounds")
+	}
+	if endLine > len(lines) {
+		endLine = len(lines)
 	}
 	line := lines[startLine-1]
 	if !inboxTagRe.MatchString(line) {

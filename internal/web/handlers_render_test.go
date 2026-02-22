@@ -159,6 +159,31 @@ func TestConvertInboxTaskLine_StripsInboxAndSignal(t *testing.T) {
 	}
 }
 
+func TestExtractInboxFromNote_AllowsTrailingBlankRange(t *testing.T) {
+	content := strings.Join([]string{
+		"---",
+		"id: note-id",
+		"---",
+		"- [ ] item #inbox #signal",
+		"  detail line",
+		"  ![](/attachments/note-id/a.jpg)",
+	}, "\n")
+
+	out, err := extractInboxFromNote(content, 1, 4)
+	if err != nil {
+		t.Fatalf("extract inbox content: %v", err)
+	}
+	if !strings.Contains(out, "# INBOX") {
+		t.Fatalf("expected inbox heading, got %q", out)
+	}
+	if !strings.Contains(out, "item") {
+		t.Fatalf("expected task text in output, got %q", out)
+	}
+	if !strings.Contains(out, "detail line") {
+		t.Fatalf("expected detail line in output, got %q", out)
+	}
+}
+
 func TestTodoNextLoaderSkeletonShowsTitle(t *testing.T) {
 	data := ViewData{
 		TodoNextOffset: 10,
