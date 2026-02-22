@@ -15382,13 +15382,14 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		}
 	}
 	existingContentNormalized := ""
+	existingContentForTitle := ""
 	existingFrontmatter := ""
 	oldTitle := ""
 	if err == nil {
 		existingContentNormalized = normalizeLineEndings(string(existingContent))
-		existingContentNormalized = stripJournalFirstLineH1(notePath, existingContentNormalized)
+		existingContentForTitle = stripJournalFirstLineH1(notePath, existingContentNormalized)
 		existingFrontmatter = index.FrontmatterBlock(existingContentNormalized)
-		oldTitle = index.DeriveTitleFromBody(existingContentNormalized)
+		oldTitle = index.DeriveTitleFromBody(existingContentForTitle)
 	}
 	hadFrontmatter := frontmatter != "" || existingFrontmatter != ""
 	if frontmatter == "" {
