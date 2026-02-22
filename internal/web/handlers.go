@@ -14446,6 +14446,11 @@ func (s *Server) buildNoteViewData(r *http.Request, notePath string) (ViewData, 
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if IsAuthenticated(r.Context()) {
+				if cleanupErr := s.idx.RemoveNoteByPath(r.Context(), notePath); cleanupErr != nil {
+					slog.Warn("note view missing file cleanup failed", "path", notePath, "err", cleanupErr)
+				}
+			}
 			if !IsAuthenticated(r.Context()) {
 				return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
 			}
@@ -14663,6 +14668,11 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if IsAuthenticated(r.Context()) {
+				if cleanupErr := s.idx.RemoveNoteByPath(r.Context(), notePath); cleanupErr != nil {
+					slog.Warn("note card missing file cleanup failed", "path", notePath, "err", cleanupErr)
+				}
+			}
 			if !IsAuthenticated(r.Context()) {
 				return ViewData{}, http.StatusUnauthorized, errors.New("unauthorized")
 			}

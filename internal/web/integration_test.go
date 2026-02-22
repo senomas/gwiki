@@ -877,6 +877,85 @@ func TestNoteCardTagFilterMovesCompletedToHiding(t *testing.T) {
 	}
 }
 
+func TestNoteCardMissingFileRemovesStaleDBEntry(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	noteRel := "stale-card.md"
+	content := "# stale\n\nbody"
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	userCtx := WithUser(ctx, User{Name: owner, Authenticated: true})
+	exists, err := idx.NoteExists(userCtx, notePath)
+	if err != nil {
+		t.Fatalf("note exists before delete: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected indexed note to exist before file removal")
+	}
+
+	if err := os.Remove(fullPath); err != nil {
+		t.Fatalf("remove note file: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/notes/@" + notePath + "/card")
+	if err != nil {
+		t.Fatalf("get missing note card: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected missing note card status %d, got %d body=%s", http.StatusNotFound, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	exists, err = idx.NoteExists(userCtx, notePath)
+	if err != nil {
+		t.Fatalf("note exists after missing card request: %v", err)
+	}
+	if exists {
+		t.Fatalf("expected stale DB entry removed after missing note card request")
+	}
+}
+
 func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"
