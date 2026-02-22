@@ -850,6 +850,46 @@ func isJournalNotePath(notePath string) bool {
 	return journalNoteRE.MatchString(strings.TrimPrefix(notePath, "/"))
 }
 
+func stripJournalFirstLineH1(notePath string, content string) string {
+	normalized := normalizeLineEndings(content)
+	if !isJournalNotePath(notePath) {
+		return normalized
+	}
+	frontmatter := index.FrontmatterBlock(normalized)
+	body := normalized
+	if frontmatter != "" {
+		body = strings.TrimPrefix(normalized, frontmatter)
+		body = strings.TrimPrefix(body, "\n")
+	}
+	lines := strings.Split(body, "\n")
+	firstNonEmpty := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		firstNonEmpty = i
+		break
+	}
+	if firstNonEmpty >= 0 {
+		trimmed := strings.TrimSpace(lines[firstNonEmpty])
+		if strings.HasPrefix(trimmed, "# ") && !strings.HasPrefix(trimmed, "##") {
+			removeEnd := firstNonEmpty + 1
+			if removeEnd < len(lines) && strings.TrimSpace(lines[removeEnd]) == "" {
+				removeEnd++
+			}
+			lines = append(lines[:firstNonEmpty], lines[removeEnd:]...)
+		}
+	}
+	body = strings.Join(lines, "\n")
+	if frontmatter == "" {
+		return body
+	}
+	if strings.TrimSpace(body) == "" {
+		return frontmatter + "\n"
+	}
+	return frontmatter + "\n" + body
+}
+
 func listAttachmentNames(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -12001,7 +12041,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 		if journalFromDateHeading {
 			journalEntryTime = time.Date(journalDay.Year(), journalDay.Month(), journalDay.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), now.Location())
 		}
-		journalDate := journalEntryTime.Format("2 Jan 2006")
 		journalTime := journalEntryTime.Format("15:04")
 		journalEntry := "## " + journalTime + "\n\n" + strings.TrimSpace(content) + "\n"
 		notePath := ""
@@ -12053,10 +12092,8 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			if existing, err := os.ReadFile(fullPath); err == nil {
 				existingContent := strings.TrimRight(normalizeLineEndings(string(existing)), "\n")
 				updatedContent := existingContent + "\n\n" + journalEntry
+				updatedContent = stripJournalFirstLineH1(notePath, updatedContent)
 				derivedTitle := index.DeriveTitleFromBody(updatedContent)
-				if derivedTitle == "" {
-					derivedTitle = journalDate
-				}
 				updatedContent, err = index.EnsureFrontmatterWithTitleAndUser(updatedContent, now, s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(r.Context()))
 				if err != nil {
 					ownerOptions, _, _ := s.ownerOptionsForUser(r.Context())
@@ -12177,13 +12214,14 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		content = "# " + journalDate + "\n\n" + journalEntry
+		content = journalEntry
 		mergedContent = content
 		if frontmatter != "" {
 			mergedContent = frontmatter + "\n" + content
 		}
 		mergedContent = normalizeLineEndings(mergedContent)
-		title = journalDate
+		mergedContent = stripJournalFirstLineH1(notePath, mergedContent)
+		title = ""
 		if useSplitJournalPath {
 			folderInput = journalEntryTime.Format("2006-01")
 			journalFixedPath = notePath
@@ -15308,7 +15346,9 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
 	}
 
+	preserveUpdated := isJournalNotePath(notePath)
 	content := normalizeLineEndings(input.Content)
+	content = stripJournalFirstLineH1(notePath, content)
 	if content == "" {
 		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: "content required"}
 	}
@@ -15321,10 +15361,9 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	}
 
 	derivedTitle := index.DeriveTitleFromBody(content)
-	if derivedTitle == "" {
+	if derivedTitle == "" && !preserveUpdated {
 		derivedTitle = time.Now().Format("2006-01-02 15-04")
 	}
-	preserveUpdated := isJournalNotePath(notePath)
 	folder, err := normalizeFolderPath(folderInput)
 	if err != nil {
 		return saveNoteResult{}, &apiError{status: http.StatusBadRequest, message: "invalid folder"}
@@ -15347,6 +15386,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	oldTitle := ""
 	if err == nil {
 		existingContentNormalized = normalizeLineEndings(string(existingContent))
+		existingContentNormalized = stripJournalFirstLineH1(notePath, existingContentNormalized)
 		existingFrontmatter = index.FrontmatterBlock(existingContentNormalized)
 		oldTitle = index.DeriveTitleFromBody(existingContentNormalized)
 	}
@@ -15359,6 +15399,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		mergedContent = frontmatter + "\n" + content
 	}
 	mergedContent = normalizeLineEndings(mergedContent)
+	mergedContent = stripJournalFirstLineH1(notePath, mergedContent)
 	if !hadFrontmatter {
 		if preserveUpdated {
 			mergedContent, err = index.EnsureFrontmatterWithTitleAndUserNoUpdated(mergedContent, time.Now(), s.cfg.UpdatedHistoryMax, derivedTitle, historyUser(ctx))
@@ -15390,7 +15431,7 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 	}
 	mergedContent = sanitizeTaskDoneTokens(mergedContent)
 	titleChanged := oldTitle != "" && oldTitle != derivedTitle
-	if preserveUpdated && titleChanged {
+	if preserveUpdated && oldTitle != "" && derivedTitle != "" && titleChanged {
 		return saveNoteResult{}, &apiError{status: http.StatusConflict, message: "journal note title cannot change"}
 	}
 	desiredRel := fs.EnsureMDExt(slugify(derivedTitle))

@@ -527,11 +527,11 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 	}
 	journalEntry := "## " + entryTime.Format("15:04") + "\n\n" + entry + "\n"
 	if body == "" {
-		journalDate := entryTime.Format("2 Jan 2006")
-		body = "# " + journalDate + "\n\n" + journalEntry
+		body = journalEntry
 	} else {
 		body = strings.TrimRight(body, "\n") + "\n\n" + journalEntry
 	}
+	body = stripJournalFirstLineH1(notePath, body)
 
 	noteCtx := WithUser(ctx, User{Name: p.cfg.SignalOwner, Authenticated: true})
 	_, apiErr := p.server.saveNoteCommon(noteCtx, saveNoteInput{
