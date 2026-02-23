@@ -2554,6 +2554,45 @@
   </script>
   <script>
     (function () {
+      function resolveFrontmatterSummary(event) {
+        if (!event || !event.target || !event.target.closest) {
+          return null;
+        }
+        var summary = event.target.closest("summary[data-frontmatter-summary-toggle=\"true\"]");
+        if (!summary) {
+          return null;
+        }
+        var details = summary.closest("details");
+        if (!details) {
+          return null;
+        }
+        return details;
+      }
+
+      document.addEventListener("click", function (event) {
+        var details = resolveFrontmatterSummary(event);
+        if (!details) {
+          return;
+        }
+        event.preventDefault();
+        details.open = !details.open;
+      }, true);
+
+      document.addEventListener("keydown", function (event) {
+        if (!event || (event.key !== "Enter" && event.key !== " ")) {
+          return;
+        }
+        var details = resolveFrontmatterSummary(event);
+        if (!details) {
+          return;
+        }
+        event.preventDefault();
+        details.open = !details.open;
+      }, true);
+    })();
+  </script>
+  <script>
+    (function () {
       function collectCollapsed(noteBody) {
         var sections = noteBody.querySelectorAll("details.note-section");
         var collapsed = [];

@@ -13,7 +13,7 @@
   {{end}}
   {{if .NoteMeta.Has}}
     <details class="group">
-      <summary class="list-none cursor-pointer select-none text-xs text-slate-500">
+      <summary class="list-none cursor-pointer select-none text-xs text-slate-500" data-frontmatter-summary-toggle="true">
         <span class="group-open:hidden">
           <span class="mr-2">{{if .FolderLabel}}{{.FolderLabel}}{{else}}{{if .NoteMeta.Folder}}{{.NoteMeta.Folder}}{{else}}/{{end}}{{end}}</span>
           {{if .NoteMeta.Visibility}}<span class="mr-2">{{if .NoteVisibilityDisplay}}{{.NoteVisibilityDisplay}}{{else}}{{.NoteMeta.Visibility}}{{end}}</span>{{end}}
