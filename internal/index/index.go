@@ -3779,10 +3779,37 @@ func (i *Index) SearchPathTitleWithShortTokens(ctx context.Context, query string
 	return results, rows.Err()
 }
 
+func tagRecencyWeightedScoreExpr(fileAlias, fileTagAlias string) string {
+	fileAlias = strings.TrimSpace(fileAlias)
+	fileTagAlias = strings.TrimSpace(fileTagAlias)
+	filePrefix := ""
+	if fileAlias != "" {
+		filePrefix = fileAlias + "."
+	}
+	fileTagPrefix := ""
+	if fileTagAlias != "" {
+		fileTagPrefix = fileTagAlias + "."
+	}
+	nowUnixExpr := "CAST(strftime('%s','now') AS INTEGER)"
+	return fmt.Sprintf(
+		"COALESCE(SUM(CASE "+
+			"WHEN %sfile_id IS NULL THEN 0 "+
+			"WHEN %supdated_at >= (%s - %d) THEN 10 "+
+			"WHEN %supdated_at >= (%s - %d) THEN 5 "+
+			"WHEN %supdated_at >= (%s - %d) THEN 3 "+
+			"ELSE 1 END), 0)",
+		fileTagPrefix,
+		filePrefix, nowUnixExpr, 7*secondsPerDay,
+		filePrefix, nowUnixExpr, 30*secondsPerDay,
+		filePrefix, nowUnixExpr, 365*secondsPerDay,
+	)
+}
+
 func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly bool, journalOnly bool, ownerName string) ([]TagSummary, error) {
 	if limit <= 0 {
 		limit = 100
 	}
+	weightedScoreExpr := tagRecencyWeightedScoreExpr("files", "file_tags")
 	var (
 		rows *sql.Rows
 		err  error
@@ -3797,7 +3824,7 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 	}
 	if publicOnly(ctx) {
 		query := `
-			SELECT tags.name, COUNT(file_tags.file_id)
+			SELECT tags.name, COUNT(file_tags.file_id) AS raw_count, ` + weightedScoreExpr + ` AS weighted_score
 			FROM tags
 			JOIN file_tags ON tags.id = file_tags.tag_id
 			JOIN files ON files.id = file_tags.file_id
@@ -3820,13 +3847,13 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 		}
 		query += `
 			GROUP BY tags.id
-			ORDER BY tags.name
+			ORDER BY weighted_score DESC, raw_count DESC, tags.name ASC
 			LIMIT ?`
 		args = append(args, limit)
 		rows, err = i.queryContext(ctx, query, args...)
 	} else {
 		query := `
-			SELECT tags.name, COUNT(file_tags.file_id)
+			SELECT tags.name, COUNT(file_tags.file_id) AS raw_count, ` + weightedScoreExpr + ` AS weighted_score
 			FROM tags
 			LEFT JOIN file_tags ON tags.id = file_tags.tag_id
 			LEFT JOIN files ON files.id = file_tags.file_id`
@@ -3860,7 +3887,7 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 		}
 		query += `
 			GROUP BY tags.id
-			ORDER BY tags.name
+			ORDER BY weighted_score DESC, raw_count DESC, tags.name ASC
 			LIMIT ?`
 		args = append(args, limit)
 		rows, err = i.queryContext(ctx, query, args...)
@@ -3873,7 +3900,8 @@ func (i *Index) ListTags(ctx context.Context, limit int, folder string, rootOnly
 	var tags []TagSummary
 	for rows.Next() {
 		var t TagSummary
-		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+		var weightedScore int64
+		if err := rows.Scan(&t.Name, &t.Count, &weightedScore); err != nil {
 			return nil, err
 		}
 		tags = append(tags, t)
@@ -3888,6 +3916,7 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	if limit <= 0 {
 		limit = 100
 	}
+	weightedScoreExpr := tagRecencyWeightedScoreExpr("files", "file_tags")
 	placeholders := strings.Repeat("?,", len(active))
 	placeholders = strings.TrimRight(placeholders, ",")
 	visibilityClause := ""
@@ -3933,12 +3962,13 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
-		SELECT tags.name, COUNT(file_tags.file_id)
+		SELECT tags.name, COUNT(file_tags.file_id) AS raw_count, ` + weightedScoreExpr + ` AS weighted_score
 		FROM tags
 		JOIN file_tags ON tags.id = file_tags.tag_id
 		JOIN matching_files ON matching_files.id = file_tags.file_id
+		JOIN files ON files.id = file_tags.file_id
 		GROUP BY tags.id
-		ORDER BY tags.name
+		ORDER BY weighted_score DESC, raw_count DESC, tags.name ASC
 		LIMIT ?`
 
 	args := make([]interface{}, 0, len(active)+len(exclusiveArgs)+len(accessArgs)+4)
@@ -3968,7 +3998,8 @@ func (i *Index) ListTagsFiltered(ctx context.Context, active []string, limit int
 	var tags []TagSummary
 	for rows.Next() {
 		var t TagSummary
-		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+		var weightedScore int64
+		if err := rows.Scan(&t.Name, &t.Count, &weightedScore); err != nil {
 			return nil, err
 		}
 		tags = append(tags, t)
@@ -3988,6 +4019,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		if limit <= 0 {
 			limit = 100
 		}
+		weightedScoreExpr := tagRecencyWeightedScoreExpr("files", "file_tags")
 		var rows *sql.Rows
 		var err error
 		folderClause, folderArgs := folderWhere(folder, rootOnly, "files")
@@ -4030,12 +4062,13 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 			}
 			query += `
 				)
-				SELECT tags.name, COUNT(file_tags.file_id)
+				SELECT tags.name, COUNT(file_tags.file_id) AS raw_count, ` + weightedScoreExpr + ` AS weighted_score
 				FROM tags
 				JOIN file_tags ON tags.id = file_tags.tag_id
 				JOIN matching_files ON matching_files.file_id = file_tags.file_id
+				JOIN files ON files.id = file_tags.file_id
 				GROUP BY tags.id
-				ORDER BY tags.name
+				ORDER BY weighted_score DESC, raw_count DESC, tags.name ASC
 				LIMIT ?`
 			args = append(args, limit)
 			rows, err = i.queryContext(ctx, query, args...)
@@ -4059,12 +4092,13 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 			}
 			query += `
 				)
-				SELECT tags.name, COUNT(file_tags.file_id)
+				SELECT tags.name, COUNT(file_tags.file_id) AS raw_count, ` + weightedScoreExpr + ` AS weighted_score
 				FROM tags
 				JOIN file_tags ON tags.id = file_tags.tag_id
 				JOIN matching_files ON matching_files.file_id = file_tags.file_id
+				JOIN files ON files.id = file_tags.file_id
 				GROUP BY tags.id
-				ORDER BY tags.name
+				ORDER BY weighted_score DESC, raw_count DESC, tags.name ASC
 				LIMIT ?`
 			args = append(args, limit)
 			rows, err = i.queryContext(ctx, query, args...)
@@ -4076,7 +4110,8 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 		var tags []TagSummary
 		for rows.Next() {
 			var t TagSummary
-			if err := rows.Scan(&t.Name, &t.Count); err != nil {
+			var weightedScore int64
+			if err := rows.Scan(&t.Name, &t.Count, &weightedScore); err != nil {
 				return nil, err
 			}
 			tags = append(tags, t)
@@ -4086,6 +4121,7 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	if limit <= 0 {
 		limit = 100
 	}
+	weightedScoreExpr := tagRecencyWeightedScoreExpr("files", "file_tags")
 	placeholders := strings.Repeat("?,", len(active))
 	placeholders = strings.TrimRight(placeholders, ",")
 	visibilityClause := ""
@@ -4132,12 +4168,13 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 			GROUP BY files.id
 			HAVING COUNT(DISTINCT tags.name) = ?
 		)
-		SELECT tags.name, COUNT(file_tags.file_id)
+		SELECT tags.name, COUNT(file_tags.file_id) AS raw_count, ` + weightedScoreExpr + ` AS weighted_score
 		FROM tags
 		JOIN file_tags ON tags.id = file_tags.tag_id
 		JOIN matching_files ON matching_files.id = file_tags.file_id
+		JOIN files ON files.id = file_tags.file_id
 		GROUP BY tags.id
-		ORDER BY tags.name
+		ORDER BY weighted_score DESC, raw_count DESC, tags.name ASC
 		LIMIT ?`
 
 	args := make([]interface{}, 0, len(active)+len(exclusiveArgs)+len(accessArgs)+5)
@@ -4168,7 +4205,8 @@ func (i *Index) ListTagsFilteredByDate(ctx context.Context, active []string, act
 	var tags []TagSummary
 	for rows.Next() {
 		var t TagSummary
-		if err := rows.Scan(&t.Name, &t.Count); err != nil {
+		var weightedScore int64
+		if err := rows.Scan(&t.Name, &t.Count, &weightedScore); err != nil {
 			return nil, err
 		}
 		tags = append(tags, t)
