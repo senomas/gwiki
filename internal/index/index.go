@@ -232,14 +232,22 @@ func splitJournalDateTimeTitleForPath(notePath string) (string, bool) {
 	return parsed.Format("2 Jan 2006 15:04"), true
 }
 
-func DisplayTitleForPath(notePath string, title string) string {
-	title = strings.TrimSpace(title)
-	if title != "" {
-		return title
+func dailyJournalDateTitleForPath(notePath string) (string, bool) {
+	parsed, split, ok := parseJournalPathDateTime(notePath)
+	if !ok || split {
+		return "", false
 	}
+	return parsed.Format("2 Jan 2006"), true
+}
+
+func DisplayTitleForPath(notePath string, title string) string {
 	if inferred, ok := splitJournalDateTimeTitleForPath(notePath); ok {
 		return inferred
 	}
+	if inferred, ok := dailyJournalDateTitleForPath(notePath); ok {
+		return inferred
+	}
+	title = strings.TrimSpace(title)
 	return title
 }
 
