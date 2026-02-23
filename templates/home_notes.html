@@ -32,7 +32,7 @@
 {{if eq .HomeOffset 0}}
 <div
   class="home-section-loader"
-  hx-get="/notes/section?name=planned{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
+  hx-get="/notes/section?name=planned{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}{{if .JournalOnly}}&j=1{{end}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"
@@ -41,7 +41,7 @@
 </div>
 <div
   class="home-section-loader"
-  hx-get="/notes/section?name=rest{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}"
+  hx-get="/notes/section?name=rest{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}{{if .JournalOnly}}&j=1{{end}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"
@@ -110,7 +110,7 @@
 {{$root := .Root}}
 <div
   class="home-section-loader"
-  hx-get="/notes/section?name={{.SectionName}}{{if $root.TagQuery}}&t={{$root.TagQuery}}{{end}}{{if $root.FolderQuery}}&f={{$root.FolderQuery}}{{end}}{{if $root.SearchQueryParam}}&s={{$root.SearchQueryParam}}{{end}}{{if $root.HomeOwner}}&o={{$root.HomeOwner}}{{end}}&offset={{.NextOffset}}"
+  hx-get="/notes/section?name={{.SectionName}}{{if $root.TagQuery}}&t={{$root.TagQuery}}{{end}}{{if $root.FolderQuery}}&f={{$root.FolderQuery}}{{end}}{{if $root.SearchQueryParam}}&s={{$root.SearchQueryParam}}{{end}}{{if $root.HomeOwner}}&o={{$root.HomeOwner}}{{end}}{{if $root.JournalOnly}}&j=1{{end}}&offset={{.NextOffset}}"
   hx-trigger="revealed"
   hx-swap="outerHTML"
   aria-hidden="true"

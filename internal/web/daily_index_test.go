@@ -31,26 +31,29 @@ func TestSplitSpecialTagsKeepsJournalAsRegularTag(t *testing.T) {
 	}
 }
 
-func TestDailyIndexBehavesLikeHomeWithForcedJournalTag(t *testing.T) {
+func TestDailyIndexBehavesLikeHomeWithForcedJournalMode(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"
 	notesDir := filepath.Join(repo, owner, "notes")
 	if err := os.MkdirAll(notesDir, 0o755); err != nil {
 		t.Fatalf("mkdir notes: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(notesDir, "2026-02"), 0o755); err != nil {
+		t.Fatalf("mkdir journal month: %v", err)
+	}
 	dataDir := filepath.Join(repo, ".wiki")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir .wiki: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(notesDir, "journal-note.md"), []byte("# Journal Note\n\n#JOURNAL\n"), 0o644); err != nil {
-		t.Fatalf("write journal note: %v", err)
+	if err := os.WriteFile(filepath.Join(notesDir, "2026-02", "22.md"), []byte("journal day\n"), 0o644); err != nil {
+		t.Fatalf("write day journal note: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(notesDir, "work-note.md"), []byte("# Work Note\n\n#work\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(notesDir, "2026-02", "22-10-30.md"), []byte("- [ ] journal work item #work\n"), 0o644); err != nil {
+		t.Fatalf("write split journal work note: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "work-note.md"), []byte("- [ ] non-journal work item #work\n"), 0o644); err != nil {
 		t.Fatalf("write work note: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(notesDir, "journal-work-note.md"), []byte("# Journal Work Note\n\n#JOURNAL #work\n"), 0o644); err != nil {
-		t.Fatalf("write journal work note: %v", err)
 	}
 
 	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
@@ -89,8 +92,11 @@ func TestDailyIndexBehavesLikeHomeWithForcedJournalTag(t *testing.T) {
 	if strings.Contains(html, "No journal notes updated on this day.") {
 		t.Fatalf("expected /daily to not render /daily/{date} template, got %s", html)
 	}
-	if !strings.Contains(html, "t=JOURNAL") {
-		t.Fatalf("expected forced JOURNAL tag query on /daily, got %s", html)
+	if !strings.Contains(html, "j=1") {
+		t.Fatalf("expected forced journal mode query on /daily, got %s", html)
+	}
+	if strings.Contains(html, "t=JOURNAL") {
+		t.Fatalf("expected /daily to avoid JOURNAL tag filtering, got %s", html)
 	}
 
 	resp, err = http.Get(ts.URL + "/daily?t=work")
@@ -103,10 +109,13 @@ func TestDailyIndexBehavesLikeHomeWithForcedJournalTag(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/daily?t=work status %d: %s", resp.StatusCode, strings.TrimSpace(html))
 	}
-	if !strings.Contains(html, "t=work,JOURNAL") && !strings.Contains(html, "t=JOURNAL,work") {
-		t.Fatalf("expected forced JOURNAL merged with existing tags, got %s", html)
+	if !strings.Contains(html, "t=work") {
+		t.Fatalf("expected existing work tag filter preserved, got %s", html)
 	}
-	if strings.Contains(html, "JOURNAL,JOURNAL") {
-		t.Fatalf("expected JOURNAL tag deduplication, got %s", html)
+	if !strings.Contains(html, "j=1") {
+		t.Fatalf("expected forced journal mode preserved with tag filters, got %s", html)
+	}
+	if strings.Contains(html, "JOURNAL") {
+		t.Fatalf("expected /daily?t=work to avoid JOURNAL tag injection, got %s", html)
 	}
 }

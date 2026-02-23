@@ -1747,6 +1747,15 @@ func parseDateParam(raw string) string {
 	return raw
 }
 
+func parseBoolParam(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 const journalTagName = "JOURNAL"
 
 func splitSpecialTags(tags []string) (bool, bool, bool, []string) {
@@ -6305,7 +6314,9 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
 	baseURL := baseURLForLinks(r, basePath)
+	forcedJournalOnly := parseBoolParam(r.URL.Query().Get("j"))
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
+	activeJournal = activeJournal || forcedJournalOnly
 	isAuth := IsAuthenticated(r.Context())
 	if !isAuth {
 		activeTodo = false
@@ -6314,9 +6325,6 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		activeTags = noteTags
 	}
 	urlTags := append([]string{}, noteTags...)
-	if activeJournal {
-		urlTags = append(urlTags, journalTagName)
-	}
 	hiddenExclusive := index.HiddenExclusiveSummary{}
 	if len(noteTags) > 0 {
 		var hiddenErr error
@@ -6434,6 +6442,7 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 		TodoCount:         todoCount,
 		DueCount:          dueCount,
 		ActiveTags:        urlTags,
+		JournalOnly:       activeJournal,
 		TagQuery:          tagQuery,
 		FolderTree:        folderTree,
 		ActiveFolder:      activeFolder,
@@ -6459,32 +6468,14 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	s.views.RenderPage(w, data)
 }
 
-func containsTagFold(tags []string, target string) bool {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return false
-	}
-	for _, tag := range tags {
-		if strings.EqualFold(strings.TrimSpace(tag), target) {
-			return true
-		}
-	}
-	return false
-}
-
-func requestWithForcedTag(r *http.Request, tag string) *http.Request {
-	tag = strings.TrimSpace(tag)
-	if r == nil || tag == "" {
+func requestWithForcedJournalOnly(r *http.Request) *http.Request {
+	if r == nil {
 		return r
 	}
 	clone := r.Clone(r.Context())
 	u := *r.URL
 	query := u.Query()
-	tags := parseTagsParam(query.Get("t"))
-	if !containsTagFold(tags, tag) {
-		tags = append(tags, tag)
-	}
-	query.Set("t", strings.Join(tags, ","))
+	query.Set("j", "1")
 	u.RawQuery = query.Encode()
 	clone.URL = &u
 	return clone
@@ -6502,7 +6493,7 @@ func (s *Server) handleDailyIndex(w http.ResponseWriter, r *http.Request) {
 	if IsAuthenticated(r.Context()) {
 		ownerName = currentUserName(r.Context())
 	}
-	filteredRequest := requestWithForcedTag(r, journalTagName)
+	filteredRequest := requestWithForcedJournalOnly(r)
 	s.renderHomePage(w, filteredRequest, ownerName, "/daily")
 }
 
@@ -8413,20 +8404,19 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
+	forcedJournalOnly := parseBoolParam(r.URL.Query().Get("j"))
 	basePath := "/"
 	if ownerName != "" {
 		basePath = "/@" + ownerName
 	}
 	baseURL := baseURLForLinks(r, basePath)
 	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
+	activeJournal = activeJournal || forcedJournalOnly
 	if !IsAuthenticated(r.Context()) {
 		activeJournal = false
 		activeTags = noteTags
 	}
 	urlTags := append([]string{}, noteTags...)
-	if activeJournal {
-		urlTags = append(urlTags, journalTagName)
-	}
 	homeNotes, nextOffset, hasMore, err := s.loadHomeNotes(r.Context(), offset, noteTags, activeDate, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
 	if err != nil {
 		s.internalServerError(w, r, err)
@@ -8448,6 +8438,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 		HomeOffset:        offset,
 		HomeOwner:         ownerName,
 		ActiveTags:        urlTags,
+		JournalOnly:       activeJournal,
 		TagQuery:          buildTagsQuery(urlTags),
 		FolderQuery:       buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:       queryWithout(baseURL, "d"),
@@ -8495,24 +8486,24 @@ func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) 
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
 	activeSearch := strings.TrimSpace(r.URL.Query().Get("s"))
 	activeDate := ""
+	forcedJournalOnly := parseBoolParam(r.URL.Query().Get("j"))
 	basePath := "/"
 	if ownerName != "" {
 		basePath = "/@" + ownerName
 	}
 	baseURL := baseURLForLinks(r, basePath)
 	_, _, activeJournal, noteTags := splitSpecialTags(activeTags)
+	activeJournal = activeJournal || forcedJournalOnly
 	if !IsAuthenticated(r.Context()) {
 		activeJournal = false
 		activeTags = noteTags
 	}
 	urlTags := append([]string{}, noteTags...)
-	if activeJournal {
-		urlTags = append(urlTags, journalTagName)
-	}
 
 	data := ViewData{
 		HomeOwner:        ownerName,
 		ActiveTags:       urlTags,
+		JournalOnly:      activeJournal,
 		TagQuery:         buildTagsQuery(urlTags),
 		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
 		FilterQuery:      queryWithout(baseURL, "d"),

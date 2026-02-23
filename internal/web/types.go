@@ -102,6 +102,7 @@ type ViewData struct {
 	HiddenExclusiveTags       []TagLink
 	ShowHiddenExclusive       bool
 	ActiveTags                []string
+	JournalOnly               bool
 	TagQuery                  string
 	ActiveDate                string
 	DateQuery                 string
