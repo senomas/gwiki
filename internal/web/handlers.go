@@ -1753,20 +1753,17 @@ func splitSpecialTags(tags []string) (bool, bool, bool, []string) {
 	out := make([]string, 0, len(tags))
 	activeTodo := false
 	activeDue := false
-	activeJournal := false
 	for _, tag := range tags {
 		switch {
 		case strings.EqualFold(tag, "todo"):
 			activeTodo = true
 		case strings.EqualFold(tag, "due"):
 			activeDue = true
-		case strings.EqualFold(tag, journalTagName):
-			activeJournal = true
 		default:
 			out = append(out, tag)
 		}
 	}
-	return activeTodo, activeDue, activeJournal, out
+	return activeTodo, activeDue, false, out
 }
 
 func splitMentionTags(tags []string) ([]string, []string) {
@@ -1970,20 +1967,7 @@ func buildHiddenExclusiveTagLinks(raw string, tags []string) []TagLink {
 }
 
 func appendJournalTagLink(links []TagLink, activeJournal bool, journalCount int, baseURL string, noteTags []string) []TagLink {
-	targetTags := append([]string{}, noteTags...)
-	if !activeJournal {
-		targetTags = append(targetTags, journalTagName)
-	}
-	link := TagLink{
-		Name:   journalTagName,
-		Count:  journalCount,
-		URL:    setTagsURL(baseURL, targetTags),
-		Active: activeJournal,
-	}
-	if activeJournal {
-		link.URL = setTagsURL(baseURL, noteTags)
-	}
-	return append([]TagLink{link}, links...)
+	return links
 }
 
 func formatTagLabel(tag string) string {
@@ -6475,6 +6459,53 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	s.views.RenderPage(w, data)
 }
 
+func containsTagFold(tags []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for _, tag := range tags {
+		if strings.EqualFold(strings.TrimSpace(tag), target) {
+			return true
+		}
+	}
+	return false
+}
+
+func requestWithForcedTag(r *http.Request, tag string) *http.Request {
+	tag = strings.TrimSpace(tag)
+	if r == nil || tag == "" {
+		return r
+	}
+	clone := r.Clone(r.Context())
+	u := *r.URL
+	query := u.Query()
+	tags := parseTagsParam(query.Get("t"))
+	if !containsTagFold(tags, tag) {
+		tags = append(tags, tag)
+	}
+	query.Set("t", strings.Join(tags, ","))
+	u.RawQuery = query.Encode()
+	clone.URL = &u
+	return clone
+}
+
+func (s *Server) handleDailyIndex(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if r.URL.Path != "/daily" {
+		http.NotFound(w, r)
+		return
+	}
+	ownerName := ""
+	if IsAuthenticated(r.Context()) {
+		ownerName = currentUserName(r.Context())
+	}
+	filteredRequest := requestWithForcedTag(r, journalTagName)
+	s.renderHomePage(w, filteredRequest, ownerName, "/daily")
+}
+
 func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	date := strings.TrimPrefix(r.URL.Path, "/daily/")
 	date = strings.TrimSuffix(date, "/")
@@ -7124,18 +7155,6 @@ func (s *Server) searchTagsByQuery(ctx context.Context, query string, limit int)
 	if len(results) >= limit {
 		return results, nil
 	}
-	journalCount, err := s.idx.CountJournalNotes(ctx, "", false, "")
-	if err == nil && journalCount > 0 && fuzzyMatchTag(term, strings.ToLower(journalTagName)) {
-		results = append(results, TagLink{
-			Name:   journalTagName,
-			Count:  journalCount,
-			URL:    setTagsURL("/", []string{journalTagName}),
-			Active: false,
-		})
-		if len(results) > limit {
-			results = results[:limit]
-		}
-	}
 	return results, nil
 }
 
@@ -7173,12 +7192,6 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 		suggestions = append(suggestions, tag.Name)
 		if len(suggestions) >= maxSuggestions {
 			break
-		}
-	}
-	if len(suggestions) < maxSuggestions {
-		journalLower := strings.ToLower(journalTagName)
-		if _, ok := seen[journalTagName]; !ok && fuzzyMatchTag(queryNormalized, journalLower) {
-			suggestions = append(suggestions, journalTagName)
 		}
 	}
 	s.views.RenderTemplate(w, "tag_suggest", ViewData{TagSuggestions: suggestions, SuggestPrefix: "#"})
@@ -7537,18 +7550,6 @@ func (s *Server) quickLauncherEntries(r *http.Request, query string, currentURL 
 			Tag:   tag.Name,
 		})
 	}
-	journalLower := strings.ToLower(journalTagName)
-	if fuzzyMatchTag(normalized, journalLower) {
-		tagHref := toggleTagURL(currentURL.String(), journalTagName)
-		entries = append(entries, QuickLauncherEntry{
-			Kind:  "tag",
-			Label: formatTagLabel(journalTagName),
-			Hint:  "Tag",
-			Icon:  "#",
-			Href:  tagHref,
-			Tag:   journalTagName,
-		})
-	}
 	if tagOnlyQuery {
 		return entries, nil
 	}
@@ -7641,16 +7642,6 @@ func (s *Server) quickEditActionsEntries(r *http.Request, query string) ([]Quick
 			Hint:  "Tag",
 			Icon:  "#",
 			Tag:   tag.Name,
-		})
-	}
-	journalLower := strings.ToLower(journalTagName)
-	if fuzzyMatchTag(normalized, journalLower) {
-		entries = append(entries, QuickLauncherEntry{
-			Kind:  "tag",
-			Label: formatTagLabel(journalTagName),
-			Hint:  "Tag",
-			Icon:  "#",
-			Tag:   journalTagName,
 		})
 	}
 

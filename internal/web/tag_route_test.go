@@ -35,6 +35,7 @@ func TestSidebarBasePathKeepsListPagesAndMapsNotes(t *testing.T) {
 		{path: "/completed", want: "/completed"},
 		{path: "/archived", want: "/archived"},
 		{path: "/archived/@local/tasks.md", want: "/archived"},
+		{path: "/daily", want: "/daily"},
 		{path: "/daily/2026-02-21", want: "/daily/2026-02-21"},
 		{path: "/notes/demo.md", want: "/"},
 		{path: "/notes/@local/demo.md", want: "/@local"},
