@@ -23,7 +23,10 @@
   {{template "calendar_skeleton" .}}
 
 <div class="border-t border-slate-800/70 pt-4">
-  <div class="flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
+  <div class="text-xs uppercase tracking-[0.25em] text-slate-500">
+    <a class="text-slate-500 transition hover:text-slate-300" href="/daily" data-preserve-month="true">Daily</a>
+  </div>
+  <div class="mt-2 flex items-center justify-between text-xs uppercase tracking-[0.25em] text-slate-500">
     <a class="text-slate-500 transition hover:text-slate-300" href="{{.TodoURL}}" data-preserve-month="true">Todo ({{.DueCount}} / {{.TodoCount}})</a>
     <span class="text-slate-600">.</span>
   </div>

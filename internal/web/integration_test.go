@@ -1516,6 +1516,9 @@ func TestSidebarTagLinksUseIndexOnNoteDetailAndStayOnListPages(t *testing.T) {
 			if !strings.Contains(html, tc.wantHref) {
 				t.Fatalf("expected sidebar tag href %s, got %s", tc.wantHref, html)
 			}
+			if !strings.Contains(html, `href="/daily"`) {
+				t.Fatalf("expected sidebar daily link href=\"/daily\", got %s", html)
+			}
 		})
 	}
 }
