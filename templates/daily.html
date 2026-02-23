@@ -2,26 +2,28 @@
 <section class="space-y-6">
   <section class="space-y-4">
     <div class="text-xs uppercase tracking-[0.25em] text-slate-500">Journal</div>
-    {{if .DailyJournal}}
+    {{if .DailyJournals}}
+    {{range .DailyJournals}}
     <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
       <div class="space-y-3">
         <h2 class="text-xl font-semibold text-slate-100">
-          <a class="text-sky-300 hover:text-sky-200" href="{{noteHref .DailyJournal.Path .CurrentUser.Name}}">{{.DailyJournal.Title}}</a>
+          <a class="text-sky-300 hover:text-sky-200" href="{{noteHref .Path $.CurrentUser.Name}}">{{.Title}}</a>
         </h2>
         <div class="text-xs uppercase tracking-[0.2em] text-slate-500">
-          {{if .DailyJournal.FolderLabel}}{{.DailyJournal.FolderLabel}}{{else}}{{if .DailyJournal.Meta.Folder}}{{.DailyJournal.Meta.Folder}}{{end}}{{end}}
-          {{if and (or .DailyJournal.FolderLabel .DailyJournal.Meta.Folder) (not .DailyJournal.Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
-          {{if .DailyJournal.Meta.Updated.IsZero}}{{else}}{{.DailyJournal.Meta.Updated.Format "02/01/2006 15:04:05"}}{{end}}
+          {{if .FolderLabel}}{{.FolderLabel}}{{else}}{{if .Meta.Folder}}{{.Meta.Folder}}{{end}}{{end}}
+          {{if and (or .FolderLabel .Meta.Folder) (not .Meta.Updated.IsZero)}} <span class="px-2">·</span>{{end}}
+          {{if .Meta.Updated.IsZero}}{{else}}{{.Meta.Updated.Format "02/01/2006 15:04:05"}}{{end}}
         </div>
-        <div class="note-body text-sm leading-relaxed text-slate-200">{{.DailyJournal.RenderedHTML}}</div>
+        <div class="note-body text-sm leading-relaxed text-slate-200">{{.RenderedHTML}}</div>
       </div>
     </article>
+    {{end}}
     {{else}}
     <article class="rounded-3xl border border-slate-800/70 bg-[#121417]/85 p-6 shadow-[0_30px_90px_-60px_rgba(0,0,0,0.95)]">
       <div class="space-y-3">
         <h2 class="text-xl font-semibold text-sky-300">{{.DailyDate}}</h2>
         <div class="text-xs uppercase tracking-[0.2em] text-slate-500"></div>
-        <div class="note-body text-sm leading-relaxed text-slate-200"></div>
+        <div class="note-body text-sm leading-relaxed text-slate-200">No journal notes updated on this day.</div>
       </div>
     </article>
     {{end}}

@@ -134,7 +134,7 @@ type ViewData struct {
 	TagSuggestionsByOwner     map[string][]string
 	SuggestPrefix             string
 	DailyDate                 string
-	DailyJournal              *NoteCard
+	DailyJournals             []NoteCard
 	DailyNotes                []NoteCard
 	JournalSidebar            JournalSidebar
 	JournalYear               JournalYearNode

@@ -6478,29 +6478,39 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	date := strings.TrimPrefix(r.URL.Path, "/daily/")
 	date = strings.TrimSuffix(date, "/")
-	parsedDate, err := time.Parse("2006-01-02", date)
+	parsedDate, err := time.ParseInLocation("2006-01-02", date, time.Local)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+	startOfDay := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, time.Local)
+	endOfDay := startOfDay.Add(24 * time.Hour)
 	displayDate := parsedDate.Format("02 Jan 2006")
-	journalSummary, hasJournal, err := s.idx.JournalNoteByDate(r.Context(), date)
+
+	journalAfter := startOfDay.Unix()
+	journalBefore := endOfDay.Unix()
+	journalNotes, err := s.idx.NoteList(r.Context(), index.NoteListFilter{
+		JournalOnly:   true,
+		UpdatedAfter:  &journalAfter,
+		UpdatedBefore: &journalBefore,
+		Limit:         200,
+		Offset:        0,
+	})
 	if err != nil {
 		s.internalServerError(w, r, err)
 		return
 	}
-	journalCard := (*NoteCard)(nil)
-	if hasJournal {
-		card, err := s.buildNoteCard(r, journalSummary.Path)
+
+	journalCards := make([]NoteCard, 0, len(journalNotes))
+	journalPaths := make(map[string]struct{}, len(journalNotes))
+	for _, note := range journalNotes {
+		card, err := s.buildNoteCard(r, note.Path)
 		if err != nil {
 			s.internalServerError(w, r, err)
 			return
 		}
-		journalCard = &card
-	}
-	excludeUID := ""
-	if journalSummary.UID != "" {
-		excludeUID = journalSummary.UID
+		journalCards = append(journalCards, card)
+		journalPaths[note.Path] = struct{}{}
 	}
 
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
@@ -6555,7 +6565,6 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		Folder:      activeFolder,
 		Root:        activeRoot,
 		JournalOnly: activeJournal,
-		ExcludeUID:  excludeUID,
 		Limit:       200,
 		Offset:      0,
 	})
@@ -6565,6 +6574,9 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 	}
 	noteCards := make([]NoteCard, 0, len(notes))
 	for _, note := range notes {
+		if _, excluded := journalPaths[note.Path]; excluded {
+			continue
+		}
 		card, err := s.buildNoteCard(r, note.Path)
 		if err != nil {
 			s.internalServerError(w, r, err)
@@ -6602,7 +6614,7 @@ func (s *Server) handleDaily(w http.ResponseWriter, r *http.Request) {
 		Title:            "Daily",
 		ContentTemplate:  "daily",
 		DailyDate:        displayDate,
-		DailyJournal:     journalCard,
+		DailyJournals:    journalCards,
 		DailyNotes:       noteCards,
 		Tags:             tags,
 		TagLinks:         tagLinks,

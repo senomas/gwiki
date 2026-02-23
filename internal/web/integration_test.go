@@ -201,6 +201,77 @@ func TestNewNoteWithoutTitleUsesSplitJournalPathPattern(t *testing.T) {
 	}
 }
 
+func TestDailyShowsAllJournalNotesUpdatedOnSelectedDate(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes", "2026-02")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(notesDir, "22-09-35.md"), []byte("journal entry one\n"), 0o644); err != nil {
+		t.Fatalf("write split journal one: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "22-10-10.md"), []byte("journal entry two\n"), 0o644); err != nil {
+		t.Fatalf("write split journal two: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(notesDir, "23-09-00.md"), []byte("journal entry next day\n"), 0o644); err != nil {
+		t.Fatalf("write split journal next day: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := newLoopbackServer(t, srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/daily/2026-02-22")
+	if err != nil {
+		t.Fatalf("get daily: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("daily status %d: %s", resp.StatusCode, strings.TrimSpace(html))
+	}
+	if !strings.Contains(html, "22 Feb 2026 09:35") {
+		t.Fatalf("expected first split journal title, got %s", html)
+	}
+	if !strings.Contains(html, "22 Feb 2026 10:10") {
+		t.Fatalf("expected second split journal title, got %s", html)
+	}
+	if strings.Contains(html, "23 Feb 2026 09:00") {
+		t.Fatalf("did not expect next-day split journal title, got %s", html)
+	}
+	dayOneLinkRE := regexp.MustCompile(`/notes/(?:@local/)?2026-02/22-09-35\.md`)
+	dayTwoLinkRE := regexp.MustCompile(`/notes/(?:@local/)?2026-02/22-10-10\.md`)
+	if got := len(dayOneLinkRE.FindAllStringIndex(html, -1)); got != 1 {
+		t.Fatalf("expected journal link rendered once for 22-09-35, got %d", got)
+	}
+	if got := len(dayTwoLinkRE.FindAllStringIndex(html, -1)); got != 1 {
+		t.Fatalf("expected journal link rendered once for 22-10-10, got %d", got)
+	}
+}
+
 func TestEditDeleteRequireOwnerScopedRoute(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"
