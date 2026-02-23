@@ -88,6 +88,11 @@ type signalAttachment struct {
 	Filename    string
 }
 
+const (
+	signalRetryTickInterval = 5 * time.Second
+	signalRetryTickLimit    = 20
+)
+
 func (s *Server) StartSignalPoller() {
 	cfg := s.cfg
 	if strings.TrimSpace(cfg.SignalURL) == "" || strings.TrimSpace(cfg.SignalNumber) == "" || strings.TrimSpace(cfg.SignalOwner) == "" {
@@ -109,13 +114,21 @@ func (s *Server) StartSignalPoller() {
 	if err := poller.loadState(); err != nil {
 		slog.Warn("signal state load failed", "err", err)
 	}
-	ticker := time.NewTicker(interval)
+	pollTicker := time.NewTicker(interval)
+	retryTicker := time.NewTicker(signalRetryTickInterval)
 	slog.Info("signal poller enabled", "interval", interval.String(), "http_timeout", signalHTTPTimeout(cfg).String())
 	go func() {
-		defer ticker.Stop()
+		defer pollTicker.Stop()
+		defer retryTicker.Stop()
+		poller.tick()
+		poller.retryTick()
 		for {
-			poller.tick()
-			<-ticker.C
+			select {
+			case <-pollTicker.C:
+				poller.tick()
+			case <-retryTicker.C:
+				poller.retryTick()
+			}
 		}
 	}()
 }
@@ -195,6 +208,47 @@ func (p *signalPoller) tick() {
 		p.stateMu.Unlock()
 		if err := p.saveState(); err != nil {
 			slog.Warn("signal state save failed", "err", err)
+		}
+	}
+}
+
+func (p *signalPoller) retryTick() {
+	if p.server == nil || p.server.idx == nil {
+		return
+	}
+	owner := strings.TrimSpace(p.cfg.SignalOwner)
+	if owner == "" {
+		return
+	}
+	timeout := signalHTTPTimeout(p.cfg) + 50*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	items, err := p.server.idx.ListDueSignalAttachmentRetries(ctx, owner, time.Now(), signalRetryTickLimit)
+	if err != nil {
+		slog.Warn("signal attachment retry list failed", "owner", owner, "err", err)
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+
+	slog.Debug("signal attachment retry batch", "owner", owner, "count", len(items))
+	for _, item := range items {
+		_, ok, ensureErr := p.ensureSignalAttachment(ctx, item.NoteID, item.AttachmentID, item.Filename, item.ContentType)
+		if ensureErr != nil {
+			slog.Warn(
+				"signal attachment retry failed",
+				"owner", owner,
+				"note_id", item.NoteID,
+				"attachment_id", item.AttachmentID,
+				"attempt", item.Attempt,
+				"err", ensureErr,
+			)
+			continue
+		}
+		if !ok {
+			slog.Warn("signal attachment retry skipped empty body", "owner", owner, "note_id", item.NoteID, "attachment_id", item.AttachmentID)
 		}
 	}
 }
@@ -757,6 +811,60 @@ func (p *signalPoller) ensureSignalMessageAttachment(ctx context.Context, noteID
 	return p.ensureSignalAttachment(ctx, noteID, attachment.ID, attachment.Filename, attachment.ContentType)
 }
 
+func (p *signalPoller) scheduleSignalAttachmentRetry(
+	ctx context.Context,
+	noteID string,
+	attachmentID string,
+	filename string,
+	contentType string,
+	cause error,
+) {
+	if p.server == nil || p.server.idx == nil {
+		return
+	}
+	causeText := ""
+	if cause != nil {
+		causeText = strings.TrimSpace(cause.Error())
+	}
+	item, err := p.server.idx.ScheduleSignalAttachmentRetry(
+		ctx,
+		p.cfg.SignalOwner,
+		noteID,
+		attachmentID,
+		filename,
+		contentType,
+		causeText,
+	)
+	if err != nil {
+		slog.Warn(
+			"signal attachment retry schedule failed",
+			"owner", p.cfg.SignalOwner,
+			"note_id", noteID,
+			"attachment_id", attachmentID,
+			"err", err,
+		)
+		return
+	}
+	slog.Warn(
+		"signal attachment retry scheduled",
+		"owner", item.OwnerName,
+		"note_id", item.NoteID,
+		"attachment_id", item.AttachmentID,
+		"attempt", item.Attempt,
+		"next_retry", item.NextRetryAt.In(time.Local).Format(time.RFC3339),
+		"last_error", item.LastError,
+	)
+}
+
+func (p *signalPoller) clearSignalAttachmentRetry(ctx context.Context, noteID string, attachmentID string) {
+	if p.server == nil || p.server.idx == nil {
+		return
+	}
+	if err := p.server.idx.DeleteSignalAttachmentRetry(ctx, p.cfg.SignalOwner, noteID, attachmentID); err != nil {
+		slog.Warn("signal attachment retry clear failed", "owner", p.cfg.SignalOwner, "note_id", noteID, "attachment_id", attachmentID, "err", err)
+	}
+}
+
 func (p *signalPoller) ensureSignalAttachment(ctx context.Context, noteID string, attachmentID string, filename string, contentType string) (string, bool, error) {
 	attachmentID = strings.TrimSpace(attachmentID)
 	if attachmentID == "" {
@@ -777,8 +885,14 @@ func (p *signalPoller) ensureSignalAttachment(ctx context.Context, noteID string
 		return "", false, err
 	}
 	targetPath := filepath.Join(attachmentsDir, name)
-	if _, err := os.Stat(targetPath); err == nil {
-		return name, true, nil
+	if info, err := os.Stat(targetPath); err == nil {
+		if info.Size() > 0 {
+			p.clearSignalAttachmentRetry(ctx, noteID, attachmentID)
+			return name, true, nil
+		}
+		if removeErr := os.Remove(targetPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return "", false, removeErr
+		}
 	}
 	url := fmt.Sprintf("%s/v1/attachments/%s", strings.TrimRight(p.cfg.SignalURL, "/"), attachmentID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -787,20 +901,30 @@ func (p *signalPoller) ensureSignalAttachment(ctx context.Context, noteID string
 	}
 	resp, err := p.doRequest(req)
 	if err != nil {
+		p.scheduleSignalAttachmentRetry(ctx, noteID, attachmentID, name, contentType, err)
 		return "", false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", false, fmt.Errorf("attachment fetch failed: %s", strings.TrimSpace(string(body)))
+		fetchErr := fmt.Errorf("attachment fetch failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		p.scheduleSignalAttachmentRetry(ctx, noteID, attachmentID, name, contentType, fetchErr)
+		return "", false, fetchErr
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		p.scheduleSignalAttachmentRetry(ctx, noteID, attachmentID, name, contentType, err)
 		return "", false, err
 	}
-	if err := os.WriteFile(targetPath, data, 0o644); err != nil {
+	if len(data) == 0 {
+		p.clearSignalAttachmentRetry(ctx, noteID, attachmentID)
+		slog.Warn("signal attachment empty response", "owner", p.cfg.SignalOwner, "note_id", noteID, "attachment_id", attachmentID, "name", name)
+		return "", false, nil
+	}
+	if err := fs.WriteFileAtomic(targetPath, data, 0o644); err != nil {
 		return "", false, err
 	}
+	p.clearSignalAttachmentRetry(ctx, noteID, attachmentID)
 	return name, true, nil
 }
 

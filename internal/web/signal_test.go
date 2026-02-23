@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"gwiki/internal/config"
+	"gwiki/internal/index"
 )
 
 func TestSignalDebugLogDir_Default(t *testing.T) {
@@ -384,4 +387,131 @@ func countTaskLines(lines []string) int {
 		}
 	}
 	return count
+}
+
+func TestEnsureSignalAttachmentSkipsEmptyResponseFile(t *testing.T) {
+	repo := t.TempDir()
+	owner := "seno"
+	noteID := "note-123"
+	if err := os.MkdirAll(filepath.Join(repo, owner, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+	if err := idx.Init(context.Background(), repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/attachments/att-1" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{
+		RepoPath:    repo,
+		SignalOwner: owner,
+		SignalURL:   srv.URL,
+	}
+	poller := signalPoller{
+		cfg:    cfg,
+		server: &Server{cfg: cfg, idx: idx},
+		client: srv.Client(),
+	}
+
+	name, ok, err := poller.ensureSignalAttachment(context.Background(), noteID, "att-1", "photo.jpg", "image/jpeg")
+	if err != nil {
+		t.Fatalf("ensure signal attachment: %v", err)
+	}
+	if ok {
+		t.Fatalf("expected empty response to skip attachment, got ok=true name=%q", name)
+	}
+	target := filepath.Join(repo, owner, "notes", "attachments", noteID, "photo.jpg")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected no attachment file created, stat err=%v", err)
+	}
+
+	due, err := idx.ListDueSignalAttachmentRetries(context.Background(), owner, time.Now().Add(24*time.Hour), 20)
+	if err != nil {
+		t.Fatalf("list due retries: %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("expected no queued retry for empty body, got %d", len(due))
+	}
+}
+
+func TestEnsureSignalAttachmentSchedulesRetryOnFetchError(t *testing.T) {
+	repo := t.TempDir()
+	owner := "seno"
+	noteID := "note-123"
+	if err := os.MkdirAll(filepath.Join(repo, owner, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+	if err := idx.Init(context.Background(), repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/attachments/att-2" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "upstream failed", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{
+		RepoPath:    repo,
+		SignalOwner: owner,
+		SignalURL:   srv.URL,
+	}
+	poller := signalPoller{
+		cfg:    cfg,
+		server: &Server{cfg: cfg, idx: idx},
+		client: srv.Client(),
+	}
+
+	if _, ok, err := poller.ensureSignalAttachment(context.Background(), noteID, "att-2", "photo.jpg", "image/jpeg"); err == nil {
+		t.Fatalf("expected fetch error")
+	} else if ok {
+		t.Fatalf("expected failed fetch to return ok=false")
+	}
+
+	target := filepath.Join(repo, owner, "notes", "attachments", noteID, "photo.jpg")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected no attachment file created on fetch error, stat err=%v", err)
+	}
+
+	due, err := idx.ListDueSignalAttachmentRetries(context.Background(), owner, time.Now().Add(10*time.Second), 20)
+	if err != nil {
+		t.Fatalf("list due retries: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("expected one queued retry, got %d", len(due))
+	}
+	if due[0].Attempt != 1 {
+		t.Fatalf("retry attempt=%d want=1", due[0].Attempt)
+	}
+	if due[0].AttachmentID != "att-2" {
+		t.Fatalf("retry attachment id=%q want=%q", due[0].AttachmentID, "att-2")
+	}
 }

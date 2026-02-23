@@ -897,6 +897,12 @@ func (i *Index) migrateSchema(ctx context.Context, fromVersion int) error {
 				return err
 			}
 			version = 37
+		case 37:
+			slog.Info("schema migration", "from", 37, "to", 38)
+			if err := i.migrate37To38(ctx); err != nil {
+				return err
+			}
+			version = 38
 		default:
 			return fmt.Errorf("unsupported schema version: %d", version)
 		}
@@ -1442,6 +1448,27 @@ func (i *Index) migrate36To37(ctx context.Context) error {
 		return err
 	}
 	_, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS note_block_tags_by_file_tag ON note_block_tags(file_id, tag)")
+	return err
+}
+
+func (i *Index) migrate37To38(ctx context.Context) error {
+	if _, err := i.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS signal_attachment_retries (
+			owner_name TEXT NOT NULL,
+			note_id TEXT NOT NULL,
+			attachment_id TEXT NOT NULL,
+			filename TEXT NOT NULL DEFAULT '',
+			content_type TEXT NOT NULL DEFAULT '',
+			attempt INTEGER NOT NULL DEFAULT 0,
+			next_retry_unix INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(owner_name, note_id, attachment_id)
+		)
+	`); err != nil {
+		return err
+	}
+	_, err := i.execContext(ctx, "CREATE INDEX IF NOT EXISTS signal_attachment_retries_due ON signal_attachment_retries(owner_name, next_retry_unix)")
 	return err
 }
 

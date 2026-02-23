@@ -1,6 +1,6 @@
 package index
 
-const schemaVersion = 37
+const schemaVersion = 38
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -197,6 +197,22 @@ CREATE TABLE IF NOT EXISTS attachment_dates (
 	updated_at INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY(owner_user_id, note_id, name)
 );
+
+CREATE TABLE IF NOT EXISTS signal_attachment_retries (
+	owner_name TEXT NOT NULL,
+	note_id TEXT NOT NULL,
+	attachment_id TEXT NOT NULL,
+	filename TEXT NOT NULL DEFAULT '',
+	content_type TEXT NOT NULL DEFAULT '',
+	attempt INTEGER NOT NULL DEFAULT 0,
+	next_retry_unix INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT NOT NULL DEFAULT '',
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(owner_name, note_id, attachment_id)
+);
+
+CREATE INDEX IF NOT EXISTS signal_attachment_retries_due
+	ON signal_attachment_retries(owner_name, next_retry_unix);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
 	user_id UNINDEXED,
