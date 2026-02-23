@@ -480,7 +480,7 @@ Contains demo in body only.
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	ts := newLoopbackServer(t, srv.Handler())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/quick/launcher?q=%2Fdemo&uri=%2F")
@@ -874,6 +874,89 @@ func TestNoteCardTagFilterMovesCompletedToHiding(t *testing.T) {
 	}
 	if !strings.Contains(html, "done tagged #tag1") {
 		t.Fatalf("expected completed tagged task rendered in hiding section, got %s", html)
+	}
+}
+
+func TestNoteCardTagFilterPreservesInboxSourceLineMapping(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	noteRel := "filter-card-inbox-mapping.md"
+	content := strings.Join([]string{
+		"---",
+		"id: card-inbox-mapping",
+		"---",
+		"",
+		"- [ ] task root #tag1 #inbox #signal",
+		"  detail line",
+	}, "\n")
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/notes/@" + notePath + "/card?t=tag1")
+	if err != nil {
+		t.Fatalf("get card hashtag: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("get card hashtag status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(body)
+
+	if !strings.Contains(html, `js-inbox-action`) {
+		t.Fatalf("expected inbox link action class, got %s", html)
+	}
+	if !strings.Contains(html, "line=2-") {
+		t.Fatalf("expected inbox create link to keep source start line 2, got %s", html)
+	}
+	taskIDLine := regexp.MustCompile(`task-\d+-(\d+)-[0-9a-f]{64}`)
+	match := taskIDLine.FindStringSubmatch(html)
+	if len(match) < 2 {
+		t.Fatalf("expected inbox task id with source line mapping, got %s", html)
+	}
+	if match[1] != "2" {
+		t.Fatalf("expected inbox task id to keep source line 2, got %s in %s", match[1], html)
 	}
 }
 

@@ -9669,6 +9669,40 @@ func buildTodoTagFilteredRenderTasks(noteTasks []index.TaskItem, selectedLines [
 	return out
 }
 
+func buildTagFilteredRenderTasksFromMeta(metaTasks []index.Task, selectedLines []int) []index.Task {
+	if len(metaTasks) == 0 || len(selectedLines) == 0 {
+		return nil
+	}
+	selected := make(map[int]struct{}, len(selectedLines))
+	for _, lineNo := range selectedLines {
+		if lineNo > 0 {
+			selected[lineNo] = struct{}{}
+		}
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+	out := make([]index.Task, 0, len(metaTasks))
+	for _, task := range metaTasks {
+		if task.LineNo <= 0 || task.Done {
+			continue
+		}
+		if _, ok := selected[task.LineNo]; !ok {
+			continue
+		}
+		hash := strings.TrimSpace(task.Hash)
+		if hash == "" {
+			continue
+		}
+		out = append(out, index.Task{
+			LineNo: task.LineNo,
+			Hash:   hash,
+			Done:   false,
+		})
+	}
+	return out
+}
+
 func todoFiltersFromURL(raw string) (noteTags []string, activeDue bool, dueDate string, activeFolder string, activeRoot bool, activeJournal bool) {
 	if raw == "" {
 		return nil, false, "", "", false, false
@@ -14782,7 +14816,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 			renderContent = []byte("")
 			renderTasks = nil
 		} else {
-			contextMarkdown, err := s.tagFilteredContextMarkdown(r.Context(), notePath, string(normalizedContent), hashtagFilters)
+			contextMarkdown, selectedLines, err := s.tagFilteredContextSelection(r.Context(), notePath, string(normalizedContent), hashtagFilters)
 			if err != nil {
 				return ViewData{}, http.StatusInternalServerError, err
 			}
@@ -14790,7 +14824,7 @@ func (s *Server) buildNoteCardData(r *http.Request, notePath string, hideComplet
 				snippet := index.FilterCompletedTasksWithHidden(contextMarkdown)
 				renderContent = []byte(snippet.Visible)
 				completedCount = snippet.CompletedCount
-				renderTasks = snippet.OpenTasks
+				renderTasks = buildTagFilteredRenderTasksFromMeta(meta.Tasks, selectedLines)
 				hiddenBlocks, err = s.renderHiddenBlocks(r, renderCtx, notePath, noteMeta.ID, snippet.Hidden)
 				if err != nil {
 					return ViewData{}, http.StatusInternalServerError, err
