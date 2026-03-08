@@ -22,6 +22,7 @@ import (
 
 type Index struct {
 	db          *sql.DB
+	dbPath      string
 	lockTimeout time.Duration
 	syncMu      sync.Mutex
 }
@@ -551,7 +552,7 @@ func OpenWithOptions(path string, opts OpenOptions) (*Index, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	return &Index{db: db, lockTimeout: 3 * time.Second}, nil
+	return &Index{db: db, dbPath: path, lockTimeout: 3 * time.Second}, nil
 }
 
 func (i *Index) SetLockTimeout(timeout time.Duration) {
@@ -4948,6 +4949,34 @@ func (i *Index) MaxEtagTime(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return maxTime, nil
+}
+
+func (i *Index) DBFileMTime() (int64, error) {
+	dbPath := strings.TrimSpace(i.dbPath)
+	if dbPath == "" {
+		return 0, nil
+	}
+	candidates := []string{dbPath, dbPath + "-wal", dbPath + "-journal"}
+	var maxMTime int64
+	found := false
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return 0, err
+		}
+		found = true
+		mtime := info.ModTime().UnixNano()
+		if mtime > maxMTime {
+			maxMTime = mtime
+		}
+	}
+	if !found {
+		return 0, nil
+	}
+	return maxMTime, nil
 }
 
 func (i *Index) TouchNoteETagByUID(ctx context.Context, uid string) (int64, error) {

@@ -2107,6 +2107,31 @@ func pageETag(scope string, rawURL string, etagTime int64, userKey string) strin
 	return fmt.Sprintf("\"%s-%d-%s-%s-%s\"", scope, etagTime, version, rawURL, userKey)
 }
 
+func (s *Server) listCacheIDTime() int64 {
+	mtime, err := s.idx.DBFileMTime()
+	if err != nil {
+		slog.Warn("list cache id time failed", "op", "db-file-mtime", "err", err)
+		return 0
+	}
+	if mtime < 0 {
+		return 0
+	}
+	return mtime
+}
+
+func (s *Server) applyListPageETag(w http.ResponseWriter, r *http.Request, scope string) bool {
+	etag := pageETag(scope, currentURLString(r), s.listCacheIDTime(), currentUserName(r.Context()))
+	if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
+		w.Header().Set("ETag", etag)
+		setPrivateCacheHeaders(w)
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	w.Header().Set("ETag", etag)
+	setPrivateCacheHeaders(w)
+	return false
+}
+
 func setPrivateCacheHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate, no-transform")
 	w.Header().Del("Pragma")
@@ -6297,16 +6322,8 @@ var reservedOwnerPaths = map[string]struct{}{
 }
 
 func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerName string, basePath string) {
-	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
-		etag := pageETag("home", currentURLString(r), maxTime, currentUserName(r.Context()))
-		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
-			w.Header().Set("ETag", etag)
-			setPrivateCacheHeaders(w)
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("ETag", etag)
-		setPrivateCacheHeaders(w)
+	if s.applyListPageETag(w, r, "home") {
+		return
 	}
 
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
@@ -8371,6 +8388,9 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	if s.applyListPageETag(w, r, "home-notes-page") {
+		return
+	}
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
@@ -8446,6 +8466,9 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if s.applyListPageETag(w, r, "home-notes-section") {
 		return
 	}
 	section := strings.TrimSpace(r.URL.Query().Get("name"))
@@ -8784,16 +8807,8 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
-	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
-		etag := pageETag("todo", currentURLString(r), maxTime, currentUserName(r.Context()))
-		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
-			w.Header().Set("ETag", etag)
-			setPrivateCacheHeaders(w)
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("ETag", etag)
-		setPrivateCacheHeaders(w)
+	if s.applyListPageETag(w, r, "todo") {
+		return
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -8923,6 +8938,9 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
+	if s.applyListPageETag(w, r, "todo-page") {
+		return
+	}
 	offset := 0
 	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
@@ -8989,16 +9007,8 @@ func (s *Server) handleCompleted(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAuth(w, r) {
 		return
 	}
-	if maxTime, err := s.idx.MaxEtagTime(r.Context()); err == nil {
-		etag := pageETag("completed", currentURLString(r), maxTime, currentUserName(r.Context()))
-		if strings.TrimSpace(r.Header.Get("If-None-Match")) == etag {
-			w.Header().Set("ETag", etag)
-			setPrivateCacheHeaders(w)
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("ETag", etag)
-		setPrivateCacheHeaders(w)
+	if s.applyListPageETag(w, r, "completed") {
+		return
 	}
 	activeTags := parseTagsParam(r.URL.Query().Get("t"))
 	activeFolder, activeRoot := parseFolderParam(r.URL.Query().Get("f"))
@@ -9148,6 +9158,9 @@ func (s *Server) handleCompletedPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if s.applyListPageETag(w, r, "completed-page") {
 		return
 	}
 	offset := 0
