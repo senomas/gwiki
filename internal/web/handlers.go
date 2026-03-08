@@ -6386,16 +6386,8 @@ func (s *Server) renderHomePage(w http.ResponseWriter, r *http.Request, ownerNam
 	tagQuery := buildTagsQuery(urlTags)
 	filterQuery := queryWithout(baseURL, "d")
 	calendar := buildCalendarMonth(calendarReferenceDate(r), updateDays, baseURL, activeDate)
-	priorityNotes, err := s.loadHomeSectionNotes(r.Context(), "priority", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
-	if err != nil {
-		s.internalServerError(w, r, err)
-		return
-	}
-	todayNotes, err := s.loadHomeSectionNotes(r.Context(), "today", noteTags, activeSearch, activeFolder, activeRoot, activeJournal, ownerName)
-	if err != nil {
-		s.internalServerError(w, r, err)
-		return
-	}
+	priorityNotes := []NoteCard(nil)
+	todayNotes := []NoteCard(nil)
 	plannedNotes := []NoteCard(nil)
 	weekNotes := []NoteCard(nil)
 	monthNotes := []NoteCard(nil)
@@ -8809,7 +8801,6 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 	activeDate := ""
 	baseURL := baseURLForLinks(r, "/")
 	activeTodo, activeDue, activeJournal, noteTags := splitSpecialTags(activeTags)
-	activeTagFilters, hashtagFilters := listTagFilterStateFromTags(activeTags)
 	dueDate := ""
 	if activeDue {
 		dueDate = time.Now().Format("2006-01-02")
@@ -8835,26 +8826,6 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 			s.internalServerError(w, r, hiddenErr)
 			return
 		}
-	}
-	todoNotes, skeletonNotes, nextOffset, hasMore, err := s.loadTodoNotesPage(
-		r,
-		r.Context(),
-		noteTags,
-		mentionTagsFilter,
-		currentUser,
-		activeTagFilters,
-		hashtagFilters,
-		activeDue,
-		dueDate,
-		activeFolder,
-		activeRoot,
-		activeJournal,
-		0,
-		todoNotesPageSize,
-	)
-	if err != nil {
-		s.internalServerError(w, r, err)
-		return
 	}
 	urlTags := append([]string{}, noteTags...)
 	urlTags = append(urlTags, mentionTagsActive...)
@@ -8910,33 +8881,29 @@ func (s *Server) handleTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := ViewData{
-		Title:             "Todo",
-		ContentTemplate:   "todo",
-		TodoNotes:         todoNotes,
-		TodoSkeletonNotes: skeletonNotes,
-		TodoHasMore:       hasMore,
-		TodoNextOffset:    nextOffset,
-		TodoOffset:        0,
-		Tags:              tags,
-		TagLinks:          tagLinks,
-		TodoCount:         todoCount,
-		DueCount:          dueCount,
-		ActiveTags:        urlTags,
-		TagQuery:          tagQuery,
-		FolderTree:        folderTree,
-		ActiveFolder:      activeFolder,
-		FolderQuery:       buildFolderQuery(activeFolder, activeRoot),
-		FilterQuery:       filterQuery,
-		HomeURL:           baseURL,
-		ActiveDate:        activeDate,
-		DateQuery:         buildDateQuery(activeDate),
-		SearchQuery:       activeSearch,
-		SearchQueryParam:  buildSearchQuery(activeSearch),
-		ReturnURL:         sanitizeReturnURL(r, r.URL.RequestURI()),
-		UpdateDays:        updateDays,
-		CalendarMonth:     calendar,
-		JournalSidebar:    journalSidebar,
-		RawQuery:          queryWithout(currentURLString(r), "offset"),
+		Title:            "Todo",
+		ContentTemplate:  "todo",
+		TodoOffset:       0,
+		Tags:             tags,
+		TagLinks:         tagLinks,
+		TodoCount:        todoCount,
+		DueCount:         dueCount,
+		ActiveTags:       urlTags,
+		TagQuery:         tagQuery,
+		FolderTree:       folderTree,
+		ActiveFolder:     activeFolder,
+		FolderQuery:      buildFolderQuery(activeFolder, activeRoot),
+		FilterQuery:      filterQuery,
+		HomeURL:          baseURL,
+		ActiveDate:       activeDate,
+		DateQuery:        buildDateQuery(activeDate),
+		SearchQuery:      activeSearch,
+		SearchQueryParam: buildSearchQuery(activeSearch),
+		ReturnURL:        sanitizeReturnURL(r, r.URL.RequestURI()),
+		UpdateDays:       updateDays,
+		CalendarMonth:    calendar,
+		JournalSidebar:   journalSidebar,
+		RawQuery:         queryWithout(currentURLString(r), "offset"),
 	}
 	if hiddenExclusive.Count > 0 && len(hiddenExclusive.Tags) > 0 {
 		data.HiddenExclusiveCount = hiddenExclusive.Count

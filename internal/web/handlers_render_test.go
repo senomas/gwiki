@@ -202,6 +202,24 @@ func TestTodoNextLoaderSkeletonShowsTitle(t *testing.T) {
 	}
 }
 
+func TestTodoInitialLoaderUsesTodoPage(t *testing.T) {
+	data := ViewData{
+		TagQuery:         "tag1",
+		FolderQuery:      "work",
+		SearchQueryParam: "focus",
+	}
+	out := renderTemplateForTest(t, "todo", data)
+	if !strings.Contains(out, `hx-get="/todo/page?offset=0`) {
+		t.Fatalf("expected todo initial loader to fetch todo page chunk, got %s", out)
+	}
+	if !strings.Contains(out, `hx-trigger="load"`) {
+		t.Fatalf("expected todo initial loader to use load trigger, got %s", out)
+	}
+	if !strings.Contains(out, "note-skeleton-line") {
+		t.Fatalf("expected todo initial loader skeleton lines, got %s", out)
+	}
+}
+
 func TestCompletedNextLoaderSkeletonShowsTitle(t *testing.T) {
 	data := ViewData{
 		CompletedNextOffset: 5,
@@ -236,6 +254,26 @@ func TestHomeSectionNextLoaderSkeletonShowsTitle(t *testing.T) {
 	out := renderTemplateForTest(t, "home_section_planned_chunk", data)
 	if !regexp.MustCompile(`>\s*20 Feb 2026 09:45\s*<`).MatchString(out) {
 		t.Fatalf("expected home section skeleton to render note title, got %s", out)
+	}
+}
+
+func TestHomeInitialLoaderUsesNotesPage(t *testing.T) {
+	data := ViewData{
+		TagQuery:         "tag1",
+		FolderQuery:      "work",
+		SearchQueryParam: "focus",
+		HomeOwner:        "seno",
+		JournalOnly:      true,
+	}
+	out := renderTemplateForTest(t, "home", data)
+	if !strings.Contains(out, `hx-get="/notes/page?offset=0`) {
+		t.Fatalf("expected home initial loader to fetch notes page chunk, got %s", out)
+	}
+	if !strings.Contains(out, `j=1`) {
+		t.Fatalf("expected home initial loader to preserve journal filter, got %s", out)
+	}
+	if !strings.Contains(out, "home-section-summary") {
+		t.Fatalf("expected home initial loader to render section skeletons, got %s", out)
 	}
 }
 

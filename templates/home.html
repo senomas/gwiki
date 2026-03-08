@@ -1,8 +1,25 @@
 {{define "home"}}
 <section class="space-y-6">
   {{template "hidden_exclusive_separator" .}}
-  <div id="notes-feed" class="space-y-4" data-note-list>{{template "home_notes" .}}</div>
+  <div id="notes-feed" class="space-y-4" data-note-list>
+    {{template "home_initial_loader" .}}
+  </div>
 </section>
+{{end}}
+
+{{define "home_initial_loader"}}
+<div
+  class="home-section-loader"
+  hx-get="/notes/page?offset=0{{if .TagQuery}}&t={{.TagQuery}}{{end}}{{if .FolderQuery}}&f={{.FolderQuery}}{{end}}{{if .SearchQueryParam}}&s={{.SearchQueryParam}}{{end}}{{if .HomeOwner}}&o={{.HomeOwner}}{{end}}{{if .JournalOnly}}&j=1{{end}}"
+  hx-trigger="load"
+  hx-swap="outerHTML"
+  aria-hidden="true"
+>
+  {{template "home_section_skeleton" (dict "Label" "Important")}}
+  {{template "home_section_skeleton" (dict "Label" "Today")}}
+  {{template "home_section_skeleton" (dict "Label" "Planned")}}
+  {{template "home_section_skeleton" (dict "Label" "Rest")}}
+</div>
 {{end}}
 
 {{define "hidden_exclusive_separator"}}

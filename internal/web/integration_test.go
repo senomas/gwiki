@@ -1173,7 +1173,7 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/todo?t=tag1")
+	resp, err := http.Get(ts.URL + "/todo/page?offset=0&t=tag1")
 	if err != nil {
 		t.Fatalf("get todo hashtag: %v", err)
 	}
@@ -1218,7 +1218,7 @@ func TestTodoTagFiltersUseHybridAndHideMentionOnly(t *testing.T) {
 		t.Fatalf("expected completed tagged tasks hidden in todo tag-filter context, got %s", html)
 	}
 
-	resp, err = http.Get(ts.URL + "/todo?t=%40dev")
+	resp, err = http.Get(ts.URL + "/todo/page?offset=0&t=%40dev")
 	if err != nil {
 		t.Fatalf("get todo mention-only: %v", err)
 	}
