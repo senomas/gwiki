@@ -100,7 +100,7 @@ docker-prune-old-gwiki-images:
 	@now=$$(date -u +%s); \
 	for image in $$(docker image ls "$(IMAGE)" --format '{{.Repository}}:{{.Tag}}' | sort -u); do \
 		case "$$image" in \
-			"$(IMAGE):latest"|*":<none>") continue ;; \
+			"$(IMAGE):latest"|"$(IMAGE):$(IMAGE_TAG)"|*":<none>") continue ;; \
 		esac; \
 		created=$$(docker image inspect -f '{{.Created}}' "$$image" 2>/dev/null || true); \
 		if [ -z "$$created" ]; then \
