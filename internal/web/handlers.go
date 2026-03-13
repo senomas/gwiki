@@ -13051,7 +13051,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 				})
 				targetURL := noteHref(notePath, currentUserName(r.Context()))
 				if isHTMX(r) {
-					w.Header().Set("HX-Redirect", targetURL)
 					w.Header().Set("X-Redirect-Location", targetURL)
 					w.WriteHeader(http.StatusOK)
 					return
@@ -13507,7 +13506,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 			})
 			targetURL := noteHref(notePath, currentUserName(r.Context()))
 			if isHTMX(r) {
-				w.Header().Set("HX-Redirect", targetURL)
 				w.Header().Set("X-Redirect-Location", targetURL)
 				w.WriteHeader(http.StatusOK)
 				return
@@ -13632,7 +13630,6 @@ func (s *Server) handleNewNote(w http.ResponseWriter, r *http.Request) {
 	})
 	targetURL := noteHref(notePath, currentUserName(r.Context()))
 	if isHTMX(r) {
-		w.Header().Set("HX-Redirect", targetURL)
 		w.Header().Set("X-Redirect-Location", targetURL)
 		w.WriteHeader(http.StatusOK)
 		return
@@ -16026,9 +16023,6 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 
 	if saveResult.NoChange {
 		targetURL := noteHref(saveResult.Path, currentUserName(r.Context()))
-		if returnURL != "" {
-			targetURL = returnURL
-		}
 		if isHTMX(r) {
 			slog.Debug("save note no change", "note_path", notePath, "target_url", targetURL)
 			s.addToast(r, Toast{
@@ -16068,9 +16062,6 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 		slog.Debug("save note redirect owner", "note_path", notePath, "target_owner", targetOwner, "target_path", targetPath)
 	}
 	targetURL := noteHref(targetPath, currentUserName(r.Context()))
-	if returnURL != "" && targetOwner == ownerName && !saveResult.Moved && targetPath == notePath {
-		targetURL = returnURL
-	}
 	if isHTMX(r) {
 		slog.Debug("save note redirect", "note_path", notePath, "target_url", targetURL)
 		w.Header().Set("X-Redirect-Location", targetURL)

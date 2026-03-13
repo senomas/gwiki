@@ -201,6 +201,65 @@ func TestNewNoteWithoutTitleUsesSplitJournalPathPattern(t *testing.T) {
 	}
 }
 
+func TestCreateNoteHTMXReturnsDetailRedirectWithoutHXRedirect(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	if err := os.MkdirAll(filepath.Join(repo, owner, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	form := url.Values{}
+	form.Set("content", "# My Note\n\nHello world")
+	form.Set("owner", owner)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/notes/new", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("HX-Current-Url", ts.URL+"/notes/new")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post new: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	wantRedirect := noteHref(owner+"/my-note.md", owner)
+	if got := strings.TrimSpace(resp.Header.Get("X-Redirect-Location")); got != wantRedirect {
+		t.Fatalf("expected X-Redirect-Location %q, got %q", wantRedirect, got)
+	}
+	if got := strings.TrimSpace(resp.Header.Get("HX-Redirect")); got != "" {
+		t.Fatalf("expected HX-Redirect to be empty, got %q", got)
+	}
+}
+
 func TestDailyShowsAllJournalNotesUpdatedOnSelectedDate(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"
@@ -1942,7 +2001,7 @@ Contains demo text in body.
 	}
 }
 
-func TestSaveNoteNoChangeHTMXReturnsRedirectLocation(t *testing.T) {
+func TestSaveNoteNoChangeHTMXReturnsDetailRedirectLocation(t *testing.T) {
 	repo := t.TempDir()
 	owner := "local"
 	notesDir := filepath.Join(repo, owner, "notes")
@@ -2038,8 +2097,85 @@ func TestSaveNoteNoChangeHTMXReturnsRedirectLocation(t *testing.T) {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected status 204, got %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
 	}
-	if got := strings.TrimSpace(resp.Header.Get("X-Redirect-Location")); got != "/@local" {
-		t.Fatalf("expected X-Redirect-Location /@local, got %q", got)
+	wantRedirect := noteHref(notePath, owner)
+	if got := strings.TrimSpace(resp.Header.Get("X-Redirect-Location")); got != wantRedirect {
+		t.Fatalf("expected X-Redirect-Location %q, got %q", wantRedirect, got)
+	}
+}
+
+func TestSaveNoteHTMXIgnoresReturnURLOnSuccess(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir .wiki: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	content := "# Bookmark\n\nOriginal body\n"
+	noteRel := "bookmark.md"
+	fullPath := filepath.Join(notesDir, noteRel)
+	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	notePath := filepath.ToSlash(filepath.Join(owner, noteRel))
+	if err := idx.IndexNote(ctx, notePath, []byte(content), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	cfg := config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	form := url.Values{}
+	form.Set("content", "# Bookmark\n\nUpdated body\n")
+	form.Set("owner", owner)
+	form.Set("visibility", "inherited")
+	form.Set("folder", "")
+	form.Set("priority", "10")
+	form.Set("return_url", "/@local")
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/notes/@"+notePath+"/save", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	req.Header.Set("HX-Current-Url", ts.URL+"/notes/@"+notePath+"/edit")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post save: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected status 204, got %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+	wantRedirect := noteHref(notePath, owner)
+	if got := strings.TrimSpace(resp.Header.Get("X-Redirect-Location")); got != wantRedirect {
+		t.Fatalf("expected X-Redirect-Location %q, got %q", wantRedirect, got)
 	}
 }
 
