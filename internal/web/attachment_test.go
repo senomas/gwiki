@@ -5,6 +5,9 @@ package web
 
 import (
 	"context"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -99,6 +102,108 @@ func TestAttachmentAccessByNoteID(t *testing.T) {
 	}
 	if string(body) != string(attachmentContent) {
 		t.Fatalf("unexpected attachment body: %q", body)
+	}
+}
+
+func TestAttachmentImageVariantRequestGeneratesCachedAsset(t *testing.T) {
+	repo := t.TempDir()
+	owner := "local"
+	notesDir := filepath.Join(repo, owner, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+
+	noteID := "image-note"
+	noteRel := "image.md"
+	notePath := filepath.Join(notesDir, noteRel)
+	noteContent := "---\n" +
+		"id: " + noteID + "\n" +
+		"title: Image Note\n" +
+		"visibility: public\n" +
+		"---\n\n" +
+		"![Photo](/attachments/" + noteID + "/photo.png)\n"
+	if err := os.WriteFile(notePath, []byte(noteContent), 0o644); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+
+	attachmentDir := filepath.Join(notesDir, "attachments", noteID)
+	if err := os.MkdirAll(attachmentDir, 0o755); err != nil {
+		t.Fatalf("mkdir attachment dir: %v", err)
+	}
+	attachmentPath := filepath.Join(attachmentDir, "photo.png")
+	img := image.NewRGBA(image.Rect(0, 0, 32, 24))
+	for y := 0; y < 24; y++ {
+		for x := 0; x < 32; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(20 + x), G: uint8(80 + y), B: 160, A: 255})
+		}
+	}
+	file, err := os.Create(attachmentPath)
+	if err != nil {
+		t.Fatalf("create attachment image: %v", err)
+	}
+	if err := png.Encode(file, img); err != nil {
+		_ = file.Close()
+		t.Fatalf("encode attachment image: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close attachment image: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+	info, err := os.Stat(notePath)
+	if err != nil {
+		t.Fatalf("stat note: %v", err)
+	}
+	if err := idx.IndexNote(ctx, filepath.ToSlash(filepath.Join(owner, noteRel)), []byte(noteContent), info.ModTime(), info.Size()); err != nil {
+		t.Fatalf("index note: %v", err)
+	}
+
+	srv, err := NewServer(config.Config{RepoPath: repo, DataPath: dataDir, ListenAddr: "127.0.0.1:0"}, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/attachments/" + noteID + "/photo.png?w=768")
+	if err != nil {
+		t.Fatalf("get attachment variant: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "image/") {
+		t.Fatalf("expected image content type, got %q", contentType)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read attachment variant: %v", err)
+	}
+	if len(body) == 0 {
+		t.Fatalf("expected non-empty image body")
+	}
+
+	variantPath := filepath.Join(dataDir, "assets", noteID, filepath.FromSlash(attachmentImageVariantAssetRelativePath("photo.png", attachmentImageMobileWidth)))
+	if info, err := os.Stat(variantPath); err != nil {
+		t.Fatalf("expected cached variant file, stat err: %v", err)
+	} else if info.Size() == 0 {
+		t.Fatalf("expected cached variant to be non-empty")
 	}
 }
 

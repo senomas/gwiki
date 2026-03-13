@@ -59,7 +59,7 @@
       </div>
     </details>
   {{end}}
-  <div class="note-body text-sm leading-relaxed text-slate-200" data-note-id="{{.NoteMeta.ID}}" data-note-path="{{.NotePath}}">
+  <div class="note-body note-body--detail text-sm leading-relaxed text-slate-200" data-note-id="{{.NoteMeta.ID}}" data-note-path="{{.NotePath}}">
     {{.RenderedHTML}}
   </div>
   {{if .ShowHiding}}
@@ -67,7 +67,7 @@
     <summary class="list-none cursor-pointer select-none text-xs uppercase tracking-[0.18em] text-slate-500">
       Hiding ({{.CompletedTaskCount}} completed task{{if ne .CompletedTaskCount 1}}s{{end}})
     </summary>
-    <div class="note-body mt-3 text-sm leading-relaxed text-slate-300">
+    <div class="note-body note-body--detail mt-3 text-sm leading-relaxed text-slate-300">
       {{range .HiddenBlocks}}{{.RenderedHTML}}{{end}}
     </div>
   </details>

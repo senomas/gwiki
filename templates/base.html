@@ -635,6 +635,57 @@
       text-decoration: underline;
       text-underline-offset: 3px;
     }
+    .note-body .note-attachment-image {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+      vertical-align: top;
+      overflow: hidden;
+      border-radius: 0.9rem;
+    }
+    .note-body .note-attachment-image__img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+    .note-body .note-attachment-image__open {
+      position: absolute;
+      top: 0.7rem;
+      right: 0.7rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.1rem;
+      height: 2.1rem;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      background: rgba(2, 6, 23, 0.78);
+      color: #e2e8f0;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 16px 30px -20px rgba(15, 23, 42, 0.95);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-2px);
+      transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+    }
+    .note-body--detail .note-attachment-image:hover .note-attachment-image__open,
+    .note-body--detail .note-attachment-image:focus-within .note-attachment-image__open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    .note-body--detail .note-attachment-image__open:hover,
+    .note-body--detail .note-attachment-image__open:focus-visible {
+      background: rgba(14, 165, 233, 0.18);
+      color: #f8fafc;
+    }
+    @media (hover: none) {
+      .note-body--detail .note-attachment-image__open {
+        opacity: 1;
+        pointer-events: auto;
+        transform: none;
+      }
+    }
     .note-body .due-badge {
       display: inline-flex;
       align-items: center;

@@ -159,23 +159,48 @@ func (r *attachmentImageHTMLRenderer) renderImage(
 	if alt == "" {
 		alt = "attachment"
 	}
+	originalDest := attachmentImageOriginalURL(dest)
+	renderDest := originalDest
+	srcSet := ""
+	if _, relPath, ok := attachmentFileFromURL(dest); ok && isResizableAttachmentImage(relPath) {
+		mobileDest := attachmentImageVariantURL(dest, attachmentImageMobileWidth)
+		desktopDest := attachmentImageVariantURL(dest, attachmentImageDesktopWidth)
+		if mobileDest != "" && desktopDest != "" {
+			renderDest = desktopDest
+			srcSet = mobileDest + " " + strconv.Itoa(attachmentImageMobileWidth) + "w, " + desktopDest + " " + strconv.Itoa(attachmentImageDesktopWidth) + "w"
+		}
+	}
 	for child := img.FirstChild(); child != nil; {
 		next := child.NextSibling()
 		img.RemoveChild(img, child)
 		child = next
 	}
-	escapedDest := html.EscapeString(dest)
+	escapedDest := html.EscapeString(renderDest)
+	escapedOriginal := html.EscapeString(originalDest)
+	escapedSrcSet := html.EscapeString(srcSet)
 	escapedAlt := html.EscapeString(alt)
 	escapedTitle := html.EscapeString(title)
-	_, _ = w.WriteString(`<img src="`)
+	_, _ = w.WriteString(`<span class="note-attachment-image">`)
+	_, _ = w.WriteString(`<img class="note-attachment-image__img" src="`)
 	_, _ = w.WriteString(escapedDest)
+	if escapedSrcSet != "" {
+		_, _ = w.WriteString(`" srcset="`)
+		_, _ = w.WriteString(escapedSrcSet)
+		_, _ = w.WriteString(`" sizes="(max-width: 768px) 100vw, 1600px`)
+	}
 	_, _ = w.WriteString(`" alt="`)
 	_, _ = w.WriteString(escapedAlt)
 	if escapedTitle != "" {
 		_, _ = w.WriteString(`" title="`)
 		_, _ = w.WriteString(escapedTitle)
 	}
-	_, _ = w.WriteString(`">`)
+	_, _ = w.WriteString(`" loading="lazy" decoding="async">`)
+	_, _ = w.WriteString(`<a class="note-attachment-image__open" href="`)
+	_, _ = w.WriteString(escapedOriginal)
+	_, _ = w.WriteString(`" target="_blank" rel="noopener noreferrer" aria-label="Open full size image">`)
+	_, _ = w.WriteString(`<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">`)
+	_, _ = w.WriteString(`<path d="M14 5h5v5"></path><path d="M10 14 19 5"></path><path d="M19 14v5h-5"></path><path d="M5 10 14 19"></path><path d="M10 5H5v5"></path><path d="M5 19h5"></path>`)
+	_, _ = w.WriteString(`</svg></a></span>`)
 	return ast.WalkContinue, nil
 }
 
@@ -5260,32 +5285,8 @@ func formatIntlNumber(country string, local string) string {
 }
 
 func attachmentVideoFromURL(raw string) (string, string, bool) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "", "", false
-	}
-	pathValue := parsed.Path
-	if pathValue == "" {
-		return "", "", false
-	}
-	clean := path.Clean(pathValue)
-	clean = strings.TrimPrefix(clean, "./")
-	clean = strings.TrimPrefix(clean, "../")
-	if !strings.HasPrefix(clean, "/attachments/") && !strings.HasPrefix(clean, "attachments/") {
-		return "", "", false
-	}
-	rel := strings.TrimPrefix(clean, "/attachments/")
-	rel = strings.TrimPrefix(rel, "attachments/")
-	parts := strings.Split(rel, "/")
-	if len(parts) < 2 {
-		return "", "", false
-	}
-	noteID := strings.TrimSpace(parts[0])
-	if noteID == "" {
-		return "", "", false
-	}
-	relPath := path.Clean(strings.Join(parts[1:], "/"))
-	if relPath == "." || strings.HasPrefix(relPath, "..") || strings.Contains(relPath, "\\") {
+	noteID, relPath, ok := attachmentFileFromURL(raw)
+	if !ok {
 		return "", "", false
 	}
 	if !isVideoExtension(relPath) {
@@ -15534,6 +15535,16 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	parts := strings.Split(clean, string(filepath.Separator))
+	if len(parts) < 2 {
+		http.NotFound(w, r)
+		return
+	}
+	relPath := filepath.ToSlash(filepath.Join(parts[1:]...))
+	if relPath == "." || strings.HasPrefix(relPath, "..") || strings.Contains(relPath, "\\") {
+		http.NotFound(w, r)
+		return
+	}
 	var ownerName string
 	if isTempNoteID(noteID) {
 		if !IsAuthenticated(r.Context()) {
@@ -15576,6 +15587,12 @@ func (s *Server) handleAttachmentFile(w http.ResponseWriter, r *http.Request) {
 	if info.IsDir() {
 		http.NotFound(w, r)
 		return
+	}
+	if width, ok := requestedAttachmentImageWidth(r.URL.Query().Get("w")); ok {
+		if variantPath, ok := s.ensureAttachmentImageVariant(ownerName, noteID, relPath, width); ok {
+			http.ServeFile(w, r, variantPath)
+			return
+		}
 	}
 	http.ServeFile(w, r, fullPath)
 }
