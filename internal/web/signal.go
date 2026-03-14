@@ -589,10 +589,11 @@ func (p *signalPoller) appendMessage(ctx context.Context, notePath string, msg s
 
 	noteCtx := WithUser(ctx, User{Name: p.cfg.SignalOwner, Authenticated: true})
 	_, apiErr := p.server.saveNoteCommon(noteCtx, saveNoteInput{
-		NotePath:    notePath,
-		TargetOwner: p.cfg.SignalOwner,
-		Content:     body,
-		Frontmatter: frontmatter,
+		NotePath:       notePath,
+		TargetOwner:    p.cfg.SignalOwner,
+		Content:        body,
+		Frontmatter:    frontmatter,
+		IgnoreGitError: true,
 	})
 	if apiErr != nil {
 		return fmt.Errorf("%s", apiErr.message)

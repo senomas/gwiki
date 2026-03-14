@@ -515,3 +515,143 @@ func TestEnsureSignalAttachmentSchedulesRetryOnFetchError(t *testing.T) {
 		t.Fatalf("retry attachment id=%q want=%q", due[0].AttachmentID, "att-2")
 	}
 }
+
+func TestSaveNoteCommonFailsOnBackupGitError(t *testing.T) {
+	requireGit(t)
+
+	owner := "seno"
+	_, ownerRepo, notesDir, idx, srv := setupSignalGitLockedSaveTest(t, owner)
+	defer idx.Close()
+
+	lockPath := filepath.Join(ownerRepo, ".git", "index.lock")
+	if err := os.WriteFile(lockPath, []byte("locked"), 0o644); err != nil {
+		t.Fatalf("write git index lock: %v", err)
+	}
+
+	notePath := filepath.ToSlash(filepath.Join(owner, "new.md"))
+	noteCtx := WithUser(context.Background(), User{Name: owner, Authenticated: true})
+	_, apiErr := srv.saveNoteCommon(noteCtx, saveNoteInput{
+		NotePath:    notePath,
+		TargetOwner: owner,
+		Content:     "# New\n\nbody from test\n",
+	})
+	if apiErr == nil {
+		t.Fatalf("expected saveNoteCommon to fail on git backup error")
+	}
+	if !strings.Contains(apiErr.message, "index.lock") {
+		t.Fatalf("expected git backup failure mentioning index.lock, got %q", apiErr.message)
+	}
+
+	fullPath := filepath.Join(notesDir, "new.md")
+	if _, err := os.Stat(fullPath); !os.IsNotExist(err) {
+		t.Fatalf("expected note file to remain absent, stat err=%v", err)
+	}
+
+	exists, err := idx.NoteExists(context.Background(), notePath)
+	if err != nil {
+		t.Fatalf("note exists: %v", err)
+	}
+	if exists {
+		t.Fatalf("expected note to remain absent in index")
+	}
+
+}
+
+func TestSignalAppendMessageIgnoresBackupGitError(t *testing.T) {
+	requireGit(t)
+
+	owner := "seno"
+	repo, ownerRepo, notesDir, idx, srv := setupSignalGitLockedSaveTest(t, owner)
+	defer idx.Close()
+
+	lockPath := filepath.Join(ownerRepo, ".git", "index.lock")
+	if err := os.WriteFile(lockPath, []byte("locked"), 0o644); err != nil {
+		t.Fatalf("write git index lock: %v", err)
+	}
+
+	cfg := config.Config{
+		RepoPath:    repo,
+		DataPath:    filepath.Join(repo, ".wiki"),
+		SignalOwner: owner,
+	}
+	poller := signalPoller{
+		cfg:    cfg,
+		server: srv,
+	}
+
+	msgTime := time.Date(2026, time.March, 14, 8, 44, 40, 0, time.Local)
+	notePath := filepath.ToSlash(filepath.Join(owner, "2026-03", "14-08-44.md"))
+	msg := signalMessage{
+		Text:     "signal body",
+		TSMillis: msgTime.UnixMilli(),
+	}
+	if err := poller.appendMessage(context.Background(), notePath, msg); err != nil {
+		t.Fatalf("append message: %v", err)
+	}
+
+	fullPath := filepath.Join(notesDir, "2026-03", "14-08-44.md")
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Fatalf("read saved note: %v", err)
+	}
+	if !strings.Contains(string(content), "- [ ] signal body #inbox #signal") {
+		t.Fatalf("expected saved signal task, got %q", string(content))
+	}
+
+	exists, err := idx.NoteExists(context.Background(), notePath)
+	if err != nil {
+		t.Fatalf("note exists: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected saved note to be indexed")
+	}
+}
+
+func setupSignalGitLockedSaveTest(t *testing.T, owner string) (string, string, string, *index.Index, *Server) {
+	t.Helper()
+
+	repo := t.TempDir()
+	ownerRepo := filepath.Join(repo, owner)
+	notesDir := filepath.Join(ownerRepo, "notes")
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+
+	seedPath := filepath.Join(notesDir, "seed.md")
+	if err := os.WriteFile(seedPath, []byte("# Seed\n"), 0o644); err != nil {
+		t.Fatalf("write seed note: %v", err)
+	}
+	runGit(t, ownerRepo, "init")
+	runGit(t, ownerRepo, "config", "user.name", owner)
+	runGit(t, ownerRepo, "config", "user.email", owner+"@example.com")
+	runGit(t, ownerRepo, "add", ".")
+	runGit(t, ownerRepo, "commit", "-m", "initial")
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	if err := idx.Init(context.Background(), repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	dirtyPath := filepath.Join(notesDir, "dirty.md")
+	if err := os.WriteFile(dirtyPath, []byte("# Dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty note: %v", err)
+	}
+
+	cfg := config.Config{
+		RepoPath:    repo,
+		DataPath:    dataDir,
+		SignalOwner: owner,
+	}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	return repo, ownerRepo, notesDir, idx, srv
+}

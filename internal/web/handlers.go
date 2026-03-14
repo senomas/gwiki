@@ -16099,6 +16099,7 @@ type saveNoteInput struct {
 	Folder         string
 	Priority       int
 	RenameDecision string
+	IgnoreGitError bool
 }
 
 type saveNoteResult struct {
@@ -16399,7 +16400,11 @@ func (s *Server) saveNoteCommon(ctx context.Context, input saveNoteInput) (saveN
 		commitPaths = append(commitPaths, s.noteAttachmentsDir(ownerName, metaAttrs.ID))
 	}
 	if err := commitRepoIfDirty(ctx, s.ownerRepoPath(ownerName), "auto: backup before edit", commitPaths...); err != nil {
-		return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		if input.IgnoreGitError {
+			slog.Warn("save note backup skipped", "note_path", notePath, "owner", ownerName, "target_path", targetPath, "err", err)
+		} else {
+			return saveNoteResult{}, &apiError{status: http.StatusInternalServerError, message: err.Error()}
+		}
 	}
 	if err := fs.WriteFileAtomic(targetFullPath, []byte(mergedContent), 0o644); err != nil {
 		slog.Error("save note write failed", "path", targetFullPath, "err", err)
