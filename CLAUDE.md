@@ -1,6 +1,6 @@
-# AGENT.md — Personal Wiki (Go + HTMX + Markdown + Git)
+# CLAUDE.md — Personal Wiki (Go + HTMX + Markdown + Git)
 
-You are Codex working inside this repository. Implement a personal wiki app in **Golang** with **HTMX** UI. The **filesystem Markdown files are the source of truth**. A **DB (SQLite first, Postgres optional)** is used only for indexing/caching (tags, links, tasks, search, render cache). **Git sync/commit is delayed** and used only for backup/history.
+You are Claude Code working inside this repository. Implement a personal wiki app in **Golang** with **HTMX** UI. The **filesystem Markdown files are the source of truth**. A **DB (SQLite first, Postgres optional)** is used only for indexing/caching (tags, links, tasks, search, render cache). **Git sync/commit is delayed** and used only for backup/history.
 
 Use `docs/developer.md` for the Go code overview (files + functions).
 
