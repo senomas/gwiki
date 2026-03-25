@@ -117,7 +117,7 @@ docker-prune-old-gwiki-images:
 		fi; \
 	done
 
-build-img:
+build-img: android-apk
 	@echo "Building image $(IMAGE):$(IMAGE_TAG)"
 	docker build --build-arg BUILD_TAG=$(BUILD_TAG) --build-arg BUILD_VERSION=$(BUILD_VERSION) --build-arg HTMX_VERSION=$(HTMX_VERSION) --build-arg NODE_VERSION=$(NODE_VERSION) --build-arg TAILWIND_VERSION=$(TAILWIND_VERSION) --build-arg GO_VERSION=$(GO_VERSION) --build-arg ALPINE_VERSION=$(ALPINE_VERSION) -t $(IMAGE):$(IMAGE_TAG) .
 	docker tag $(IMAGE):$(IMAGE_TAG) $(IMAGE):latest
@@ -224,10 +224,12 @@ android-build-image:
 	docker build -t gwiki-android-build -f Dockerfile.android .
 
 android-apk: android-build-image
+	mkdir -p static/downloads
 	docker run --rm \
 		-v $(PWD)/android:/work \
 		-v gwiki-gradle-cache:/root/.gradle \
 		-w /work \
 		gwiki-android-build \
 		gradle assembleDebug
-	@echo "APK: android/app/build/outputs/apk/debug/app-debug.apk"
+	cp android/app/build/outputs/apk/debug/app-debug.apk static/downloads/app-debug.apk
+	@echo "APK: static/downloads/app-debug.apk"

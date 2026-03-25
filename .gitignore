@@ -14,3 +14,4 @@ truenas.sh
 .gocache/
 docs/superpowers/
 tests/e2e/screenshots/
+static/downloads/
