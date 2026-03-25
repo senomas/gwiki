@@ -812,6 +812,15 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+func (s *Server) requireAuthPartial(w http.ResponseWriter, r *http.Request) bool {
+	if s.auth == nil || IsAuthenticated(r.Context()) {
+		return true
+	}
+	w.Header().Set("HX-Redirect", "/login")
+	w.WriteHeader(http.StatusNoContent)
+	return false
+}
+
 func normalizeLineEndings(input string) string {
 	normalized := strings.ReplaceAll(input, "\r\n", "\n")
 	return strings.ReplaceAll(normalized, "\r", "\n")
@@ -3961,7 +3970,7 @@ func (s *Server) handleTagSuggest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -4000,7 +4009,7 @@ func (s *Server) handleUserSuggest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -4040,7 +4049,7 @@ func (s *Server) handleQuickNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -5183,7 +5192,7 @@ func (s *Server) handleJournalMonth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	if s.applyListPageETag(w, r, "home-notes-page") {
@@ -5263,7 +5272,7 @@ func (s *Server) handleHomeNotesPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHomeNotesSection(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	if s.applyListPageETag(w, r, "home-notes-section") {
@@ -5733,7 +5742,7 @@ func (s *Server) handleTodoPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	if s.applyListPageETag(w, r, "todo-page") {
@@ -5955,7 +5964,7 @@ func (s *Server) handleCompletedPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	if s.applyListPageETag(w, r, "completed-page") {
@@ -7196,7 +7205,7 @@ func (s *Server) handleArchivedSection(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	section := strings.TrimSpace(r.URL.Query().Get("name"))
@@ -8732,7 +8741,7 @@ func (s *Server) handleConvertInboxTask(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -8820,7 +8829,7 @@ func (s *Server) handleToggleTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.requireAuth(w, r) {
+	if !s.requireAuthPartial(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
