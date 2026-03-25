@@ -48,7 +48,7 @@ Non-goals (v1)
    - After finishing work and committing, check `git status -sb` to confirm a clean tree.
    - Always propose a commit message when the user asks to commit; derive it from the current git diff.
 8. **Response structure**
-   - Always provide a deep-dive analysis, an implementation plan, and test cases for the requested change.
+   - For non-trivial changes, briefly explain the approach before making edits. For small/obvious changes, just do it.
 9. **Dev server rebuild trigger**
    - `make dev` runs the `gwiki` compose service using the configured image.
    - `make dev-build` is deprecated/removed.
@@ -144,19 +144,50 @@ HTMX patterns
 
 ---
 
-## HTTP endpoints (minimal)
+## HTTP endpoints
 
-- `GET  /` home
-- `GET  /notes/{path}` view
-- `GET  /notes/{path}/edit` edit
+Core note routes:
+- `GET  /` home (note feed with sections)
+- `GET  /notes/{path}` view note
+- `GET  /notes/{path}/edit` edit note
 - `POST /notes/{path}/save` save markdown (atomic)
 - `POST /notes/{path}/preview` render markdown preview fragment
-- `POST /notes/new` create note (title -> path)
-- `GET  /search?q=...` search results fragment
-- `GET  /tags/{tag}` tagged list fragment
-- (optional) `POST /sync/commit` commit now
-- (optional) `POST /sync/push` push now
-- (optional) `GET  /status` returns a small status fragment (dirty, last commit)
+- `POST /notes/new` create note (title → slug → redirect)
+- `GET  /notes/page` HTMX paginated note feed fragment
+- `GET  /search?q=...` full-text search results
+
+Task / todo:
+- `GET  /todo` todo page
+- `GET  /todo/page` paginated todo fragment
+- `GET  /tasks` tasks list
+- `POST /tasks/toggle` check/uncheck task
+- `POST /tasks/archive` archive task
+
+Journal / daily:
+- `GET  /daily` daily index
+- `GET  /daily/{date}` daily note for date
+- `GET  /journal/year/{year}` journal year view
+- `GET  /journal/month/{year}/{month}` journal month view
+
+Quick launcher / HTMX fragments:
+- `GET  /quick/launcher?q=...&uri=...` unified launcher search fragment
+- `GET  /quick/edit-actions?q=...` edit textarea launcher fragment
+- `GET  /quick/notes` note search fragment
+- `GET  /sidebar` sidebar fragment
+- `GET  /calendar` calendar fragment
+
+Sync / settings:
+- `GET  /sync` sync status page
+- `POST /sync/run` trigger sync now
+- `GET  /settings` settings page
+- `POST /settings/save` save settings
+
+API:
+- `POST /api/notes` create/update note (JSON body, `X-API-Key` auth)
+
+Auth:
+- `GET/POST /login`
+- `POST /logout`
 
 Path safety rules
 
@@ -184,19 +215,27 @@ In the edit textarea, typing a command and then a space will replace it on the c
 
 SQLite first. Postgres optional later behind an interface.
 
-Current schema (SQLite)
+Current schema (SQLite) — see `internal/index/schema.go` for canonical DDL
 
+Core tables:
 - `schema_version(version)`
+- `users(id, username UNIQUE)`
 - `files(id, path UNIQUE, title, uid, hash, mtime_unix, size, created_at, updated_at, priority DEFAULT 10)`
 - `file_histories(id, file_id, user, action, action_time, action_date)`
-- `tags(id, name UNIQUE)`
-- `file_tags(file_id, tag_id, PRIMARY KEY(file_id, tag_id))`
-- `links(id, from_file_id, to_ref, to_file_id NULL, kind, line_no, line)` where kind in ('wikilink','mdlink')
-- `tasks(id, file_id, line_no, text, checked, due_date NULL, updated_at)`
-- `embed_cache(url, kind, embed_url, status, error_msg, updated_at, expires_at, PRIMARY KEY(url, kind))`
-- Search (FTS5):
-  - `fts(path UNINDEXED, title, body)`
-  - Keep `fts` synced on file changes.
+- `tags(id, name UNIQUE)` / `file_tags(file_id, tag_id)`
+- `links(id, from_file_id, to_ref, to_file_id NULL, kind, line_no, line)` — kind: 'wikilink'|'mdlink'
+- `tasks(id, file_id, line_no, text, checked, due_date NULL, updated_at)` / `task_tags`
+- `note_blocks(id, file_id, block_index, kind, content, ...)` / `note_block_tags`
+- `embed_cache(url, kind, embed_url, status, error_msg, updated_at, expires_at)`
+- `broken_links`, `attachment_dates`, `git_sync_state`, `collapsed_sections`, `file_cleanup`
+
+Access tables (precomputed for fast read filters):
+- `path_access_files(id, owner_user_id, path, depth, visibility)` — one row per `.access.txt`
+- `path_access(id, owner_user_id, access_file_id, grantee_user_id, access)` — per-user grants from `.access.txt`
+- `file_access(id, file_id, grantee_user_id, access, source)` — precomputed per-file access, rebuilt on indexing
+
+Search (FTS5):
+- `fts(path UNINDEXED, title, body)` — keep synced on file changes.
 
 Rebuild
 
@@ -334,16 +373,6 @@ Guidelines
 - Prefer Go stdlib where possible; keep third-party deps minimal and justified (e.g., markdown rendering).
 
 ---
-
-## Deliverables for the first implementation
-
-1. Working HTMX pages: home/search, view, edit, new.
-2. Save endpoint with atomic writes.
-3. SQLite index with FTS search.
-4. Delayed git commit (debounce) after saves.
-5. `.gitignore` excludes `.wiki/` and drafts/cache (or your `WIKI_DATA_PATH` location).
-6. A simple config file/env vars:
-   - repo path, listen addr, auth creds, git debounce durations.
 
 When in doubt: prefer the simplest approach that preserves the principles:
 **Markdown in FS is truth; DB is cache; Git is delayed backup.**

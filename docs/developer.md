@@ -5,33 +5,26 @@ This document is a compact map of Go files and their functions. It is intended f
 ## `cmd/user/main.go`
 CLI to list/add/remove users in the auth file.
 
-- `main`: helper for main
-- `usage`: helper for usage
-- `listUsers`: helper for list users
-- `addUser`: helper for add user
-- `removeUser`: helper for remove user
-- `authFilePath`: helper for auth file path
-- `promptPassword`: helper for prompt password
-- `promptYesNo`: helper for prompt yes no
-- `userExists`: helper for user exists
-- `readAuthFile`: helper for read auth file
-- `writeAuthFile`: helper for write auth file
-- `upsertAuthFile`: helper for upsert auth file
+- `main`, `usage`: entrypoint and usage text
+- `listUsers`, `addUser`, `removeUser`: subcommand handlers
+- `authFilePath`: resolves auth file path from env
+- `promptPassword`, `promptYesNo`: interactive prompts
+- `userExists`, `readAuthFile`, `writeAuthFile`, `upsertAuthFile`: auth file I/O
 
 ## `cmd/wiki/main.go`
 Main entrypoint for the gwiki web server CLI.
 
-- `main`: helper for main
-- `parseLogLevel`: parses log level
-- `selectLogWriter`: helper for select log writer
+- `main`: loads config, wires index + server, starts listener
+- `parseLogLevel`: maps env string to `slog.Level`
+- `selectLogWriter`: picks log output (file or stderr)
 
 ## `internal/auth/auth.go`
 Authentication helpers and password verification.
 
-- `HashPassword`: helper for hash password
-- `ParseArgon2idHash`: parses argon2id hash
-- `Verify`: helper for verify
-- `LoadFile`: loads file
+- `HashPassword`: hashes a plaintext password with Argon2id
+- `ParseArgon2idHash`: parses an `$argon2id$...` hash string into params
+- `Verify`: verifies a plaintext password against a stored hash
+- `LoadFile`: loads and parses the auth file into a user map
 
 ## API keys and notes endpoint
 
@@ -89,6 +82,11 @@ User access is discovered by scanning `.access.txt` files under `WIKI_REPO_PATH/
 - `protected` means all authenticated users can read; write still requires owner/rw grant.
 
 Access rules are stored in `path_access`/`path_access_files`, and `file_access` is precomputed during indexing for fast read filters (no path LIKE). Writes check the effective path rule for the specific note path.
+
+DB tables (defined in `internal/index/schema.go`):
+- `path_access_files(id, owner_user_id, path, depth, visibility)` — one row per `.access.txt` file
+- `path_access(id, owner_user_id, access_file_id, grantee_user_id, access)` — per-user grants
+- `file_access(id, file_id, grantee_user_id, access, source)` — precomputed per-file effective access
 
 ## Quick launcher pipeline
 
@@ -438,7 +436,9 @@ Embed rendering tests.
 - `TestRenderMarkdownCollapsedSections`: test case for render markdown collapsed sections
 
 ## `internal/web/handlers.go`
-HTTP handlers, markdown rendering, embeds, and UI helpers.
+HTTP handlers, markdown rendering, embeds, and UI helpers. This is the largest file — it contains HTTP handlers, goldmark AST node types for custom renderers (collapsible sections, embeds), and embed resolution logic.
+
+Note: the function list below includes several repeated `Kind`, `Dump`, `Extend`, `Transform` entries — these are methods on different unexported goldmark AST node and renderer types (one per embed kind: YouTube, TikTok, Instagram, Maps, video, collapsible sections). They are not duplicates of a single function.
 
 - `quickLauncherEntries`: builds quick launcher results
 - `handleQuickLauncher`: HTMX endpoint for quick launcher search

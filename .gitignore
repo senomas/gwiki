@@ -13,3 +13,4 @@ static/fonts/ttf/
 truenas.sh
 *.log
 .gocache/
+docs/superpowers/

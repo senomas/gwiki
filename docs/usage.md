@@ -36,6 +36,7 @@ Defaults (trigger `!`):
 - `!d-N` → today minus N days (e.g., `!d-2`)
 - `!dN` → today plus N days (alias of `!d+N`)
 - `!t` → current time (`HH:mm:ss`)
+- `!@` → open quick launcher to search and insert a wiki link (`[[note-path]]`)
 
 ## Access Sharing
 
@@ -136,9 +137,27 @@ Due tokens render as badges. If a task is done, any due token on that line is hi
 ```
 https://example.com
 [label](https://example.com)
+[[Note Title]]
+[[file-id]]
 ```
 
-Inline URLs and standard markdown links both work.
+Inline URLs, standard markdown links, and wiki links all work. Wiki links (`[[...]]`) resolve by note title, slug, or UID. Use `!@` in the edit textarea to search and insert a wiki link.
+
+### Frontmatter
+
+Notes can have an optional YAML block at the top:
+
+```
+---
+id: 550e8400-e29b-41d4-a716-446655440000
+title: My Note
+tags: [work, project]
+created: 2026-01-01T09:00:00
+updated: 2026-03-25T12:00:00
+---
+```
+
+gwiki adds and maintains `id`, `created`, and `updated` automatically. You can set `title` and `tags` manually or via the UI.
 
 ## Embeds
 

@@ -63,6 +63,7 @@ Optional Compose envs:
 - `LOG_PATH_HOST` (default: `./log`, mounted to `/app/log` for `dev.log`)
 - `GWIKI_IMAGE` in `.env.local` (default fallback: `gwiki:latest`)
 - `DOCKER_REGISTRY` in `.env.local` for `make build` target (unset = Docker Hub)
+
 `docker-compose.yml` includes `docker-compose.app.yml` with `env_file` entries
 for both `.env` and `.env.local`, so plain `docker compose up` uses both.
 
