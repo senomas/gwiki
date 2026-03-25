@@ -63,10 +63,6 @@ func TestIndexAndTodoRequireAuth(t *testing.T) {
 		"/todo",
 		"/completed",
 		"/archived",
-		"/notes/page",
-		"/notes/section?name=planned",
-		"/todo/page",
-		"/completed/page",
 	}
 	for _, p := range paths {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
@@ -78,6 +74,93 @@ func TestIndexAndTodoRequireAuth(t *testing.T) {
 		body := strings.ToLower(rec.Body.String())
 		if !strings.Contains(body, "login") {
 			t.Fatalf("%s: expected login prompt body, got %q", p, rec.Body.String())
+		}
+	}
+}
+
+func TestHTMXPartialRequireAuth(t *testing.T) {
+	repo := t.TempDir()
+	dataDir := filepath.Join(repo, ".wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "local", "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+
+	hash, err := auth.HashPassword("secret")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	authFile := filepath.Join(dataDir, "auth.txt")
+	if err := os.WriteFile(authFile, []byte("dev:"+hash+":2099-01-01\n"), 0o600); err != nil {
+		t.Fatalf("write auth file: %v", err)
+	}
+
+	idx, err := index.Open(filepath.Join(dataDir, "index.sqlite"))
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer idx.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.Init(ctx, repo); err != nil {
+		t.Fatalf("init index: %v", err)
+	}
+
+	cfg := config.Config{
+		RepoPath:   repo,
+		DataPath:   dataDir,
+		ListenAddr: "127.0.0.1:0",
+		AuthFile:   authFile,
+	}
+	srv, err := NewServer(cfg, idx)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	partialPaths := []string{
+		"/notes/page",
+		"/notes/section?name=planned",
+		"/todo/page",
+		"/completed/page",
+		"/quick/notes",
+		"/tags/suggest",
+		"/users/suggest",
+		"/archived/section",
+	}
+	for _, p := range partialPaths {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("%s: expected status %d, got %d", p, http.StatusNoContent, rec.Code)
+		}
+		if rec.Header().Get("HX-Redirect") != "/login" {
+			t.Fatalf("%s: expected HX-Redirect: /login, got %q", p, rec.Header().Get("HX-Redirect"))
+		}
+		if rec.Body.Len() > 0 {
+			t.Fatalf("%s: expected empty body, got %q", p, rec.Body.String())
+		}
+	}
+
+	postPartialPaths := []string{
+		"/tasks/convert-inbox",
+		"/tasks/toggle",
+	}
+	for _, p := range postPartialPaths {
+		req := httptest.NewRequest(http.MethodPost, p, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("%s: expected status %d, got %d", p, http.StatusNoContent, rec.Code)
+		}
+		if rec.Header().Get("HX-Redirect") != "/login" {
+			t.Fatalf("%s: expected HX-Redirect: /login, got %q", p, rec.Header().Get("HX-Redirect"))
+		}
+		if rec.Body.Len() > 0 {
+			t.Fatalf("%s: expected empty body, got %q", p, rec.Body.String())
 		}
 	}
 }
