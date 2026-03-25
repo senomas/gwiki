@@ -285,6 +285,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/quick/notes", s.handleQuickNotes)
 	s.mux.HandleFunc("/quick/launcher", s.handleQuickLauncher)
 	s.mux.HandleFunc("/quick/edit-actions", s.handleQuickEditActions)
+	s.mux.HandleFunc("/api/notes/", s.handleAPIGetNote)
 	s.mux.HandleFunc("/api/notes", s.handleAPINotes)
 	s.mux.HandleFunc("/sync", s.handleSync)
 	s.mux.HandleFunc("/tasks/toggle", s.handleToggleTask)

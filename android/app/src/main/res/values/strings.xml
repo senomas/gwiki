@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">gwiki</string>
+    <string name="settings_title">Settings</string>
+    <string name="server_url_label">Server URL</string>
+    <string name="server_url_hint">http://192.168.1.x:8080</string>
+    <string name="username_label">Username</string>
+    <string name="password_label">Password</string>
+    <string name="api_key_label">API Key</string>
+    <string name="cache_size_label">Cache size (MB)</string>
+    <string name="save_settings">Save Settings</string>
+    <string name="offline_banner">Offline — cached version</string>
+    <string name="editor_title">Edit Note</string>
+    <string name="save_note">Save</string>
+    <string name="discard_changes">Discard</string>
+</resources>

@@ -12877,6 +12877,64 @@ func (s *Server) handleSaveNote(w http.ResponseWriter, r *http.Request, notePath
 	http.Redirect(w, r, targetURL, http.StatusSeeOther)
 }
 
+type apiNoteGetResponse struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Title   string `json:"title"`
+}
+
+func (s *Server) handleAPIGetNote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !IsAuthenticated(r.Context()) {
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	noteRef := strings.TrimPrefix(r.URL.Path, "/api/notes/")
+	noteRef = strings.TrimSpace(noteRef)
+	if noteRef == "" {
+		writeAPIError(w, http.StatusBadRequest, "path required")
+		return
+	}
+	notePath, err := s.resolveNotePath(r.Context(), noteRef)
+	if err != nil {
+		slog.Error("api get note resolve path failed", "path", noteRef, "err", err)
+		writeAPIError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if notePath == "" {
+		writeAPIError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	absPath, err := fs.NoteFilePath(s.cfg.RepoPath, notePath)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeAPIError(w, http.StatusNotFound, "note not found")
+			return
+		}
+		slog.Error("api get note read file failed", "path", absPath, "err", err)
+		writeAPIError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	content := string(data)
+	title := index.DeriveTitleFromBody(content)
+	if title == "" {
+		title = displayTitleForNotePath(notePath, "")
+	}
+	writeAPIJSON(w, http.StatusOK, apiNoteGetResponse{
+		Path:    notePath,
+		Content: content,
+		Title:   title,
+	})
+}
+
 type apiNoteSaveRequest struct {
 	Path           string `json:"path"`
 	Content        string `json:"content"`
