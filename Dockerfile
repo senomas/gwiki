@@ -13,7 +13,7 @@ RUN mkdir -p /app/static/css /app/static/js
 RUN curl -fsSL -o /app/static/js/htmx.min.js https://unpkg.com/htmx.org@${HTMX_VERSION}/dist/htmx.min.js
 RUN npm init -y >/dev/null 2>&1
 RUN npm install --silent tailwindcss@${TAILWIND_VERSION}
-COPY assets/tailwind.css /app/assets/tailwind.css
+COPY assets /app/assets
 COPY tailwind.config.js /app/tailwind.config.js
 COPY templates /app/templates
 COPY internal /app/internal
@@ -30,6 +30,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 ARG BUILD_TAG=dev
 ARG BUILD_VERSION=dev
+COPY assets ./assets
 COPY cmd ./cmd
 COPY internal ./internal
 COPY templates ./templates
