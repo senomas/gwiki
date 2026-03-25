@@ -3,7 +3,7 @@
 -include .env.local
 export
 
-.PHONY: docker-build test quick-test test-base-image test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e e2e-build screenshot ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build test quick-test test-base-image test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e e2e-build screenshot ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images android-build-image android-apk
 
 TEST_LOG ?= test.log
 TEST_BASE_IMAGE ?= gwiki-test-base:$(GO_VERSION)
@@ -219,3 +219,15 @@ screenshot: e2e-build
 		-e SCREENSHOT_DIR=/work/tests/e2e/screenshots \
 		-e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
 		e2e node /work/tests/e2e/screenshot.js
+
+android-build-image:
+	docker build -t gwiki-android-build -f Dockerfile.android .
+
+android-apk: android-build-image
+	docker run --rm \
+		-v $(PWD)/android:/work \
+		-v gwiki-gradle-cache:/root/.gradle \
+		-w /work \
+		gwiki-android-build \
+		gradle assembleDebug
+	@echo "APK: android/app/build/outputs/apk/debug/app-debug.apk"

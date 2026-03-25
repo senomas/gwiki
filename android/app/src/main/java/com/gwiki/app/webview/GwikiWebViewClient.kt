@@ -8,16 +8,14 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.gwiki.app.data.GwikiPrefs
 import okhttp3.Cache
-import okhttp3.JavaNetCookieJar
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
-import java.net.CookieHandler
-import java.net.CookiePolicy
 
 /**
  * Intercepts all WebView requests through OkHttp so responses are cached on disk.
  * Falls back to cache when offline via [OfflineInterceptor].
+ * Cookies are read from Android's CookieManager and forwarded to OkHttp manually.
  */
 class GwikiWebViewClient(
     context: Context,
@@ -25,18 +23,12 @@ class GwikiWebViewClient(
     private val onEditUrl: (String) -> Unit,
 ) : WebViewClient() {
 
-    private val cookieHandler = java.net.CookieManager().apply {
-        setCookiePolicy(CookiePolicy.ACCEPT_ALL)
-    }
-
     val okhttp: OkHttpClient = run {
-        CookieHandler.setDefault(cookieHandler)
         val cacheDir = File(context.cacheDir, "gwiki-http")
         val cacheBytes = prefs.cacheMb.toLong() * 1024 * 1024
         OkHttpClient.Builder()
             .cache(Cache(cacheDir, cacheBytes))
             .addInterceptor(OfflineInterceptor(context))
-            .cookieJar(JavaNetCookieJar(cookieHandler))
             .build()
     }
 
