@@ -13,10 +13,10 @@ func TestCheckboxStylesScopedToDirectChildren(t *testing.T) {
 	if !ok {
 		t.Fatalf("resolve test path")
 	}
-	basePath := filepath.Join(filepath.Dir(file), "..", "..", "templates", "base.html")
-	content, err := os.ReadFile(basePath)
+	cssPath := filepath.Join(filepath.Dir(file), "..", "..", "assets", "components.css")
+	content, err := os.ReadFile(cssPath)
 	if err != nil {
-		t.Fatalf("read base template: %v", err)
+		t.Fatalf("read components css: %v", err)
 	}
 	source := string(content)
 	if !strings.Contains(source, "li:has(> input[type=\"checkbox\"])") {
