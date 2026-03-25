@@ -1,5 +1,7 @@
 # gwiki
 
+> **This repository has migrated to Codeberg: https://codeberg.org/senomas/gwiki**
+
 Personal wiki server with keyboard-focused, vim-like navigation and Markdown notes on disk. Uses
 standard Markdown with YAML frontmatter, keeps a fast SQLite index for browsing,
 and relies on Git for backup/history.
