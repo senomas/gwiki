@@ -231,5 +231,5 @@ android-apk: android-build-image
 		-w /work \
 		gwiki-android-build \
 		gradle assembleDebug
-	cp android/app/build/outputs/apk/debug/app-debug.apk static/downloads/app-debug.apk
-	@echo "APK: static/downloads/app-debug.apk"
+	cp android/app/build/outputs/apk/debug/app-debug.apk static/downloads/gwiki.apk
+	@echo "APK: static/downloads/gwiki.apk"
