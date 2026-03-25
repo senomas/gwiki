@@ -1,0 +1,20 @@
+FROM mcr.microsoft.com/playwright:v1.58.2-jammy
+
+RUN apt-get update && apt-get install -y curl ca-certificates --no-install-recommends && \
+    curl -fsSL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz | tar -C /usr/local -xz && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/usr/local/go/bin:$PATH
+
+# Pre-install playwright-go driver + matching chromium browser to /go-playwright
+# (separate from the v1.58 browsers pre-installed by the base image at /ms-playwright)
+ENV PLAYWRIGHT_BROWSERS_PATH=/go-playwright
+RUN go install github.com/playwright-community/playwright-go/cmd/playwright@v0.5200.1 && \
+    /root/go/bin/playwright install --with-deps chromium
+
+# Pre-install playwright npm package (v1.58, uses /ms-playwright) for Node.js scripts
+RUN mkdir -p /playwright-npm && cd /playwright-npm && npm init -y && npm install playwright@1.58.2
+
+ENV NODE_PATH=/playwright-npm/node_modules
+
+WORKDIR /work/tests/e2e

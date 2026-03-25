@@ -13,6 +13,41 @@ import (
 
 const defaultBaseURL = "http://gwiki-e2e:8080"
 
+// login navigates to /login and authenticates using E2E_AUTH_USER / E2E_AUTH_PASS.
+// If those env vars are not set, it's a no-op. If the server does not present a
+// login form (e.g. auth is disabled), it returns without error.
+func login(t *testing.T, page playwright.Page, baseURL string) {
+	t.Helper()
+	user := os.Getenv("E2E_AUTH_USER")
+	pass := os.Getenv("E2E_AUTH_PASS")
+	if user == "" || pass == "" {
+		return
+	}
+	loginURL := strings.TrimRight(baseURL, "/") + "/login"
+	if _, err := page.Goto(loginURL, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateNetworkidle,
+	}); err != nil {
+		t.Fatalf("goto login: %v", err)
+	}
+	if !strings.Contains(page.URL(), "/login") {
+		return // already authenticated or auth disabled
+	}
+	if err := page.Locator("input[name=\"username\"]").Fill(user); err != nil {
+		t.Fatalf("fill username: %v", err)
+	}
+	if err := page.Locator("input[name=\"password\"]").Fill(pass); err != nil {
+		t.Fatalf("fill password: %v", err)
+	}
+	if _, err := page.ExpectNavigation(func() error {
+		return page.Locator("#login-form button[type=\"submit\"]").Click()
+	}); err != nil {
+		t.Fatalf("login navigation: %v", err)
+	}
+	if strings.Contains(page.URL(), "/login") {
+		t.Fatal("login failed: still on /login after submit")
+	}
+}
+
 func TestHomeSmoke(t *testing.T) {
 	baseURL := os.Getenv("E2E_BASE_URL")
 	if baseURL == "" {
@@ -41,6 +76,8 @@ func TestHomeSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new page: %v", err)
 	}
+
+	login(t, page, baseURL)
 
 	_, err = page.Goto(baseURL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateNetworkidle})
 	if err != nil {
@@ -84,6 +121,8 @@ func TestOpenFirstNote(t *testing.T) {
 		t.Fatalf("new page: %v", err)
 	}
 
+	login(t, page, baseURL)
+
 	_, err = page.Goto(baseURL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateNetworkidle})
 	if err != nil {
 		t.Fatalf("goto home: %v", err)
@@ -119,10 +158,10 @@ func TestOpenFirstNote(t *testing.T) {
 		t.Fatalf("title mismatch: list=%q detail=%q", linkedTitle, detailTitle)
 	}
 
-	metaDetails := page.Locator("details.group").First()
-	if count, err := metaDetails.Count(); err == nil && count > 0 {
-		if err := metaDetails.Locator("text=Folder").First().WaitFor(); err != nil {
-			t.Fatalf("metadata missing folder label: %v", err)
+	// metadata section exists for notes that have it (root-level notes may omit it)
+	if count, err := page.Locator("details.group").Count(); err == nil && count > 0 {
+		if err := page.Locator("details.group").First().Locator("summary").WaitFor(); err != nil {
+			t.Fatalf("metadata summary missing: %v", err)
 		}
 	}
 

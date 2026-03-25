@@ -3,7 +3,7 @@
 -include .env.local
 export
 
-.PHONY: docker-build test quick-test test-base-image test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
+.PHONY: docker-build test quick-test test-base-image test-unit test-http http-test build build-img push-image deploy docker-run dev dev-local tailwind-image css css-watch htmx static e2e e2e-build screenshot ensure-clean update-env-image compose-restart docker-prune-old-gwiki-images
 
 TEST_LOG ?= test.log
 TEST_BASE_IMAGE ?= gwiki-test-base:$(GO_VERSION)
@@ -206,6 +206,16 @@ $(HTMX_OUTPUT):
 
 static: css htmx
 
-e2e:
+e2e-build:
+	docker build -t gwiki-e2e -f Dockerfile.e2e .
+
+e2e: e2e-build
 	$(COMPOSE) up -d gwiki
 	$(COMPOSE) run --rm e2e
+
+screenshot: e2e-build
+	$(COMPOSE) up -d gwiki
+	$(COMPOSE) run --rm \
+		-e SCREENSHOT_DIR=/work/tests/e2e/screenshots \
+		-e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+		e2e node /work/tests/e2e/screenshot.js
